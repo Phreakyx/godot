@@ -814,6 +814,23 @@ float RendererEnvironmentStorage::environment_get_ssil_normal_rejection(RID p_en
 
 // SDFGI
 
+void RendererEnvironmentStorage::environment_set_rc(RID p_env, bool p_enable) {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL(env);
+#ifdef DEBUG_ENABLED
+	if (OS::get_singleton()->get_current_rendering_method() != "forward_plus" && p_enable) {
+		WARN_PRINT_ONCE_ED("Radiance Cascades global illumination is only available when using the Forward+ renderer.");
+	}
+#endif
+	env->rc_enabled = p_enable;
+}
+
+bool RendererEnvironmentStorage::environment_get_rc_enabled(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, false);
+	return env->rc_enabled;
+}
+
 void RendererEnvironmentStorage::environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias) {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL(env);

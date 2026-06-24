@@ -32,6 +32,7 @@
 
 #include "core/config/project_settings.h"
 #include "servers/rendering/renderer_rd/environment/fog.h"
+#include "servers/rendering/renderer_rd/environment/radiance_cascade.h"
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/mesh_storage.h"
@@ -1605,6 +1606,19 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 
 	if (render_gi) {
 		gi.process_gi(rb, p_normal_roughness_slices, p_voxel_gi_buffer, p_render_data->environment, p_render_data->scene_data->view_count, p_render_data->scene_data->view_projection, p_render_data->scene_data->view_eye_offset, p_render_data->scene_data->cam_transform, *p_render_data->voxel_gi_instances);
+	}
+
+	// Radiance Cascades GI runs as an alternative indirect-light source, writing the
+	// same screen-space ambient target the forward pass folds in with material albedo.
+	if (rb.is_valid() && p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment)) {
+		Ref<RendererRD::RadianceCascade> rc;
+		if (rb->has_custom_data(RB_SCOPE_RC)) {
+			rc = rb->get_custom_data(RB_SCOPE_RC);
+		} else {
+			rc = gi.create_rc(rb->get_internal_size());
+			rb->set_custom_data(RB_SCOPE_RC, rc);
+		}
+		rc->process(p_render_data);
 	}
 
 	if (render_shadows) {

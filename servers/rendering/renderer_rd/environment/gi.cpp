@@ -33,6 +33,7 @@
 #include "core/config/project_settings.h"
 #include "core/math/geometry_3d.h"
 #include "servers/rendering/renderer_rd/environment/fog.h"
+#include "servers/rendering/renderer_rd/environment/radiance_cascade.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
@@ -3808,6 +3809,9 @@ void GI::init(SkyRD *p_sky) {
 	}
 	default_voxel_gi_buffer = RD::get_singleton()->uniform_buffer_create(sizeof(VoxelGIData) * MAX_VOXEL_GI_INSTANCES);
 	half_resolution = GLOBAL_GET("rendering/global_illumination/gi/use_half_resolution");
+
+	rc_shader = memnew(RadianceCascadeShaders);
+	rc_shader->init();
 }
 
 void GI::free() {
@@ -3824,6 +3828,12 @@ void GI::free() {
 	if (voxel_gi_lights) {
 		memdelete_arr(voxel_gi_lights);
 	}
+
+	if (rc_shader) {
+		rc_shader->free();
+		memdelete(rc_shader);
+		rc_shader = nullptr;
+	}
 }
 
 Ref<GI::SDFGI> GI::create_sdfgi(RID p_env, const Vector3 &p_world_position, uint32_t p_requested_history_size) {
@@ -3833,6 +3843,15 @@ Ref<GI::SDFGI> GI::create_sdfgi(RID p_env, const Vector3 &p_world_position, uint
 	sdfgi->create(p_env, p_world_position, p_requested_history_size, this);
 
 	return sdfgi;
+}
+
+Ref<RadianceCascade> GI::create_rc(const Size2i &p_size) {
+	Ref<RadianceCascade> rc;
+	rc.instantiate();
+
+	rc->create(this, p_size);
+
+	return rc;
 }
 
 void GI::setup_voxel_gi_instances(RenderDataRD *p_render_data, Ref<RenderSceneBuffersRD> p_render_buffers, const Transform3D &p_transform, const PagedArray<RID> &p_voxel_gi_instances, uint32_t &r_voxel_gi_instances_used) {

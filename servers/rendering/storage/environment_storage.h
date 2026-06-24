@@ -172,6 +172,9 @@ private:
 		float sdfgi_probe_bias = 1.1;
 		RSE::EnvironmentSDFGIYScale sdfgi_y_scale = RSE::ENV_SDFGI_Y_SCALE_75_PERCENT;
 
+		// Radiance Cascades
+		bool rc_enabled = false;
+
 		// Adjustments
 		bool adjustments_enabled = false;
 		float adjustments_brightness = 1.0f;
@@ -310,6 +313,10 @@ public:
 	float environment_get_ssil_intensity(RID p_env) const;
 	float environment_get_ssil_sharpness(RID p_env) const;
 	float environment_get_ssil_normal_rejection(RID p_env) const;
+
+	// Radiance Cascades
+	void environment_set_rc(RID p_env, bool p_enable);
+	bool environment_get_rc_enabled(RID p_env) const;
 
 	// SDFGI
 	void environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias);

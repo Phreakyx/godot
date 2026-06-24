@@ -149,6 +149,10 @@ private:
 
 	void _update_ssil();
 
+	// Radiance Cascades
+	bool rc_enabled = false;
+	void _update_rc();
+
 	// SDFGI
 	bool sdfgi_enabled = false;
 	int sdfgi_cascades = 4;
@@ -322,6 +326,10 @@ public:
 	float get_ssil_sharpness() const;
 	void set_ssil_normal_rejection(float p_normal_rejection);
 	float get_ssil_normal_rejection() const;
+
+	// Radiance Cascades
+	void set_rc_enabled(bool p_enabled);
+	bool is_rc_enabled() const;
 
 	// SDFGI
 	void set_sdfgi_enabled(bool p_enabled);

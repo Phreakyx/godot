@@ -1346,6 +1346,10 @@ public:
 
 	PASS6(environment_set_ssil_quality, RSE::EnvironmentSSILQuality, bool, float, int, float, float)
 
+	// Radiance Cascades
+
+	PASS2(environment_set_rc, RID, bool)
+
 	// SDFGI
 
 	PASS11(environment_set_sdfgi, RID, bool, int, float, RSE::EnvironmentSDFGIYScale, bool, float, bool, float, float, float)

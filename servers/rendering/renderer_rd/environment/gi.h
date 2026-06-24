@@ -61,6 +61,9 @@ class RendererSceneRenderRD;
 
 namespace RendererRD {
 
+class RadianceCascade;
+struct RadianceCascadeShaders;
+
 class GI : public RendererGI {
 public:
 	/* VOXEL GI STORAGE */
@@ -442,6 +445,11 @@ private:
 
 public:
 	static GI *get_singleton() { return singleton; }
+
+	// Shared Radiance Cascades compute shaders/pipelines. Owned here (created in
+	// init(), released in free()); per-viewport state lives in the RadianceCascade
+	// render-buffer custom data (RB_SCOPE_RC).
+	RadianceCascadeShaders *rc_shader = nullptr;
 
 	/* GI */
 
@@ -834,6 +842,8 @@ public:
 	void free();
 
 	Ref<SDFGI> create_sdfgi(RID p_env, const Vector3 &p_world_position, uint32_t p_requested_history_size);
+
+	Ref<RadianceCascade> create_rc(const Size2i &p_size);
 
 	void setup_voxel_gi_instances(RenderDataRD *p_render_data, Ref<RenderSceneBuffersRD> p_render_buffers, const Transform3D &p_transform, const PagedArray<RID> &p_voxel_gi_instances, uint32_t &r_voxel_gi_instances_used);
 	void process_gi(Ref<RenderSceneBuffersRD> p_render_buffers, const RID *p_normal_roughness_slices, RID p_voxel_gi_buffer, RID p_environment, uint32_t p_view_count, const Projection *p_projections, const Vector3 *p_eye_offsets, const Transform3D &p_cam_transform, const PagedArray<RID> &p_voxel_gi_instances);

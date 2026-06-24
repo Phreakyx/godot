@@ -471,6 +471,19 @@ void Environment::_update_ssil() {
 
 // SDFGI
 
+void Environment::set_rc_enabled(bool p_enabled) {
+	rc_enabled = p_enabled;
+	_update_rc();
+}
+
+bool Environment::is_rc_enabled() const {
+	return rc_enabled;
+}
+
+void Environment::_update_rc() {
+	RS::get_singleton()->environment_set_rc(environment, rc_enabled);
+}
+
 void Environment::set_sdfgi_enabled(bool p_enabled) {
 	sdfgi_enabled = p_enabled;
 	_update_sdfgi();
@@ -1386,6 +1399,14 @@ void Environment::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssil_intensity", PROPERTY_HINT_RANGE, "0,16,0.01,or_greater"), "set_ssil_intensity", "get_ssil_intensity");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssil_sharpness", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ssil_sharpness", "get_ssil_sharpness");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssil_normal_rejection", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_ssil_normal_rejection", "get_ssil_normal_rejection");
+
+	// Radiance Cascades
+
+	ClassDB::bind_method(D_METHOD("set_rc_enabled", "enabled"), &Environment::set_rc_enabled);
+	ClassDB::bind_method(D_METHOD("is_rc_enabled"), &Environment::is_rc_enabled);
+
+	ADD_GROUP("Radiance Cascades", "rc_");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "rc_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_rc_enabled", "is_rc_enabled");
 
 	// SDFGI
 
