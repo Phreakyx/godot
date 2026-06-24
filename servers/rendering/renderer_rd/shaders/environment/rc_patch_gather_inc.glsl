@@ -1,6 +1,10 @@
 #ifndef RC_PATCH_GATHER_INC
 #define RC_PATCH_GATHER_INC
 
+// Pulls in rc_unpack_radiance() / the probe-radiance format this gather reads. Included here (not left
+// to the including shader) so include order is irrelevant -- the shader builder inlines it once, first.
+#include "rc_radiance_pack_inc.glsl"
+
 #ifndef GATHER_SET
 #define GATHER_SET 2
 #endif

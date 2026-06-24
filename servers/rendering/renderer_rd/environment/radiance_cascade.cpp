@@ -39,12 +39,88 @@ using namespace RendererRD;
 /* SHARED SHADERS (owned by GI) */
 
 void RadianceCascadeShaders::init() {
-	// TODO(port): version_create() + compute_pipeline_create() for every pass,
-	// with the TraceBackend variants on patch_trace.
+	RD *rd = RD::get_singleton();
+
+	// Each Radiance Cascades pass is a single-variant compute shader: compile the
+	// default variant and build its pipeline. patch_trace is the exception -- its
+	// variant selects the scene-representation backend the cones sample (set 2).
+	auto init_compute = [rd](ShaderRD &p_shader, RID &r_version, RID &r_pipeline, const String &p_define) {
+		Vector<String> variants;
+		variants.push_back(p_define);
+		p_shader.initialize(variants);
+		r_version = p_shader.version_create();
+		r_pipeline = rd->compute_pipeline_create(p_shader.version_get_shader(r_version, 0));
+	};
+
+	// Probe build / trace / merge / gather.
+	init_compute(patch_clear, patch_clear_shader, patch_clear_pipeline, "");
+	init_compute(patch_rebuild, patch_rebuild_shader, patch_rebuild_pipeline, "");
+	init_compute(patch_add, patch_add_shader, patch_add_pipeline, "");
+	init_compute(patch_indirect, patch_indirect_shader, patch_indirect_pipeline, "");
+	init_compute(patch_trace, patch_trace_shader, patch_trace_pipeline, "\n#define RC_BACKEND_VOXEL\n");
+	init_compute(patch_neighbours, patch_neighbours_shader, patch_neighbours_pipeline, "");
+	init_compute(patch_merge, patch_merge_shader, patch_merge_pipeline, "");
+	init_compute(patch_reduce, patch_reduce_shader, patch_reduce_pipeline, "");
+	init_compute(patch_gather, patch_gather_shader, patch_gather_pipeline, "");
+	init_compute(patch_lookup, patch_lookup_shader, patch_lookup_pipeline, "");
+
+	// Voxel scene representation (the default trace backend).
+	init_compute(voxelize_mesh, voxelize_mesh_shader, voxelize_mesh_pipeline, "");
+	init_compute(voxelize_dynamic, voxelize_dynamic_shader, voxelize_dynamic_pipeline, "");
+	init_compute(slab_clear, slab_clear_shader, slab_clear_pipeline, "");
+	init_compute(voxel_inject, voxel_inject_shader, voxel_inject_pipeline, "");
+	init_compute(clip_inject, clip_inject_shader, clip_inject_pipeline, "");
+	init_compute(voxel_sdf, voxel_sdf_shader, voxel_sdf_pipeline, "");
+	init_compute(voxel_mip_aniso, voxel_mip_aniso_shader, voxel_mip_aniso_pipeline, "");
+	init_compute(voxel_emission_mip, voxel_emission_mip_shader, voxel_emission_mip_pipeline, "");
+	init_compute(dyn_occ_temporal, dyn_occ_temporal_shader, dyn_occ_temporal_pipeline, "");
+	init_compute(voxel_debug, voxel_debug_shader, voxel_debug_pipeline, "");
+
+	// Screen-space irradiance chain.
+	init_compute(irradiance_atrous, irradiance_atrous_shader, irradiance_atrous_pipeline, "");
+	init_compute(irradiance_upsample, irradiance_upsample_shader, irradiance_upsample_pipeline, "");
+	init_compute(composite, composite_shader, composite_pipeline, ""); // TEMPORARY bring-up output
 }
 
 void RadianceCascadeShaders::free() {
-	// TODO(port): version_free() every shader.
+	RD *rd = RD::get_singleton();
+
+	auto free_compute = [rd](ShaderRD &p_shader, RID &r_version, RID &r_pipeline) {
+		if (r_pipeline.is_valid()) {
+			rd->free_rid(r_pipeline);
+			r_pipeline = RID();
+		}
+		if (r_version.is_valid()) {
+			p_shader.version_free(r_version);
+			r_version = RID();
+		}
+	};
+
+	free_compute(patch_clear, patch_clear_shader, patch_clear_pipeline);
+	free_compute(patch_rebuild, patch_rebuild_shader, patch_rebuild_pipeline);
+	free_compute(patch_add, patch_add_shader, patch_add_pipeline);
+	free_compute(patch_indirect, patch_indirect_shader, patch_indirect_pipeline);
+	free_compute(patch_trace, patch_trace_shader, patch_trace_pipeline);
+	free_compute(patch_neighbours, patch_neighbours_shader, patch_neighbours_pipeline);
+	free_compute(patch_merge, patch_merge_shader, patch_merge_pipeline);
+	free_compute(patch_reduce, patch_reduce_shader, patch_reduce_pipeline);
+	free_compute(patch_gather, patch_gather_shader, patch_gather_pipeline);
+	free_compute(patch_lookup, patch_lookup_shader, patch_lookup_pipeline);
+
+	free_compute(voxelize_mesh, voxelize_mesh_shader, voxelize_mesh_pipeline);
+	free_compute(voxelize_dynamic, voxelize_dynamic_shader, voxelize_dynamic_pipeline);
+	free_compute(slab_clear, slab_clear_shader, slab_clear_pipeline);
+	free_compute(voxel_inject, voxel_inject_shader, voxel_inject_pipeline);
+	free_compute(clip_inject, clip_inject_shader, clip_inject_pipeline);
+	free_compute(voxel_sdf, voxel_sdf_shader, voxel_sdf_pipeline);
+	free_compute(voxel_mip_aniso, voxel_mip_aniso_shader, voxel_mip_aniso_pipeline);
+	free_compute(voxel_emission_mip, voxel_emission_mip_shader, voxel_emission_mip_pipeline);
+	free_compute(dyn_occ_temporal, dyn_occ_temporal_shader, dyn_occ_temporal_pipeline);
+	free_compute(voxel_debug, voxel_debug_shader, voxel_debug_pipeline);
+
+	free_compute(irradiance_atrous, irradiance_atrous_shader, irradiance_atrous_pipeline);
+	free_compute(irradiance_upsample, irradiance_upsample_shader, irradiance_upsample_pipeline);
+	free_compute(composite, composite_shader, composite_pipeline);
 }
 
 /* RADIANCE CASCADE (per-viewport render-buffer custom data) */
