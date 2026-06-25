@@ -30,6 +30,7 @@
 #include "radiance_cascade.h"
 
 #include "servers/rendering/renderer_rd/environment/gi.h"
+#include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
 
@@ -348,6 +349,7 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	z_near = (float)projection.get_z_near();
 	z_far = (float)projection.get_z_far();
 	update_camera(projection, cam_to_world.affine_inverse());
+	update_lights(p_render_data);
 
 	// Per-frame inputs + their set-1 descriptor sets.
 	frame_depth = p_depth;
@@ -907,7 +909,64 @@ void RadianceCascade::rebuild_per_frame_sets() {
 }
 
 void RadianceCascade::update_lights(RenderDataRD *p_render_data) {
-	// TODO(port): gather the renderer's light instances into light_buffer.
+	// Engine-native light feed: read this frame's light instances from LightStorage
+	// (directional + omni + spot, all in render_data->lights) into light_buffer. The
+	// inject pass lights the whole world-space voxel grid from these, so we use the
+	// full light list -- NOT the screen-space Forward+ cluster, which only covers the
+	// visible frustum (this is why SDFGI keeps its own light list too).
+	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
+	const PagedArray<RID> &light_list = *p_render_data->lights;
+
+	LocalVector<RCLightData> out;
+	for (uint32_t i = 0; i < (uint32_t)light_list.size(); i++) {
+		if (out.size() >= MAX_LIGHTS) {
+			break;
+		}
+		RID li = light_list[i];
+		if (!light_storage->owns_light_instance(li)) {
+			continue;
+		}
+		RID base = light_storage->light_instance_get_base_light(li);
+		const Transform3D xf = light_storage->light_instance_get_base_transform(li);
+		const RSE::LightType type = light_storage->light_get_type(base);
+
+		RCLightData g = {};
+		const Vector3 dir = -xf.basis.get_column(Vector3::AXIS_Z).normalized();
+		g.direction[0] = dir.x;
+		g.direction[1] = dir.y;
+		g.direction[2] = dir.z;
+		g.position[0] = xf.origin.x;
+		g.position[1] = xf.origin.y;
+		g.position[2] = xf.origin.z;
+
+		const Color col = light_storage->light_get_color(base).srgb_to_linear();
+		const float energy = light_storage->light_get_param(base, RSE::LIGHT_PARAM_ENERGY) * light_storage->light_get_param(base, RSE::LIGHT_PARAM_INDIRECT_ENERGY);
+		g.color[0] = col.r * energy;
+		g.color[1] = col.g * energy;
+		g.color[2] = col.b * energy;
+
+		if (type == RSE::LIGHT_DIRECTIONAL) {
+			g.type = 0.0f;
+			g.inv_range = 0.0f;
+		} else {
+			const float range = light_storage->light_get_param(base, RSE::LIGHT_PARAM_RANGE);
+			g.inv_range = range > 0.0f ? 1.0f / range : 0.0f;
+			if (type == RSE::LIGHT_OMNI) {
+				g.type = 1.0f;
+			} else { // spot
+				g.type = 2.0f;
+				const float spot_angle = light_storage->light_get_param(base, RSE::LIGHT_PARAM_SPOT_ANGLE);
+				g.spot_cos_out = Math::cos(Math::deg_to_rad(spot_angle));
+				g.spot_cos_in = g.spot_cos_out;
+			}
+		}
+		out.push_back(g);
+	}
+
+	light_count = out.size();
+	if (light_count > 0) {
+		rd->buffer_update(light_buffer, 0, light_count * sizeof(RCLightData), out.ptr());
+	}
 }
 
 void RadianceCascade::update_geometry(RenderDataRD *p_render_data) {
