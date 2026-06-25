@@ -27,7 +27,7 @@ layout(push_constant) uniform PC {
 	uint full_w, full_h, half_w, half_h;
 	float z_near, z_far, sigma_z, normal_pow;
 	vec3 sky_color;
-	float _pad;
+	float gi_intensity;
 }
 pc;
 
@@ -96,5 +96,8 @@ void main() {
 			result = mix(bil, g.rgb, edge); // probe found → blend in full-res GI
 		}
 	}
-	imageStore(irradiance_out, px, vec4(result, 1.0));
+	// Written into RB_TEX_AMBIENT: a=1 here means "replace the flat ambient with this";
+	// invalid pixels above wrote a=0 (keep the flat ambient). The forward shader then
+	// multiplies by the fragment's real albedo.
+	imageStore(irradiance_out, px, vec4(result * pc.gi_intensity, 1.0));
 }

@@ -1633,7 +1633,16 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		if (rc_normal.is_null()) {
 			rc_normal = RendererRD::TextureStorage::get_singleton()->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_NORMAL);
 		}
-		rc->process(p_render_data, rb->get_depth_texture(), rc_normal, rb->get_internal_texture());
+		// Ensure the screen-space ambient GI target exists (RC is its producer when no
+		// other GI runs); the forward shader reads it as the diffuse ambient.
+		RID rc_ambient;
+		if (rb->has_texture(RB_SCOPE_GI, RB_TEX_AMBIENT)) {
+			rc_ambient = rb->get_texture(RB_SCOPE_GI, RB_TEX_AMBIENT);
+		} else {
+			uint32_t usage = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+			rc_ambient = rb->create_texture(RB_SCOPE_GI, RB_TEX_AMBIENT, RD::DATA_FORMAT_R16G16B16A16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, rb->get_internal_size());
+		}
+		rc->process(p_render_data, rb->get_depth_texture(), rc_normal, rb->get_internal_texture(), rc_ambient);
 	}
 
 	if (render_shadows) {
@@ -1864,6 +1873,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	bool using_ssr = false;
 	bool using_sdfgi = false;
 	bool using_voxelgi = false;
+	// Radiance Cascades feeds the same screen-space ambient GI buffers as SDFGI/VoxelGI,
+	// so instances need the GI-buffers flag when it is enabled.
+	bool using_rc = p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment);
 	bool reverse_cull = p_render_data->scene_data->cam_transform.basis.determinant() < 0;
 	bool using_ssil = !is_reflection_probe && p_render_data->environment.is_valid() && environment_get_ssil_enabled(p_render_data->environment);
 	bool using_motion_pass = rb_data.is_valid() && using_upscaling;
@@ -1939,7 +1951,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	// May have changed due to the above (light buffer enlarged, as an example).
 	_update_render_base_uniform_set();
 
-	_fill_render_list(RENDER_LIST_OPAQUE, p_render_data, PASS_MODE_COLOR, using_sdfgi, using_sdfgi || using_voxelgi, using_motion_pass);
+	_fill_render_list(RENDER_LIST_OPAQUE, p_render_data, PASS_MODE_COLOR, using_sdfgi, using_sdfgi || using_voxelgi || using_rc, using_motion_pass);
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
@@ -2568,14 +2580,6 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			taa->process(rb, rb->get_base_data_format(), p_render_data->scene_data->z_near, p_render_data->scene_data->z_far);
 			RD::get_singleton()->draw_command_end_label();
 		}
-	}
-
-	// Radiance Cascades: composite the GI (computed back in _pre_opaque_render) over the
-	// now fully-lit color buffer, before tonemapping. Doing it pre-opaque would be
-	// overwritten by the opaque pass.
-	if (rb.is_valid() && p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment) && rb->has_custom_data(RB_SCOPE_RC)) {
-		Ref<RendererRD::RadianceCascade> rc = rb->get_custom_data(RB_SCOPE_RC);
-		rc->composite_to_color();
 	}
 
 	if (rb_data.is_valid()) {

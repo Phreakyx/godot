@@ -340,7 +340,7 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	build_static_sets();
 }
 
-void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color) {
+void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color, RID p_ambient) {
 	// One frame_index for the whole frame: rebuild/add/trace/merge all read it (eviction
 	// age, last_seen stamp, amortization rotation), so advance it once up front.
 	frame_index++;
@@ -357,6 +357,7 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	frame_depth = p_depth;
 	frame_normal = p_normal_roughness;
 	frame_color = p_color;
+	frame_ambient = p_ambient;
 	rebuild_per_frame_sets();
 	if (patch_add_set1.is_null() || patch_lookup_set1.is_null()) {
 		return; // no depth this frame
@@ -384,12 +385,8 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	dispatch_patch_gather();
 	dispatch_irradiance_atrous();
 	dispatch_irradiance_upsample();
-	// NOTE: the composite runs separately (composite_to_color), AFTER the opaque pass --
-	// process() runs in _pre_opaque_render, so compositing here would be overwritten.
-}
-
-void RadianceCascade::composite_to_color() {
-	dispatch_composite();
+	// The upsample wrote the GI straight into RB_TEX_AMBIENT (frame_ambient); the forward
+	// shader consumes it during the opaque pass and multiplies by real albedo.
 }
 
 /* CASCADE TABLE */
@@ -690,12 +687,8 @@ void RadianceCascade::build_static_sets() {
 		voxel_debug_clip_set[L] = rd->uniform_set_create(u, RC_SHADER(voxel_debug), 0);
 	}
 
-	{ // upsample set0 (static): half irradiance in, full-res out
-		Vector<RD::Uniform> u;
-		u.push_back(tex(0, point_sampler, irradiance_half));
-		u.push_back(img(1, irradiance_tex));
-		upsample_set0 = rd->uniform_set_create(u, RC_SHADER(irradiance_upsample), 0);
-	}
+	// NOTE: upsample set0 (binding 1 = the output target) is built per-frame in
+	// rebuild_per_frame_sets, since it writes the per-frame RB_TEX_AMBIENT.
 
 	{ // a-trous ping-pong set0 (static): half<->scratch
 		auto mkset = [&](RID p_in, RID p_out) {
@@ -912,19 +905,19 @@ void RadianceCascade::rebuild_per_frame_sets() {
 		patch_add_set1 = rd->uniform_set_create(u, sh.patch_add.version_get_shader(sh.patch_add_shader, 0), 1);
 	}
 
-	{ // composite set1: scene color bound twice (sampler + image)
-		const RID color = frame_color.is_valid() ? frame_color : dummy_color_tex;
+	{ // upsample set0: half-res irradiance in (b0), RB_TEX_AMBIENT out (b1)
+		const RID out = frame_ambient.is_valid() ? frame_ambient : irradiance_tex;
 		Vector<RD::Uniform> u;
-		u.push_back(tex(0, color_sampler, color));
-		RD::Uniform u1;
-		u1.uniform_type = RD::UNIFORM_TYPE_IMAGE;
-		u1.binding = 1;
-		u1.append_id(color);
-		u.push_back(u1);
-		if (composite_set1.is_valid()) {
-			rd->free_rid(composite_set1);
+		u.push_back(tex(0, point_sampler, irradiance_half));
+		RD::Uniform o;
+		o.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+		o.binding = 1;
+		o.append_id(out);
+		u.push_back(o);
+		if (upsample_set0.is_valid()) {
+			rd->free_rid(upsample_set0);
 		}
-		composite_set1 = rd->uniform_set_create(u, sh.composite.version_get_shader(sh.composite_shader, 0), 1);
+		upsample_set0 = rd->uniform_set_create(u, sh.irradiance_upsample.version_get_shader(sh.irradiance_upsample_shader, 0), 0);
 	}
 }
 
@@ -1258,6 +1251,7 @@ void RadianceCascade::dispatch_irradiance_upsample() {
 	pc.sky_color[0] = sky_color.x;
 	pc.sky_color[1] = sky_color.y;
 	pc.sky_color[2] = sky_color.z;
+	pc.gi_intensity = gi_intensity;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.irradiance_upsample_pipeline);
 	rd->compute_list_bind_uniform_set(l, upsample_set0, 0);

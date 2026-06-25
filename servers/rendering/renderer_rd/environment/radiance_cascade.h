@@ -205,7 +205,7 @@ struct RCUpsamplePushConstant {
 	float sigma_z;
 	float normal_pow;
 	float sky_color[3];
-	float pad;
+	float gi_intensity;
 };
 
 // rc_irradiance_atrous.glsl — edge-aware a-trous denoise (step = hole size, doubles per pass).
@@ -470,8 +470,7 @@ public:
 	// GPU resources for a given screen size; process() runs the whole GI chain for one
 	// frame and writes the diffuse irradiance target; both are driven from GI.
 	void create(GI *p_gi, const Size2i &p_size);
-	void process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color);
-	void composite_to_color(); // additive GI over the lit color; run AFTER the opaque pass
+	void process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color, RID p_ambient);
 
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
@@ -708,6 +707,7 @@ private:
 	RID frame_depth;
 	RID frame_normal;
 	RID frame_color;
+	RID frame_ambient; // RB_TEX_AMBIENT: the upsample writes the GI here (forward shader reads it)
 
 	// ── Debug ──
 	RID debug_tex;
