@@ -756,22 +756,303 @@ void RadianceCascade::update_geometry(RenderDataRD *p_render_data) {
 
 /* PER-PASS DISPATCH */
 
-void RadianceCascade::dispatch_patch_clear() {}
-void RadianceCascade::dispatch_patch_rebuild() {}
-void RadianceCascade::dispatch_patch_add() {}
-void RadianceCascade::dispatch_patch_trace() {}
-void RadianceCascade::dispatch_patch_neighbours() {}
-void RadianceCascade::dispatch_patch_merge() {}
-void RadianceCascade::dispatch_patch_gather() {}
+// Amortization is only correct on a temporally static grid: while a relight cross-fade
+// is armed (or a dynamic light is tracking) the grid changes every frame, so force N=1.
+uint32_t RadianceCascade::effective_amortization() const {
+	const bool relighting = relight_frames > 0 || relight_track_frames > 0 || clip_relight_frames > 0;
+	return relighting ? 1u : trace_amortization;
+}
+
+void RadianceCascade::dispatch_patch_clear() {
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCPatchClearPushConstant pc = {};
+	pc.total_buckets = total_buckets;
+	pc.num_cascades = MAX_CASCADES;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_clear_pipeline);
+	rd->compute_list_bind_uniform_set(l, patch_clear_set0, 0);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, (total_buckets + 255u) / 256u, 1, 1);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_patch_rebuild() {
+	// Repopulate the cleared hashmap from the persistent dense pool (one thread per
+	// dense id per cascade); aged-out ids are freed to the free-list.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_rebuild_pipeline);
+	rd->compute_list_bind_uniform_set(l, patch_rebuild_set0, 0);
+	for (uint32_t c = 0; c < MAX_CASCADES; c++) {
+		RCPatchRebuildPushConstant pc = {};
+		pc.frame = frame_index;
+		pc.evict_age = evict_age;
+		pc.cascade = c;
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, (cascades[c].probe_cap + 63u) / 64u, 1, 1);
+	}
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_patch_add() {
+	// Persistent find-or-insert. Pass A seeds cascade 0 on the gather's half-res
+	// lattice; Pass B seeds the coarse cascades on a lower-density seed lattice.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_add_pipeline);
+	rd->compute_list_bind_uniform_set(l, patch_add_set0, 0);
+	rd->compute_list_bind_uniform_set(l, patch_add_set1, 1);
+
+	{ // Pass A -- cascade 0, half-res lattice
+		RCPatchAddPushConstant pc = {};
+		pc.screen_width = (uint32_t)half_size.x;
+		pc.screen_height = (uint32_t)half_size.y;
+		pc.cascade_begin = 0;
+		pc.cascade_end = 1;
+		pc.z_near = z_near;
+		pc.z_far = z_far;
+		pc.frame = frame_index;
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, ((uint32_t)half_size.x + 7u) / 8u, ((uint32_t)half_size.y + 7u) / 8u, 1);
+	}
+	{ // Pass B -- coarse cascades 1..N-1, seed lattice
+		const uint32_t seed_h = MIN((uint32_t)screen_size.y, (uint32_t)probe_seed_max_h);
+		const uint32_t seed_w = (uint32_t)Math::round(double(screen_size.x) * double(seed_h) / double(screen_size.y));
+		RCPatchAddPushConstant pc = {};
+		pc.screen_width = seed_w;
+		pc.screen_height = seed_h;
+		pc.cascade_begin = 1;
+		pc.cascade_end = MAX_CASCADES;
+		pc.z_near = z_near;
+		pc.z_far = z_far;
+		pc.frame = frame_index;
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, (seed_w + 7u) / 8u, (seed_h + 7u) / 8u, 1);
+	}
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_patch_trace() {
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	{ // build N indirect arg-sets from the live per-cascade counts
+		RCPatchIndirectPushConstant pc = {};
+		pc.num_cascades = MAX_CASCADES;
+		pc.local_size = 64;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.patch_indirect_pipeline);
+		rd->compute_list_bind_uniform_set(l, patch_indirect_set0, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, 1, 1, 1);
+		rd->compute_list_end();
+	}
+	{ // trace each cascade over exactly its live probes (indirect)
+		const uint32_t eff_amortize = effective_amortization();
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.patch_trace_pipeline);
+		rd->compute_list_bind_uniform_set(l, patch_trace_set0, 0);
+		rd->compute_list_bind_uniform_set(l, trace_voxel_set2, 2);
+		for (uint32_t c = 0; c < MAX_CASCADES; c++) {
+			RCPatchTracePushConstant pc = {};
+			pc.cascade = c;
+			pc.local_transmittance = local_transmittance ? 1u : 0u;
+			pc.frame = frame_index;
+			pc.amortize_n = eff_amortize;
+			rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+			rd->compute_list_dispatch_indirect(l, patch_indirect_buffer, c * 12);
+		}
+		rd->compute_list_end();
+	}
+}
+
+void RadianceCascade::dispatch_patch_neighbours() {
+	// Precompute the 8 trilinear c+1 neighbour ids per live probe so merge reads them
+	// instead of running find_in_region inline (frees merge registers -> occupancy).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_neighbours_pipeline);
+	rd->compute_list_bind_uniform_set(l, patch_neighbours_set0, 0);
+	for (uint32_t c = 0; c + 1u < MAX_CASCADES; c++) {
+		RCPatchMergePushConstant pc = {};
+		pc.cascade = c;
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch_indirect(l, patch_indirect_buffer, (MAX_CASCADES + c) * 12);
+	}
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_patch_merge() {
+	// Walk far->near, folding cascade c+1 into c. When c+1 has more directions, a
+	// pre-reduce pass averages the extra directions into scratch first.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const uint32_t eff_amortize = effective_amortization();
+	for (int c = (int)MAX_CASCADES - 2; c >= 0; c--) {
+		const uint32_t r = MAX(cascades[c + 1].oct_res / cascades[c].oct_res, 1u);
+		if (r > 1u) {
+			RCPatchMergePushConstant rp = {};
+			rp.cascade = (uint32_t)c;
+			const uint32_t threads = cascades[c + 1].probe_cap * cascades[c].dirs;
+			RD::ComputeListID lr = rd->compute_list_begin();
+			rd->compute_list_bind_compute_pipeline(lr, sh.patch_reduce_pipeline);
+			rd->compute_list_bind_uniform_set(lr, patch_reduce_set0, 0);
+			rd->compute_list_set_push_constant(lr, &rp, sizeof(rp));
+			rd->compute_list_dispatch(lr, (threads + 63u) / 64u, 1, 1);
+			rd->compute_list_end();
+		}
+		RCPatchMergePushConstant pc = {};
+		pc.cascade = (uint32_t)c;
+		pc.frame = frame_index;
+		pc.amortize_n = eff_amortize;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.patch_merge_pipeline);
+		rd->compute_list_bind_uniform_set(l, patch_merge_set0, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch_indirect(l, patch_indirect_buffer, (MAX_CASCADES + (uint32_t)c) * 12);
+		rd->compute_list_end();
+	}
+}
+
+void RadianceCascade::dispatch_patch_gather() {
+	// Per half-res pixel: reconstruct world from depth, sample the covering cascade-0
+	// probe into the half-res irradiance buffer (sky fallback where rays escaped).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCPatchGatherPushConstant pc = {};
+	pc.screen_width = (uint32_t)half_size.x;
+	pc.screen_height = (uint32_t)half_size.y;
+	pc.z_near = z_near;
+	pc.z_far = z_far;
+	pc.sky_color[0] = sky_color.x;
+	pc.sky_color[1] = sky_color.y;
+	pc.sky_color[2] = sky_color.z;
+	pc.pad0[0] = 0xffffffffu; // debug inspector disabled
+	pc.pad0[1] = 0xffffffffu;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_gather_pipeline);
+	rd->compute_list_bind_uniform_set(l, patch_gather_set0, 0);
+	rd->compute_list_bind_uniform_set(l, patch_lookup_set1, 1); // per-frame depth/normal
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)half_size.x + 7u) / 8u, ((uint32_t)half_size.y + 7u) / 8u, 1);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_irradiance_atrous() {
+	// Edge-aware a-trous denoise of the half-res irradiance: ping-pong passes with a
+	// doubling hole size, weighted by depth + normal. Even pass count ends in half.
+	if (atrous_passes <= 0) {
+		return;
+	}
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	{ // per-frame set1: depth + normal (NEAREST)
+		Vector<RD::Uniform> u;
+		RD::Uniform ud;
+		ud.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		ud.binding = 0;
+		ud.append_id(point_sampler);
+		ud.append_id(frame_depth);
+		u.push_back(ud);
+		RD::Uniform un;
+		un.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		un.binding = 1;
+		un.append_id(point_sampler);
+		un.append_id(frame_normal);
+		u.push_back(un);
+		if (atrous_set1.is_valid()) {
+			rd->free_rid(atrous_set1);
+		}
+		atrous_set1 = rd->uniform_set_create(u, sh.irradiance_atrous.version_get_shader(sh.irradiance_atrous_shader, 0), 1);
+	}
+
+	RCAtrousPushConstant pc = {};
+	pc.half_w = (uint32_t)half_size.x;
+	pc.half_h = (uint32_t)half_size.y;
+	pc.z_near = z_near;
+	pc.z_far = z_far;
+	pc.sigma_z = sigma_z;
+	pc.normal_pow = normal_pow;
+	const uint32_t gx = ((uint32_t)half_size.x + 7u) / 8u;
+	const uint32_t gy = ((uint32_t)half_size.y + 7u) / 8u;
+	for (int i = 0; i < atrous_passes; i++) {
+		pc.step = 1 << i;
+		RID s0 = (i & 1) ? atrous_set0_s2h : atrous_set0_h2s;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.irradiance_atrous_pipeline);
+		rd->compute_list_bind_uniform_set(l, s0, 0);
+		rd->compute_list_bind_uniform_set(l, atrous_set1, 1);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, gx, gy, 1);
+		rd->compute_list_end();
+	}
+}
+
+void RadianceCascade::dispatch_irradiance_upsample() {
+	// Bilateral upsample of the half-res irradiance to full-res, depth/normal weighted;
+	// strong edges additionally do a direct full-res cascade-0 gather (set 2).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	{ // per-frame set1: depth + normal
+		Vector<RD::Uniform> u;
+		RD::Uniform ud;
+		ud.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		ud.binding = 0;
+		ud.append_id(point_sampler);
+		ud.append_id(frame_depth);
+		u.push_back(ud);
+		RD::Uniform un;
+		un.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		un.binding = 1;
+		un.append_id(point_sampler);
+		un.append_id(frame_normal);
+		u.push_back(un);
+		if (upsample_set1.is_valid()) {
+			rd->free_rid(upsample_set1);
+		}
+		upsample_set1 = rd->uniform_set_create(u, sh.irradiance_upsample.version_get_shader(sh.irradiance_upsample_shader, 0), 1);
+	}
+
+	RCUpsamplePushConstant pc = {};
+	pc.full_w = (uint32_t)screen_size.x;
+	pc.full_h = (uint32_t)screen_size.y;
+	pc.half_w = (uint32_t)half_size.x;
+	pc.half_h = (uint32_t)half_size.y;
+	pc.z_near = z_near;
+	pc.z_far = z_far;
+	pc.sigma_z = sigma_z;
+	pc.normal_pow = normal_pow;
+	pc.sky_color[0] = sky_color.x;
+	pc.sky_color[1] = sky_color.y;
+	pc.sky_color[2] = sky_color.z;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.irradiance_upsample_pipeline);
+	rd->compute_list_bind_uniform_set(l, upsample_set0, 0);
+	rd->compute_list_bind_uniform_set(l, upsample_set1, 1);
+	rd->compute_list_bind_uniform_set(l, upsample_set2, 2);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)screen_size.x + 7u) / 8u, ((uint32_t)screen_size.y + 7u) / 8u, 1);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_composite() {
+	// TEMPORARY bring-up output: blend the irradiance over the bound color buffer.
+	// Replaced by writing RB_TEX_AMBIENT (then rc_composite is deleted).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCCompositePushConstant pc = {};
+	pc.screen_width = (uint32_t)screen_size.x;
+	pc.screen_height = (uint32_t)screen_size.y;
+	pc.gi_intensity = gi_intensity;
+	pc.debug_mode = 0;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.composite_pipeline);
+	rd->compute_list_bind_uniform_set(l, composite_set0, 0);
+	rd->compute_list_bind_uniform_set(l, composite_set1, 1);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)screen_size.x + 7u) / 8u, ((uint32_t)screen_size.y + 7u) / 8u, 1);
+	rd->compute_list_end();
+}
+
 void RadianceCascade::dispatch_patch_lookup(uint32_t p_debug_kind) {}
 void RadianceCascade::dispatch_voxel_mips() {}
 void RadianceCascade::dispatch_emission_mips() {}
 void RadianceCascade::dispatch_voxel_debug() {}
 void RadianceCascade::dispatch_dynamic_voxelize() {}
 void RadianceCascade::dispatch_dyn_occ_temporal() {}
-void RadianceCascade::dispatch_irradiance_atrous() {}
-void RadianceCascade::dispatch_irradiance_upsample() {}
-void RadianceCascade::dispatch_composite() {}
 
 /* VOXEL SCENE / SDF */
 

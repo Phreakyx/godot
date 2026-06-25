@@ -477,6 +477,7 @@ private:
 	void update_geometry(RenderDataRD *p_render_data); // feed the voxelizer from render geometry instances
 
 	// ── Per-pass dispatch (order lives in process()) ──
+	uint32_t effective_amortization() const; // N=1 while a relight cross-fade is active
 	void dispatch_patch_clear();
 	void dispatch_patch_rebuild();
 	void dispatch_patch_add();
@@ -524,6 +525,7 @@ private:
 	float interval_overlap = 0.1;
 	bool local_transmittance = true;
 	uint32_t trace_amortization = 1; // full directional refresh spread over N frames (1 = off)
+	int probe_seed_max_h = 1080; // coarse-cascade probe seed-lattice height
 
 	// ── Probe store (dense pool + transient hashmap) ──
 	RID patch_buckets; // transient hashmap (hash -> dense id)
@@ -662,6 +664,11 @@ private:
 	// ── Shared scene-input samplers ──
 	RID depth_sampler;
 	RID normal_sampler;
+
+	// ── Per-frame engine inputs (set by process() from the render buffers) ──
+	RID frame_depth;
+	RID frame_normal;
+	RID frame_color;
 
 	// ── Debug ──
 	RID debug_tex;
