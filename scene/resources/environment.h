@@ -153,6 +153,7 @@ private:
 	bool rc_enabled = false;
 	float rc_energy = 1.0;
 	int rc_amortization = 1;
+	int rc_debug = 0;
 	void _update_rc();
 
 	// SDFGI
@@ -336,6 +337,8 @@ public:
 	float get_rc_energy() const;
 	void set_rc_amortization(int p_amortization);
 	int get_rc_amortization() const;
+	void set_rc_debug(int p_debug);
+	int get_rc_debug() const;
 
 	// SDFGI
 	void set_sdfgi_enabled(bool p_enabled);

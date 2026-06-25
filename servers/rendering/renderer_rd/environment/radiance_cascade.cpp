@@ -1302,7 +1302,29 @@ void RadianceCascade::dispatch_composite() {
 	rd->compute_list_end();
 }
 
-void RadianceCascade::dispatch_patch_lookup(uint32_t p_debug_kind) {}
+void RadianceCascade::dispatch_patch_lookup(uint32_t p_debug_kind) {
+	// Debug visualization: shade each pixel from the probe field (kind 0 = occupancy/
+	// existence, kind 1 = traced radiance) into debug_tex, which the renderer then blits
+	// over the final frame. Reads the per-frame depth/normal set built in process().
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCPatchLookupPushConstant pc = {};
+	pc.screen_width = (uint32_t)screen_size.x;
+	pc.screen_height = (uint32_t)screen_size.y;
+	pc.debug_kind = p_debug_kind;
+	pc.cascade = MIN(debug_cascade, MAX_CASCADES - 1u);
+	pc.z_near = z_near;
+	pc.z_far = z_far;
+	pc.sky_color[0] = sky_color.x;
+	pc.sky_color[1] = sky_color.y;
+	pc.sky_color[2] = sky_color.z;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_lookup_pipeline);
+	rd->compute_list_bind_uniform_set(l, patch_lookup_set0, 0);
+	rd->compute_list_bind_uniform_set(l, patch_lookup_set1, 1);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)screen_size.x + 7u) / 8u, ((uint32_t)screen_size.y + 7u) / 8u, 1);
+	rd->compute_list_end();
+}
 void RadianceCascade::dispatch_voxel_unpack() {
 	// Unpack the packed voxelization targets into the RC voxel grid (one thread/cell).
 	RadianceCascadeShaders &sh = *gi->rc_shader;
@@ -1431,7 +1453,52 @@ void RadianceCascade::dispatch_emission_mips() {
 		rd->free_rid(set);
 	}
 }
-void RadianceCascade::dispatch_voxel_debug() {}
+void RadianceCascade::dispatch_debug() {
+	// Render the selected debug view into debug_tex (the renderer blits it over the frame
+	// afterwards). Runs after process() this frame, so the voxel grid + probe field are
+	// populated. View ids match the rc_debug enum: 1=Voxel Grid, 2=Probe Occupancy,
+	// 3=Probe Radiance.
+	switch (debug_view) {
+		case 1:
+			dispatch_voxel_debug();
+			break;
+		case 2:
+			dispatch_patch_lookup(0);
+			break;
+		case 3:
+			dispatch_patch_lookup(1);
+			break;
+		default:
+			break;
+	}
+}
+
+void RadianceCascade::dispatch_voxel_debug() {
+	// Debug visualization: march a primary ray per pixel through the level-0 voxel grid
+	// and shade the first solid voxel (gradient normal + captured emission) into debug_tex,
+	// so we can confirm the geometry voxelized at the right scale/position. Level-0 only
+	// for now (coarse clip levels are not voxelized yet).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCVoxelDebugPushConstant pc = {};
+	pc.sw = (uint32_t)screen_size.x;
+	pc.sh = (uint32_t)screen_size.y;
+	pc.res = (uint32_t)vox_res;
+	pc.max_steps = 512;
+	pc.vox_origin[0] = vox_origin.x;
+	pc.vox_origin[1] = vox_origin.y;
+	pc.vox_origin[2] = vox_origin.z;
+	pc.voxel_size = vox_extent.x / float(vox_res);
+	pc.vox_extent[0] = vox_extent.x;
+	pc.vox_extent[1] = vox_extent.y;
+	pc.vox_extent[2] = vox_extent.z;
+	pc.occ_threshold = 0.3f;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.voxel_debug_pipeline);
+	rd->compute_list_bind_uniform_set(l, voxel_debug_set0, 0);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)screen_size.x + 7u) / 8u, ((uint32_t)screen_size.y + 7u) / 8u, 1);
+	rd->compute_list_end();
+}
 void RadianceCascade::dispatch_dynamic_voxelize() {}
 void RadianceCascade::dispatch_dyn_occ_temporal() {}
 

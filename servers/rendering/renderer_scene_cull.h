@@ -1348,7 +1348,7 @@ public:
 
 	// Radiance Cascades
 
-	PASS4(environment_set_rc, RID, bool, float, int)
+	PASS5(environment_set_rc, RID, bool, float, int, int)
 
 	// SDFGI
 

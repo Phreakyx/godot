@@ -1620,6 +1620,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		}
 		rc->set_gi_intensity(environment_get_rc_energy(p_render_data->environment));
 		rc->set_trace_amortization(environment_get_rc_amortization(p_render_data->environment));
+		rc->set_debug_view(environment_get_rc_debug(p_render_data->environment));
 		// Rasterize the scene geometry into RC's voxel grid (SDFGI-style) when it needs
 		// a (re)bake; process() then unpacks + injects it. The grid bakes on the first
 		// frame and re-bakes (re-centred) whenever the camera roams past the dead-zone.
@@ -2608,6 +2609,19 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 
 			sdfgi->debug_draw(p_render_data->scene_data->view_count, p_render_data->scene_data->view_projection, p_render_data->scene_data->cam_transform, size.x, size.y, rb->get_render_target(), source_texture, view_rids);
+		}
+
+		// Radiance Cascades debug views (Environment > rc_debug). The chain already ran this
+		// frame, so render the selected visualization into RC's debug texture and blit it
+		// over the tonemapped frame, mirroring the GI buffer debug draw above.
+		if (p_render_data->environment.is_valid() && environment_get_rc_debug(p_render_data->environment) != 0 && rb->has_custom_data(RB_SCOPE_RC)) {
+			Ref<RendererRD::RadianceCascade> rc = rb->get_custom_data(RB_SCOPE_RC);
+			if (rc->is_debug_view_active()) {
+				rc->dispatch_debug();
+				RID render_target = rb->get_render_target();
+				Size2i rtsize = RendererRD::TextureStorage::get_singleton()->render_target_get_size(render_target);
+				copy_effects->copy_to_fb_rect(rc->get_debug_texture(), RendererRD::TextureStorage::get_singleton()->render_target_get_rd_framebuffer(render_target), Rect2(Vector2(), rtsize), false, false);
+			}
 		}
 	}
 }

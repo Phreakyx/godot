@@ -480,6 +480,13 @@ public:
 	// 1 = refresh every frame. Forced to 1 internally while a relight cross-fade is armed.
 	void set_trace_amortization(int p_frames) { trace_amortization = (uint32_t)CLAMP(p_frames, 1, 64); }
 
+	// Debug visualization (Environment > rc_debug): 0 = off. When active, the renderer
+	// calls dispatch_debug() post-tonemap and blits get_debug_texture() over the frame.
+	void set_debug_view(int p_view) { debug_view = p_view; }
+	bool is_debug_view_active() const { return debug_view != 0; }
+	RID get_debug_texture() const { return debug_tex; }
+	void dispatch_debug();
+
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
 	bool needs_voxel_bake() const { return voxel_dirty; }

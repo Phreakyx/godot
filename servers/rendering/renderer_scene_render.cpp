@@ -661,8 +661,8 @@ float RendererSceneRender::environment_get_ssil_normal_rejection(RID p_env) cons
 
 // SDFGI
 
-void RendererSceneRender::environment_set_rc(RID p_env, bool p_enable, float p_energy, int p_amortization) {
-	environment_storage.environment_set_rc(p_env, p_enable, p_energy, p_amortization);
+void RendererSceneRender::environment_set_rc(RID p_env, bool p_enable, float p_energy, int p_amortization, int p_debug) {
+	environment_storage.environment_set_rc(p_env, p_enable, p_energy, p_amortization, p_debug);
 }
 
 bool RendererSceneRender::environment_get_rc_enabled(RID p_env) const {
@@ -675,6 +675,10 @@ float RendererSceneRender::environment_get_rc_energy(RID p_env) const {
 
 int RendererSceneRender::environment_get_rc_amortization(RID p_env) const {
 	return environment_storage.environment_get_rc_amortization(p_env);
+}
+
+int RendererSceneRender::environment_get_rc_debug(RID p_env) const {
+	return environment_storage.environment_get_rc_debug(p_env);
 }
 
 void RendererSceneRender::environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias) {
