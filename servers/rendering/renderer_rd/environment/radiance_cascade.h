@@ -417,6 +417,9 @@ public:
 		MAX_CLIP = 5, // voxel levels: 0 = fine grid, 1..4 = coarse clipmap rings
 		MAX_LIGHTS = 256,
 		CLIP_ANISO_M = 4, // level-0 aniso depth -> L0 snap = 16 vox = 4 m
+		MAX_DYN_TRIS = 8192, // dynamic-occluder proxy triangle cap
+		MAX_STATIC_TRIS = 1 << 22, // static voxelize triangle buffer cap
+		FLOATS_PER_TRI = 20, // 5 * vec4: a, b, c, emission, albedo
 	};
 
 	// The scene representation the probe cones sample. Switchable so the cascades can
