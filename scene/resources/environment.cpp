@@ -489,8 +489,17 @@ float Environment::get_rc_energy() const {
 	return rc_energy;
 }
 
+void Environment::set_rc_amortization(int p_amortization) {
+	rc_amortization = p_amortization;
+	_update_rc();
+}
+
+int Environment::get_rc_amortization() const {
+	return rc_amortization;
+}
+
 void Environment::_update_rc() {
-	RS::get_singleton()->environment_set_rc(environment, rc_enabled, rc_energy);
+	RS::get_singleton()->environment_set_rc(environment, rc_enabled, rc_energy, rc_amortization);
 }
 
 void Environment::set_sdfgi_enabled(bool p_enabled) {
@@ -1415,10 +1424,13 @@ void Environment::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_rc_enabled"), &Environment::is_rc_enabled);
 	ClassDB::bind_method(D_METHOD("set_rc_energy", "amount"), &Environment::set_rc_energy);
 	ClassDB::bind_method(D_METHOD("get_rc_energy"), &Environment::get_rc_energy);
+	ClassDB::bind_method(D_METHOD("set_rc_amortization", "frames"), &Environment::set_rc_amortization);
+	ClassDB::bind_method(D_METHOD("get_rc_amortization"), &Environment::get_rc_amortization);
 
 	ADD_GROUP("Radiance Cascades", "rc_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "rc_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_rc_enabled", "is_rc_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rc_energy", PROPERTY_HINT_RANGE, "0,16,0.01,or_greater"), "set_rc_energy", "get_rc_energy");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "rc_amortization", PROPERTY_HINT_RANGE, "1,64,1"), "set_rc_amortization", "get_rc_amortization");
 
 	// SDFGI
 

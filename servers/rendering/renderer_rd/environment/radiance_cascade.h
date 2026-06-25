@@ -476,6 +476,10 @@ public:
 	// into the upsample/composite push constants.
 	void set_gi_intensity(float p_intensity) { gi_intensity = p_intensity; }
 
+	// Spread a full directional refresh over N frames (Environment > rc_amortization);
+	// 1 = refresh every frame. Forced to 1 internally while a relight cross-fade is armed.
+	void set_trace_amortization(int p_frames) { trace_amortization = (uint32_t)CLAMP(p_frames, 1, 64); }
+
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
 	bool needs_voxel_bake() const { return voxel_dirty; }

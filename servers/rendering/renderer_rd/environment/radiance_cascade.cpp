@@ -33,6 +33,8 @@
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
+#include "servers/rendering/rendering_server_globals.h"
+#include "servers/rendering/storage/utilities.h"
 
 // NOTE: This is the in-engine port scaffold of the Radiance Cascades GI solver
 // (previously a GDExtension CompositorEffect). The method bodies below are stubs;
@@ -373,20 +375,26 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		voxel_unpack_pending = false;
 	}
 
-	// Per-frame probe chain. The voxel grid is still empty (the engine-native geometry
-	// feed is the next unit), so this resolves to sky/ambient -- enough to validate the
-	// full pipeline (uniform sets, dispatch, shaders) at runtime.
+	// Per-frame probe chain. A draw-command label groups it for GPU debuggers (RenderDoc/
+	// Nsight); the per-pass RENDER_TIMESTAMPs feed the engine's built-in visual profiler --
+	// together these replace the GDExtension's bespoke gpu_profile capture. rc_add and
+	// rc_upsample are the known hot passes, so they get their own markers.
+	RD::get_singleton()->draw_command_begin_label("Radiance Cascades GI");
 	dispatch_patch_clear();
 	dispatch_patch_rebuild();
+	RENDER_TIMESTAMP("RC Add Probes");
 	dispatch_patch_add();
+	RENDER_TIMESTAMP("RC Trace");
 	dispatch_patch_trace();
 	dispatch_patch_neighbours();
 	dispatch_patch_merge();
 	dispatch_patch_gather();
 	dispatch_irradiance_atrous();
+	RENDER_TIMESTAMP("RC Upsample");
 	dispatch_irradiance_upsample();
 	// The upsample wrote the GI straight into RB_TEX_AMBIENT (frame_ambient); the forward
 	// shader consumes it during the opaque pass and multiplies by real albedo.
+	RD::get_singleton()->draw_command_end_label();
 }
 
 /* CASCADE TABLE */

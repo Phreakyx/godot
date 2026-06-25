@@ -296,7 +296,7 @@ public:
 	virtual void environment_set_ssil_quality(RSE::EnvironmentSSILQuality p_quality, bool p_half_size, float p_adaptive_target, int p_blur_passes, float p_fadeout_from, float p_fadeout_to) = 0;
 
 	// Radiance Cascades
-	virtual void environment_set_rc(RID p_env, bool p_enable, float p_energy) = 0;
+	virtual void environment_set_rc(RID p_env, bool p_enable, float p_energy, int p_amortization) = 0;
 
 	// SDFGI
 	virtual void environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias) = 0;

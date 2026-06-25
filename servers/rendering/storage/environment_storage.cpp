@@ -814,7 +814,7 @@ float RendererEnvironmentStorage::environment_get_ssil_normal_rejection(RID p_en
 
 // SDFGI
 
-void RendererEnvironmentStorage::environment_set_rc(RID p_env, bool p_enable, float p_energy) {
+void RendererEnvironmentStorage::environment_set_rc(RID p_env, bool p_enable, float p_energy, int p_amortization) {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL(env);
 #ifdef DEBUG_ENABLED
@@ -824,6 +824,7 @@ void RendererEnvironmentStorage::environment_set_rc(RID p_env, bool p_enable, fl
 #endif
 	env->rc_enabled = p_enable;
 	env->rc_energy = p_energy;
+	env->rc_amortization = p_amortization;
 }
 
 bool RendererEnvironmentStorage::environment_get_rc_enabled(RID p_env) const {
@@ -836,6 +837,12 @@ float RendererEnvironmentStorage::environment_get_rc_energy(RID p_env) const {
 	Environment *env = environment_owner.get_or_null(p_env);
 	ERR_FAIL_NULL_V(env, 1.0);
 	return env->rc_energy;
+}
+
+int RendererEnvironmentStorage::environment_get_rc_amortization(RID p_env) const {
+	Environment *env = environment_owner.get_or_null(p_env);
+	ERR_FAIL_NULL_V(env, 1);
+	return env->rc_amortization;
 }
 
 void RendererEnvironmentStorage::environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias) {
