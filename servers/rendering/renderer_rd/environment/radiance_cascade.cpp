@@ -197,6 +197,13 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	dyn_occ_acc = make_tex(RD::DATA_FORMAT_R8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_occ);
 	rd->texture_clear(dyn_occ_acc, Color(0, 0, 0, 0), 0, 1, 0, 1);
 
+	// Geometry voxelization render targets (packed, SDFGI PASS_MODE_SDF output format).
+	const uint32_t usage_pack = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
+	render_albedo = make_tex(RD::DATA_FORMAT_R16_UINT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_pack);
+	render_emission = make_tex(RD::DATA_FORMAT_R32_UINT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_pack);
+	render_emission_aniso = make_tex(RD::DATA_FORMAT_R32_UINT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_pack);
+	render_geom_facing = make_tex(RD::DATA_FORMAT_R32_UINT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_pack);
+
 	// Jump-flood SDF + its two ping-pong seeds (half grid resolution).
 	sdf_tex = make_tex(RD::DATA_FORMAT_R16_SFLOAT, RD::TEXTURE_TYPE_3D, hres, hres, hres, 1, usage_grid);
 	sdf_seed_a = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_3D, hres, hres, hres, 1, usage_grid);

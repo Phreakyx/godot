@@ -571,6 +571,14 @@ private:
 	bool voxel_dirty = true;
 	float recenter_margin_frac = 0.125;
 
+	// ── Geometry voxelization render targets (SDFGI-style PASS_MODE_SDF output) ──
+	// The renderer rasterizes scene instances into these packed integer grids; an
+	// unpack pass then fills voxel_albedo/normal/emission. Replaces the CPU voxelizer.
+	RID render_albedo; // R16_UINT, packed RGB
+	RID render_emission; // R32_UINT, packed
+	RID render_emission_aniso; // R32_UINT, packed
+	RID render_geom_facing; // R32_UINT, packed face mask -> normal
+
 	// ── Voxel mips (anisotropic + emission) ──
 	int vox_mip_levels = 1;
 	int aniso_levels = 0;
