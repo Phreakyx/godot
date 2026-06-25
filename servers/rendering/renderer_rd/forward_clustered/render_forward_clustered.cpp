@@ -1618,6 +1618,14 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 			rc = gi.create_rc(rb->get_internal_size());
 			rb->set_custom_data(RB_SCOPE_RC, rc);
 		}
+		// Rasterize the scene geometry into RC's voxel grid (SDFGI-style) when it needs
+		// a (re)bake; process() then unpacks + injects it. Once for now (bakes on first
+		// frame); streaming/relight cadence comes later.
+		if (rc->needs_voxel_bake() && p_render_data->instances != nullptr) {
+			_render_rc_voxelize(rb, rc->voxel_bounds(), rc->voxel_resolution(), *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+			rc->mark_voxel_baked();
+		}
+
 		// TODO: force normal-roughness allocation when rc_enabled so this is the real
 		// buffer; for now fall back to a flat default when no other consumer produced it.
 		RID rc_normal = (p_normal_roughness_slices != nullptr) ? p_normal_roughness_slices[0] : RID();
@@ -3172,6 +3180,86 @@ void RenderForwardClustered::_render_sdfgi(Ref<RenderSceneBuffersRD> p_render_bu
 		float d_size = half_size[i] * 2.0;
 		scene_data.cam_projection.set_orthogonal(-h_size, h_size, -v_size, v_size, 0, d_size);
 		//print_line("pass: " + itos(i) + " cam hsize: " + rtos(h_size) + " vsize: " + rtos(v_size) + " dsize " + rtos(d_size));
+
+		Transform3D to_bounds;
+		to_bounds.origin = p_bounds.position;
+		to_bounds.basis.scale(p_bounds.size);
+
+		RendererRD::MaterialStorage::store_transform(to_bounds.affine_inverse() * scene_data.cam_transform, scene_state.ubo.sdf_to_bounds);
+
+		scene_data.emissive_exposure_normalization = p_exposure_normalization;
+		uint32_t uniform_buffer_index = _setup_environment(&render_data, true, fb_size, fb_size, Color());
+
+		RID rp_uniform_set = _setup_sdfgi_render_pass_uniform_set(p_albedo_texture, p_emission_texture, p_emission_aniso_texture, p_geom_facing_texture, RendererRD::MaterialStorage::get_singleton()->samplers_rd_get_default(), uniform_buffer_index);
+
+		HashMap<Size2i, RID>::Iterator E = sdfgi_framebuffer_size_cache.find(fb_size);
+		if (!E) {
+			RID fb = RD::get_singleton()->framebuffer_create_empty(fb_size);
+			E = sdfgi_framebuffer_size_cache.insert(fb_size, fb);
+		}
+
+		RenderListParameters render_list_params(render_list[RENDER_LIST_SECONDARY].elements.ptr(), render_list[RENDER_LIST_SECONDARY].element_info.ptr(), render_list[RENDER_LIST_SECONDARY].elements.size(), true, pass_mode, 0, true, false, rp_uniform_set, false);
+		_render_list_with_draw_list(&render_list_params, E->value);
+	}
+
+	RD::get_singleton()->draw_command_end_label();
+}
+
+void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_render_buffers, const AABB &p_bounds, int p_grid_size, const PagedArray<RenderGeometryInstance *> &p_instances, const RID &p_albedo_texture, const RID &p_emission_texture, const RID &p_emission_aniso_texture, const RID &p_geom_facing_texture, float p_exposure_normalization) {
+	// Rasterize the scene geometry into Radiance Cascades' voxel grid, mirroring
+	// _render_sdfgi: render the instances three times (one orthographic camera per
+	// axis) with PASS_MODE_SDF, whose shader image-stores each fragment's voxel-space
+	// albedo/emission/normal into the packed render targets. Unlike SDFGI this covers
+	// the whole grid as a single region (from = 0, size = grid_size on each axis).
+	RD::get_singleton()->draw_command_begin_label("Render RC Voxelize");
+
+	RenderSceneDataRD scene_data;
+
+	RenderDataRD render_data;
+	render_data.scene_data = &scene_data;
+	render_data.cluster_size = 1;
+	render_data.cluster_max_elements = 32;
+	render_data.instances = &p_instances;
+
+	_update_render_base_uniform_set();
+
+	global_pipeline_data_required.use_sdfgi = true;
+
+	PassMode pass_mode = PASS_MODE_SDF;
+	_fill_render_list(RENDER_LIST_SECONDARY, &render_data, pass_mode);
+	render_list[RENDER_LIST_SECONDARY].sort_by_key();
+	_fill_instance_data(RENDER_LIST_SECONDARY);
+
+	Vector3 half_size = p_bounds.size * 0.5;
+	Vector3 center = p_bounds.position + half_size;
+
+	for (int i = 0; i < 3; i++) {
+		scene_state.ubo.sdf_offset[i] = 0;
+		scene_state.ubo.sdf_size[i] = p_grid_size;
+	}
+
+	for (int i = 0; i < 3; i++) {
+		Vector3 axis;
+		axis[i] = 1.0;
+		Vector3 up, right;
+		int right_axis = (i + 1) % 3;
+		int up_axis = (i + 2) % 3;
+		up[up_axis] = 1.0;
+		right[right_axis] = 1.0;
+
+		Size2i fb_size;
+		fb_size.x = p_grid_size;
+		fb_size.y = p_grid_size;
+
+		scene_data.cam_transform.origin = center + axis * half_size;
+		scene_data.cam_transform.basis.set_column(0, right);
+		scene_data.cam_transform.basis.set_column(1, up);
+		scene_data.cam_transform.basis.set_column(2, axis);
+
+		float h_size = half_size[right_axis];
+		float v_size = half_size[up_axis];
+		float d_size = half_size[i] * 2.0;
+		scene_data.cam_projection.set_orthogonal(-h_size, h_size, -v_size, v_size, 0, d_size);
 
 		Transform3D to_bounds;
 		to_bounds.origin = p_bounds.position;

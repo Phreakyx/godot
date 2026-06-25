@@ -62,6 +62,7 @@
 // shaders/pipelines are shared and owned by GI (RadianceCascadeShaders). Camera,
 // lights and geometry come from the engine's render data, never the SceneTree.
 
+#include "core/math/aabb.h"
 #include "core/math/projection.h"
 #include "core/math/transform_3d.h"
 #include "core/templates/local_vector.h"
@@ -462,6 +463,20 @@ public:
 	void create(GI *p_gi, const Size2i &p_size);
 	void process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color);
 
+	// Geometry voxelization: the renderer rasterizes the scene into the render targets
+	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
+	bool needs_voxel_bake() const { return voxel_dirty; }
+	void mark_voxel_baked() {
+		voxel_dirty = false;
+		voxel_unpack_pending = true;
+	}
+	AABB voxel_bounds() const { return AABB(vox_origin, vox_extent); }
+	int voxel_resolution() const { return vox_res; }
+	RID get_render_albedo() const { return render_albedo; }
+	RID get_render_emission() const { return render_emission; }
+	RID get_render_emission_aniso() const { return render_emission_aniso; }
+	RID get_render_geom_facing() const { return render_geom_facing; }
+
 private:
 	void free_resources();
 
@@ -569,6 +584,7 @@ private:
 	Vector3 vox_extent = Vector3(64, 64, 64);
 	Vector3i vox_phase; // origin_voxel % res (toroidal addressing)
 	bool voxel_dirty = true;
+	bool voxel_unpack_pending = false; // renderer just voxelized; process() unpacks + injects
 	float recenter_margin_frac = 0.125;
 
 	// ── Geometry voxelization render targets (SDFGI-style PASS_MODE_SDF output) ──
