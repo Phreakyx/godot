@@ -1622,6 +1622,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		// a (re)bake; process() then unpacks + injects it. Once for now (bakes on first
 		// frame); streaming/relight cadence comes later.
 		if (rc->needs_voxel_bake() && p_render_data->instances != nullptr) {
+			rc->center_grid_on(p_render_data->scene_data->cam_transform.origin);
 			_render_rc_voxelize(rb, rc->voxel_bounds(), rc->voxel_resolution(), *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
 			rc->mark_voxel_baked();
 		}
@@ -3212,6 +3213,10 @@ void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_ren
 	// albedo/emission/normal into the packed render targets. Unlike SDFGI this covers
 	// the whole grid as a single region (from = 0, size = grid_size on each axis).
 	RD::get_singleton()->draw_command_begin_label("Render RC Voxelize");
+
+	// Ensure the advanced (SDF) scene-shader pipeline variants are compiled, otherwise
+	// PASS_MODE_SDF has no vertex shader. SDFGI does this in sdfgi_update.
+	scene_shader.enable_advanced_shader_group();
 
 	// The voxelize pass accumulates (facing OR, emission max), so start from empty.
 	RD::get_singleton()->texture_clear(p_albedo_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);

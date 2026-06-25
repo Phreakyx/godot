@@ -487,6 +487,18 @@ void RadianceCascade::update_trace_params() {
 	rd->buffer_update(clip_params_ubo, 0, sizeof(gc), &gc);
 }
 
+void RadianceCascade::center_grid_on(const Vector3 &p_center) {
+	// Place the (currently static) voxel grid so it surrounds the camera, then refresh
+	// the toroidal phase + trace UBOs. One-time at bake; streaming/recenter is later.
+	vox_origin = p_center - vox_extent * 0.5f;
+	const float vsize = vox_extent.x / float(vox_res);
+	const int ox = (int)Math::floor(vox_origin.x / vsize);
+	const int oy = (int)Math::floor(vox_origin.y / vsize);
+	const int oz = (int)Math::floor(vox_origin.z / vsize);
+	vox_phase = Vector3i(((ox % vox_res) + vox_res) % vox_res, ((oy % vox_res) + vox_res) % vox_res, ((oz % vox_res) + vox_res) % vox_res);
+	update_trace_params();
+}
+
 void RadianceCascade::build_static_sets() {
 	// Wire each pass's static resources (set 0, plus trace set 2) into descriptor sets
 	// once. Per-frame inputs (depth/normal/color) live in set 1, rebuilt every frame.

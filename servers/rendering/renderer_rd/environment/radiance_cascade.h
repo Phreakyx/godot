@@ -475,6 +475,7 @@ public:
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
 	bool needs_voxel_bake() const { return voxel_dirty; }
+	void center_grid_on(const Vector3 &p_center); // place the (static) grid around the camera
 	void mark_voxel_baked() {
 		voxel_dirty = false;
 		voxel_unpack_pending = true;
