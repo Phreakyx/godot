@@ -2570,6 +2570,14 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		}
 	}
 
+	// Radiance Cascades: composite the GI (computed back in _pre_opaque_render) over the
+	// now fully-lit color buffer, before tonemapping. Doing it pre-opaque would be
+	// overwritten by the opaque pass.
+	if (rb.is_valid() && p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment) && rb->has_custom_data(RB_SCOPE_RC)) {
+		Ref<RendererRD::RadianceCascade> rc = rb->get_custom_data(RB_SCOPE_RC);
+		rc->composite_to_color();
+	}
+
 	if (rb_data.is_valid()) {
 		_debug_draw_cluster(rb);
 

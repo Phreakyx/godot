@@ -471,6 +471,7 @@ public:
 	// frame and writes the diffuse irradiance target; both are driven from GI.
 	void create(GI *p_gi, const Size2i &p_size);
 	void process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color);
+	void composite_to_color(); // additive GI over the lit color; run AFTER the opaque pass
 
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.

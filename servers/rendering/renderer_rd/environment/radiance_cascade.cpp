@@ -384,6 +384,11 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	dispatch_patch_gather();
 	dispatch_irradiance_atrous();
 	dispatch_irradiance_upsample();
+	// NOTE: the composite runs separately (composite_to_color), AFTER the opaque pass --
+	// process() runs in _pre_opaque_render, so compositing here would be overwritten.
+}
+
+void RadianceCascade::composite_to_color() {
 	dispatch_composite();
 }
 
