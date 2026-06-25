@@ -73,6 +73,7 @@ void RadianceCascadeShaders::init() {
 	init_compute(voxelize_dynamic, voxelize_dynamic_shader, voxelize_dynamic_pipeline, "");
 	init_compute(slab_clear, slab_clear_shader, slab_clear_pipeline, "");
 	init_compute(voxel_inject, voxel_inject_shader, voxel_inject_pipeline, "");
+	init_compute(voxel_unpack, voxel_unpack_shader, voxel_unpack_pipeline, "");
 	init_compute(clip_inject, clip_inject_shader, clip_inject_pipeline, "");
 	init_compute(voxel_sdf, voxel_sdf_shader, voxel_sdf_pipeline, "");
 	init_compute(voxel_mip_aniso, voxel_mip_aniso_shader, voxel_mip_aniso_pipeline, "");
@@ -115,6 +116,7 @@ void RadianceCascadeShaders::free() {
 	free_compute(voxelize_dynamic, voxelize_dynamic_shader, voxelize_dynamic_pipeline);
 	free_compute(slab_clear, slab_clear_shader, slab_clear_pipeline);
 	free_compute(voxel_inject, voxel_inject_shader, voxel_inject_pipeline);
+	free_compute(voxel_unpack, voxel_unpack_shader, voxel_unpack_pipeline);
 	free_compute(clip_inject, clip_inject_shader, clip_inject_pipeline);
 	free_compute(voxel_sdf, voxel_sdf_shader, voxel_sdf_pipeline);
 	free_compute(voxel_mip_aniso, voxel_mip_aniso_shader, voxel_mip_aniso_pipeline);
@@ -146,6 +148,16 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	rd = RD::get_singleton();
 	screen_size = p_size;
 	half_size = Size2i((p_size.x + 1) / 2, (p_size.y + 1) / 2);
+
+	// Toroidal phase: the grid cell the world-origin voxel maps to (the trace samples
+	// the grid as fract(W / vox_extent), so a cell holds world_voxel % res).
+	{
+		const float vsize = vox_extent.x / float(vox_res);
+		const int ox = (int)Math::floor(vox_origin.x / vsize);
+		const int oy = (int)Math::floor(vox_origin.y / vsize);
+		const int oz = (int)Math::floor(vox_origin.z / vsize);
+		vox_phase = Vector3i(((ox % vox_res) + vox_res) % vox_res, ((oy % vox_res) + vox_res) % vox_res, ((oz % vox_res) + vox_res) % vox_res);
+	}
 
 	auto make_tex = [this](RD::DataFormat p_format, RD::TextureType p_type, uint32_t p_w, uint32_t p_h, uint32_t p_d, uint32_t p_mips, uint32_t p_usage) -> RID {
 		RD::TextureFormat tf;
@@ -344,6 +356,15 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	rebuild_per_frame_sets();
 	if (patch_add_set1.is_null() || patch_lookup_set1.is_null()) {
 		return; // no depth this frame
+	}
+
+	// If the renderer just (re)voxelized the scene, unpack the packed targets into the
+	// voxel grid (albedo/normal/emission + occupancy). Inject/SDF/mips -- which light
+	// the grid for the trace -- are the next step; until then the trace sees geometry
+	// but no radiance.
+	if (voxel_unpack_pending) {
+		dispatch_voxel_unpack();
+		voxel_unpack_pending = false;
 	}
 
 	// Per-frame probe chain. The voxel grid is still empty (the engine-native geometry
@@ -696,6 +717,18 @@ void RadianceCascade::build_static_sets() {
 		u.push_back(img(4, voxel_emission));
 		u.push_back(ssbo(5, light_buffer));
 		inject_set0 = rd->uniform_set_create(u, RC_SHADER(voxel_inject), 0);
+	}
+
+	{ // voxel unpack: packed voxelization targets -> RC voxel grid
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, render_albedo));
+		u.push_back(img(1, render_emission));
+		u.push_back(img(2, render_geom_facing));
+		u.push_back(img(3, voxel_tex));
+		u.push_back(img(4, voxel_albedo));
+		u.push_back(img(5, voxel_normal));
+		u.push_back(img(6, voxel_emission));
+		voxel_unpack_set0 = rd->uniform_set_create(u, RC_SHADER(voxel_unpack), 0);
 	}
 
 	for (int L = 1; L < MAX_CLIP; L++) { // coarse clipmap voxelize / inject / slab-clear sets
@@ -1175,6 +1208,23 @@ void RadianceCascade::dispatch_composite() {
 }
 
 void RadianceCascade::dispatch_patch_lookup(uint32_t p_debug_kind) {}
+void RadianceCascade::dispatch_voxel_unpack() {
+	// Unpack the packed voxelization targets into the RC voxel grid (one thread/cell).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCVoxelUnpackPushConstant pc = {};
+	pc.phase[0] = vox_phase.x;
+	pc.phase[1] = vox_phase.y;
+	pc.phase[2] = vox_phase.z;
+	pc.res = (uint32_t)vox_res;
+	const uint32_t g = ((uint32_t)vox_res + 3u) / 4u;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.voxel_unpack_pipeline);
+	rd->compute_list_bind_uniform_set(l, voxel_unpack_set0, 0);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, g, g, g);
+	rd->compute_list_end();
+}
+
 void RadianceCascade::dispatch_voxel_mips() {}
 void RadianceCascade::dispatch_emission_mips() {}
 void RadianceCascade::dispatch_voxel_debug() {}

@@ -3213,6 +3213,12 @@ void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_ren
 	// the whole grid as a single region (from = 0, size = grid_size on each axis).
 	RD::get_singleton()->draw_command_begin_label("Render RC Voxelize");
 
+	// The voxelize pass accumulates (facing OR, emission max), so start from empty.
+	RD::get_singleton()->texture_clear(p_albedo_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	RD::get_singleton()->texture_clear(p_emission_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	RD::get_singleton()->texture_clear(p_emission_aniso_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	RD::get_singleton()->texture_clear(p_geom_facing_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+
 	RenderSceneDataRD scene_data;
 
 	RenderDataRD render_data;

@@ -87,6 +87,7 @@
 #include "servers/rendering/renderer_rd/shaders/environment/rc_slab_clear.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxel_debug.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxel_inject.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/environment/rc_voxel_unpack.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxelize_dynamic.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxelize_mesh.glsl.gen.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_buffer_custom_data_rd.h"
@@ -292,6 +293,12 @@ struct RCSdfPushConstant {
 	uint32_t pad1;
 };
 
+// rc_voxel_unpack.glsl — unpack the packed voxelization targets into the RC grid.
+struct RCVoxelUnpackPushConstant {
+	int32_t phase[3];
+	uint32_t res;
+};
+
 // rc_voxel_debug.glsl — raymarch a grid level to the screen for visualization.
 struct RCVoxelDebugPushConstant {
 	uint32_t sw;
@@ -386,6 +393,7 @@ struct RadianceCascadeShaders {
 	RcSlabClearShaderRD slab_clear;
 	RcVoxelDebugShaderRD voxel_debug;
 	RcVoxelInjectShaderRD voxel_inject;
+	RcVoxelUnpackShaderRD voxel_unpack;
 	RcVoxelizeDynamicShaderRD voxelize_dynamic;
 	RcVoxelizeMeshShaderRD voxelize_mesh;
 
@@ -410,6 +418,7 @@ struct RadianceCascadeShaders {
 	RID slab_clear_shader, slab_clear_pipeline;
 	RID voxel_debug_shader, voxel_debug_pipeline;
 	RID voxel_inject_shader, voxel_inject_pipeline;
+	RID voxel_unpack_shader, voxel_unpack_pipeline;
 	RID voxelize_dynamic_shader, voxelize_dynamic_pipeline;
 	RID voxelize_mesh_shader, voxelize_mesh_pipeline;
 
@@ -502,6 +511,7 @@ private:
 	void dispatch_patch_merge();
 	void dispatch_patch_gather();
 	void dispatch_patch_lookup(uint32_t p_debug_kind);
+	void dispatch_voxel_unpack(); // packed render targets -> voxel_albedo/normal/emission + occupancy
 	void dispatch_voxel_mips();
 	void dispatch_emission_mips();
 	void dispatch_voxel_debug();
@@ -624,6 +634,7 @@ private:
 
 	// ── Inject (direct light -> voxels) ──
 	RID inject_set0;
+	RID voxel_unpack_set0;
 
 	// ── SDF march ──
 	RID sdf_tex; // r16f distance field
