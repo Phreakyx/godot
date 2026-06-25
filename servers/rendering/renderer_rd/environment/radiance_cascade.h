@@ -460,7 +460,7 @@ public:
 	// GPU resources for a given screen size; process() runs the whole GI chain for one
 	// frame and writes the diffuse irradiance target; both are driven from GI.
 	void create(GI *p_gi, const Size2i &p_size);
-	void process(RenderDataRD *p_render_data); // TODO: full chain; writes RB_TEX_AMBIENT
+	void process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color);
 
 private:
 	void free_resources();
@@ -473,6 +473,7 @@ private:
 	// ── Inputs (engine-native; NOT a SceneTree walk -- see header note) ──
 	// TODO(port): drive these from render data instead of the GDExtension's Node3D path.
 	void update_camera(const Projection &p_projection, const Transform3D &p_transform);
+	void rebuild_per_frame_sets(); // set-1 depth/normal/color sets from this frame's buffers
 	void update_lights(RenderDataRD *p_render_data); // from the renderer light instance list
 	void update_geometry(RenderDataRD *p_render_data); // feed the voxelizer from render geometry instances
 

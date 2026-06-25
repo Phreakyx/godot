@@ -30,6 +30,8 @@
 #include "radiance_cascade.h"
 
 #include "servers/rendering/renderer_rd/environment/gi.h"
+#include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
+#include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
 
 // NOTE: This is the in-engine port scaffold of the Radiance Cascades GI solver
 // (previously a GDExtension CompositorEffect). The method bodies below are stubs;
@@ -316,8 +318,40 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	build_static_sets();
 }
 
-void RadianceCascade::process(RenderDataRD *p_render_data) {
-	// TODO(port): the full per-frame chain (see header), writing RB_TEX_AMBIENT.
+void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color) {
+	// One frame_index for the whole frame: rebuild/add/trace/merge all read it (eviction
+	// age, last_seen stamp, amortization rotation), so advance it once up front.
+	frame_index++;
+
+	// Camera from this frame's render data (engine-native -- no SceneTree).
+	const Transform3D cam_to_world = p_render_data->scene_data->cam_transform;
+	const Projection projection = p_render_data->scene_data->cam_projection;
+	z_near = (float)projection.get_z_near();
+	z_far = (float)projection.get_z_far();
+	update_camera(projection, cam_to_world.affine_inverse());
+
+	// Per-frame inputs + their set-1 descriptor sets.
+	frame_depth = p_depth;
+	frame_normal = p_normal_roughness;
+	frame_color = p_color;
+	rebuild_per_frame_sets();
+	if (patch_add_set1.is_null() || patch_lookup_set1.is_null()) {
+		return; // no depth this frame
+	}
+
+	// Per-frame probe chain. The voxel grid is still empty (the engine-native geometry
+	// feed is the next unit), so this resolves to sky/ambient -- enough to validate the
+	// full pipeline (uniform sets, dispatch, shaders) at runtime.
+	dispatch_patch_clear();
+	dispatch_patch_rebuild();
+	dispatch_patch_add();
+	dispatch_patch_trace();
+	dispatch_patch_neighbours();
+	dispatch_patch_merge();
+	dispatch_patch_gather();
+	dispatch_irradiance_atrous();
+	dispatch_irradiance_upsample();
+	dispatch_composite();
 }
 
 /* CASCADE TABLE */
@@ -742,8 +776,94 @@ void RadianceCascade::build_static_sets() {
 
 /* INPUTS (engine-native render data, not the SceneTree) */
 
-void RadianceCascade::update_camera(const Projection &p_projection, const Transform3D &p_transform) {
-	// TODO(port): pack RCCameraData (inverse + forward view/proj) into camera_ubo.
+void RadianceCascade::update_camera(const Projection &p_projection, const Transform3D &p_view) {
+	// Pack both directions of the transform: screen->world (inverse) to place probes,
+	// world->screen (forward) to reproject. Column-major to match the GLSL mat4 layout.
+	if (camera_ubo.is_null()) {
+		return;
+	}
+	RCCameraData cam = {};
+
+	auto copy_proj = [](float *p_dst, const Projection &p) {
+		for (int col = 0; col < 4; col++) {
+			for (int row = 0; row < 4; row++) {
+				p_dst[col * 4 + row] = p.columns[col][row];
+			}
+		}
+	};
+	auto copy_transform = [](float *p_dst, const Transform3D &t) {
+		for (int col = 0; col < 3; col++) {
+			for (int row = 0; row < 3; row++) {
+				p_dst[col * 4 + row] = t.basis.rows[row][col];
+			}
+		}
+		p_dst[0 * 4 + 3] = 0.0f;
+		p_dst[1 * 4 + 3] = 0.0f;
+		p_dst[2 * 4 + 3] = 0.0f;
+		p_dst[3 * 4 + 0] = t.origin.x;
+		p_dst[3 * 4 + 1] = t.origin.y;
+		p_dst[3 * 4 + 2] = t.origin.z;
+		p_dst[3 * 4 + 3] = 1.0f;
+	};
+
+	copy_proj(cam.inv_proj, p_projection.inverse());
+	copy_transform(cam.inv_view, p_view.inverse());
+	copy_proj(cam.fwd_proj, p_projection);
+	copy_transform(cam.fwd_view, p_view);
+
+	rd->buffer_update(camera_ubo, 0, sizeof(cam), &cam);
+}
+
+void RadianceCascade::rebuild_per_frame_sets() {
+	// set=1 for the passes that read this frame's buffers (depth / normal-roughness /
+	// scene color). Rebuilt every frame because those RIDs can change; free the prior.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	if (frame_depth.is_null()) {
+		return;
+	}
+
+	auto tex = [](int p_bind, RID p_sampler, RID p_tex) {
+		RD::Uniform u;
+		u.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		u.binding = p_bind;
+		u.append_id(p_sampler);
+		u.append_id(p_tex);
+		return u;
+	};
+
+	{ // lookup set1: depth(0) + normal(1) -- also bound by gather
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, depth_sampler, frame_depth));
+		u.push_back(tex(1, normal_sampler, frame_normal));
+		if (patch_lookup_set1.is_valid()) {
+			rd->free_rid(patch_lookup_set1);
+		}
+		patch_lookup_set1 = rd->uniform_set_create(u, sh.patch_lookup.version_get_shader(sh.patch_lookup_shader, 0), 1);
+	}
+
+	{ // add set1: depth(0) only
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, depth_sampler, frame_depth));
+		if (patch_add_set1.is_valid()) {
+			rd->free_rid(patch_add_set1);
+		}
+		patch_add_set1 = rd->uniform_set_create(u, sh.patch_add.version_get_shader(sh.patch_add_shader, 0), 1);
+	}
+
+	{ // composite set1: scene color bound twice (sampler + image)
+		const RID color = frame_color.is_valid() ? frame_color : dummy_color_tex;
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, color_sampler, color));
+		RD::Uniform u1;
+		u1.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+		u1.binding = 1;
+		u1.append_id(color);
+		u.push_back(u1);
+		if (composite_set1.is_valid()) {
+			rd->free_rid(composite_set1);
+		}
+		composite_set1 = rd->uniform_set_create(u, sh.composite.version_get_shader(sh.composite_shader, 0), 1);
+	}
 }
 
 void RadianceCascade::update_lights(RenderDataRD *p_render_data) {
