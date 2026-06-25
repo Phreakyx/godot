@@ -480,8 +480,17 @@ bool Environment::is_rc_enabled() const {
 	return rc_enabled;
 }
 
+void Environment::set_rc_energy(float p_energy) {
+	rc_energy = p_energy;
+	_update_rc();
+}
+
+float Environment::get_rc_energy() const {
+	return rc_energy;
+}
+
 void Environment::_update_rc() {
-	RS::get_singleton()->environment_set_rc(environment, rc_enabled);
+	RS::get_singleton()->environment_set_rc(environment, rc_enabled, rc_energy);
 }
 
 void Environment::set_sdfgi_enabled(bool p_enabled) {
@@ -1404,9 +1413,12 @@ void Environment::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_rc_enabled", "enabled"), &Environment::set_rc_enabled);
 	ClassDB::bind_method(D_METHOD("is_rc_enabled"), &Environment::is_rc_enabled);
+	ClassDB::bind_method(D_METHOD("set_rc_energy", "amount"), &Environment::set_rc_energy);
+	ClassDB::bind_method(D_METHOD("get_rc_energy"), &Environment::get_rc_energy);
 
 	ADD_GROUP("Radiance Cascades", "rc_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "rc_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_rc_enabled", "is_rc_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rc_energy", PROPERTY_HINT_RANGE, "0,16,0.01,or_greater"), "set_rc_energy", "get_rc_energy");
 
 	// SDFGI
 

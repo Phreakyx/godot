@@ -174,6 +174,7 @@ private:
 
 		// Radiance Cascades
 		bool rc_enabled = false;
+		float rc_energy = 1.0;
 
 		// Adjustments
 		bool adjustments_enabled = false;
@@ -315,8 +316,9 @@ public:
 	float environment_get_ssil_normal_rejection(RID p_env) const;
 
 	// Radiance Cascades
-	void environment_set_rc(RID p_env, bool p_enable);
+	void environment_set_rc(RID p_env, bool p_enable, float p_energy);
 	bool environment_get_rc_enabled(RID p_env) const;
+	float environment_get_rc_energy(RID p_env) const;
 
 	// SDFGI
 	void environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias);

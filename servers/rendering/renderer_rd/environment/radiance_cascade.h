@@ -472,6 +472,10 @@ public:
 	void create(GI *p_gi, const Size2i &p_size);
 	void process(RenderDataRD *p_render_data, RID p_depth, RID p_normal_roughness, RID p_color, RID p_ambient);
 
+	// Indirect-light intensity (Environment > Radiance Cascades > rc_energy); folded
+	// into the upsample/composite push constants.
+	void set_gi_intensity(float p_intensity) { gi_intensity = p_intensity; }
+
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
 	bool needs_voxel_bake() const { return voxel_dirty; }

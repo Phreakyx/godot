@@ -151,6 +151,7 @@ private:
 
 	// Radiance Cascades
 	bool rc_enabled = false;
+	float rc_energy = 1.0;
 	void _update_rc();
 
 	// SDFGI
@@ -330,6 +331,8 @@ public:
 	// Radiance Cascades
 	void set_rc_enabled(bool p_enabled);
 	bool is_rc_enabled() const;
+	void set_rc_energy(float p_energy);
+	float get_rc_energy() const;
 
 	// SDFGI
 	void set_sdfgi_enabled(bool p_enabled);

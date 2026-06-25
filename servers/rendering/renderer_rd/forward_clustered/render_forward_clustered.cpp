@@ -1618,6 +1618,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 			rc = gi.create_rc(rb->get_internal_size());
 			rb->set_custom_data(RB_SCOPE_RC, rc);
 		}
+		rc->set_gi_intensity(environment_get_rc_energy(p_render_data->environment));
 		// Rasterize the scene geometry into RC's voxel grid (SDFGI-style) when it needs
 		// a (re)bake; process() then unpacks + injects it. Once for now (bakes on first
 		// frame); streaming/relight cadence comes later.
