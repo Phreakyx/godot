@@ -312,6 +312,14 @@ struct RCCompositePushConstant {
 	uint32_t debug_mode;
 };
 
+// rc_patch_trace set 2 — level-0 grid placement (world origin/size) + cone step cap.
+struct RCTraceParams {
+	float vox_origin[3];
+	float voxel_size;
+	float vox_extent[3];
+	uint32_t max_steps;
+};
+
 // Camera UBO — both directions of the transform so probe passes can go
 // screen->world (inverse) and world->screen (forward) for reprojection.
 struct RCCameraData {
@@ -457,8 +465,10 @@ public:
 private:
 	void free_resources();
 
-	// ── Cascade table ──
+	// ── Cascade table + static resources ──
 	void build_cascade_table();
+	void build_static_sets(); // set-0/2 uniform sets, built once by create()
+	void update_trace_params(); // refresh the trace-backend UBOs (level-0 + clipmap placement)
 
 	// ── Inputs (engine-native; NOT a SceneTree walk -- see header note) ──
 	// TODO(port): drive these from render data instead of the GDExtension's Node3D path.

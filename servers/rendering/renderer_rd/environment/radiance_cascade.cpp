@@ -29,6 +29,8 @@
 
 #include "radiance_cascade.h"
 
+#include "servers/rendering/renderer_rd/environment/gi.h"
+
 // NOTE: This is the in-engine port scaffold of the Radiance Cascades GI solver
 // (previously a GDExtension CompositorEffect). The method bodies below are stubs;
 // they are filled in pass-by-pass from the reference implementation, each verified
@@ -309,8 +311,9 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 		rd->texture_update(dummy_albedo_tex, 0, white);
 	}
 
-	// TODO(port): update_trace_params() (set 2 trace-backend UBO) + build the static
-	// uniform sets; then process() can run the chain. Next unit.
+	// Trace-backend UBOs (set 2) then the static uniform sets that wire every pass.
+	update_trace_params();
+	build_static_sets();
 }
 
 void RadianceCascade::process(RenderDataRD *p_render_data) {
@@ -375,6 +378,366 @@ void RadianceCascade::build_cascade_table() {
 	} else {
 		rd->buffer_update(cascade_buffer, 0, sizeof(cascades), cascades);
 	}
+}
+
+void RadianceCascade::update_trace_params() {
+	// Refresh the UBOs the trace backend reads: level-0 placement (trace_params_ubo)
+	// and the per-level origin/size table for every clip level (clip_params_ubo).
+	RCTraceParams p = {};
+	p.vox_origin[0] = vox_origin.x;
+	p.vox_origin[1] = vox_origin.y;
+	p.vox_origin[2] = vox_origin.z;
+	p.vox_extent[0] = vox_extent.x;
+	p.vox_extent[1] = vox_extent.y;
+	p.vox_extent[2] = vox_extent.z;
+	p.voxel_size = vox_extent.x / float(vox_res);
+	p.max_steps = (uint32_t)trace_max_steps;
+	if (trace_params_ubo.is_null()) {
+		trace_params_ubo = rd->uniform_buffer_create(sizeof(p), Span<uint8_t>((const uint8_t *)&p, sizeof(p)));
+	} else {
+		rd->buffer_update(trace_params_ubo, 0, sizeof(p), &p);
+	}
+
+	struct GpuLevel {
+		float origin[3];
+		float voxel_size;
+		float extent[3];
+		float pad;
+	};
+	struct GpuClip {
+		GpuLevel lvl[MAX_CLIP];
+		uint32_t num_levels;
+		uint32_t pad[3];
+	} gc = {};
+	const float base = vox_extent.x / float(vox_res);
+	for (int L = 0; L < MAX_CLIP; L++) {
+		const float vs = base * float(1 << L);
+		const float ext = float(vox_res) * vs;
+		const Vector3 o = (L == 0) ? vox_origin : clip_origin[L];
+		gc.lvl[L] = { { o.x, o.y, o.z }, vs, { ext, ext, ext }, 0.0f };
+	}
+	gc.num_levels = (uint32_t)clip_levels;
+	rd->buffer_update(clip_params_ubo, 0, sizeof(gc), &gc);
+}
+
+void RadianceCascade::build_static_sets() {
+	// Wire each pass's static resources (set 0, plus trace set 2) into descriptor sets
+	// once. Per-frame inputs (depth/normal/color) live in set 1, rebuilt every frame.
+	// Convention across the patch passes: cascade table SSBO at b7, camera UBO at b5.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+#define RC_SHADER(m) sh.m.version_get_shader(sh.m##_shader, 0)
+
+	auto ssbo = [](int p_bind, RID p_id) {
+		RD::Uniform u;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.binding = p_bind;
+		u.append_id(p_id);
+		return u;
+	};
+	auto ubo = [](int p_bind, RID p_id) {
+		RD::Uniform u;
+		u.uniform_type = RD::UNIFORM_TYPE_UNIFORM_BUFFER;
+		u.binding = p_bind;
+		u.append_id(p_id);
+		return u;
+	};
+	auto img = [](int p_bind, RID p_id) {
+		RD::Uniform u;
+		u.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+		u.binding = p_bind;
+		u.append_id(p_id);
+		return u;
+	};
+	auto tex = [](int p_bind, RID p_sampler, RID p_tex) {
+		RD::Uniform u;
+		u.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		u.binding = p_bind;
+		u.append_id(p_sampler);
+		u.append_id(p_tex);
+		return u;
+	};
+
+	{ // composite set0 (TEMPORARY bring-up output): irradiance read + albedo + debug.
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, irradiance_tex));
+		u.push_back(tex(1, albedo_sampler, dummy_albedo_tex));
+		u.push_back(img(2, debug_tex));
+		composite_set0 = rd->uniform_set_create(u, RC_SHADER(composite), 0);
+	}
+
+	{ // patch clear
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(1, patch_alloc));
+		patch_clear_set0 = rd->uniform_set_create(u, RC_SHADER(patch_clear), 0);
+	}
+
+	{ // patch add (+ camera at b5, cascade table at b7)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(1, patch_alloc));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(ssbo(3, patch_world));
+		u.push_back(ssbo(4, patch_live));
+		u.push_back(ubo(5, camera_ubo));
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(8, probe_rad_tag));
+		u.push_back(ssbo(10, probe_last_seen));
+		u.push_back(ssbo(11, patch_freelist));
+		u.push_back(ssbo(12, patch_alloc_state));
+		patch_add_set0 = rd->uniform_set_create(u, RC_SHADER(patch_add), 0);
+	}
+
+	{ // patch rebuild (dense pool -> repopulate hashmap + evict aged ids)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(8, probe_last_seen));
+		u.push_back(ssbo(11, patch_freelist));
+		u.push_back(ssbo(12, patch_alloc_state));
+		patch_rebuild_set0 = rd->uniform_set_create(u, RC_SHADER(patch_rebuild), 0);
+	}
+
+	{ // patch indirect (cascade table at b2 here)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_alloc));
+		u.push_back(ssbo(1, patch_indirect_buffer));
+		u.push_back(ssbo(2, cascade_buffer));
+		patch_indirect_set0 = rd->uniform_set_create(u, RC_SHADER(patch_indirect), 0);
+	}
+
+	{ // patch trace set0
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(1, patch_alloc));
+		u.push_back(ssbo(3, patch_world));
+		u.push_back(ssbo(4, patch_live));
+		u.push_back(ssbo(6, probe_radiance));
+		u.push_back(ssbo(7, cascade_buffer));
+		patch_trace_set0 = rd->uniform_set_create(u, RC_SHADER(patch_trace), 0);
+	}
+
+	{ // patch merge (neighbour ids precomputed at b9)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(1, patch_alloc));
+		u.push_back(ssbo(3, patch_world));
+		u.push_back(ssbo(4, patch_live));
+		u.push_back(ssbo(9, patch_neighbours));
+		u.push_back(ssbo(6, probe_radiance));
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(8, reduced_radiance));
+		patch_merge_set0 = rd->uniform_set_create(u, RC_SHADER(patch_merge), 0);
+	}
+
+	{ // patch neighbours precompute (writes neighbours at b9)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(1, patch_alloc));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(ssbo(3, patch_world));
+		u.push_back(ssbo(4, patch_live));
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(9, patch_neighbours));
+		patch_neighbours_set0 = rd->uniform_set_create(u, RC_SHADER(patch_neighbours), 0);
+	}
+
+	{ // patch reduce (angular pre-reduce; iterates dense ids)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(6, probe_radiance));
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(8, reduced_radiance));
+		u.push_back(ssbo(10, probe_last_seen));
+		patch_reduce_set0 = rd->uniform_set_create(u, RC_SHADER(patch_reduce), 0);
+	}
+
+	{ // trace set2 -- the scene representation a probe ray samples (voxel backend).
+		auto clip_tex = [&](int p_bind, int L) {
+			RID t = (L < clip_levels && clip_grid[L].is_valid()) ? clip_grid[L] : dummy_clip_tex;
+			return tex(p_bind, voxel_sampler, t);
+		};
+		static const int aniso_bind[6] = { 3, 4, 5, 6, 7, 8 };
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, voxel_linear_sampler, voxel_tex));
+		u.push_back(ubo(1, trace_params_ubo));
+		u.push_back(tex(2, voxel_linear_sampler, dyn_occ_acc));
+		for (int dir = 0; dir < 6; dir++) {
+			u.push_back(tex(aniso_bind[dir], voxel_linear_sampler, voxel_aniso[dir]));
+		}
+		u.push_back(tex(9, voxel_linear_sampler, voxel_emission));
+		u.push_back(clip_tex(10, 1));
+		u.push_back(clip_tex(11, 2));
+		u.push_back(clip_tex(12, 3));
+		u.push_back(clip_tex(13, 4));
+		u.push_back(ubo(14, clip_params_ubo));
+		u.push_back(tex(15, voxel_linear_sampler, sdf_tex));
+		trace_voxel_set2 = rd->uniform_set_create(u, RC_SHADER(patch_trace), 2);
+	}
+
+	{ // patch lookup (debug)
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(img(4, debug_tex));
+		u.push_back(ubo(5, camera_ubo));
+		u.push_back(ssbo(6, probe_radiance));
+		u.push_back(ssbo(7, cascade_buffer));
+		patch_lookup_set0 = rd->uniform_set_create(u, RC_SHADER(patch_lookup), 0);
+	}
+
+	{ // voxel debug (level 0)
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, voxel_linear_sampler, voxel_tex));
+		u.push_back(img(1, debug_tex));
+		u.push_back(ubo(2, camera_ubo));
+		u.push_back(tex(3, voxel_linear_sampler, voxel_emission));
+		voxel_debug_set0 = rd->uniform_set_create(u, RC_SHADER(voxel_debug), 0);
+	}
+
+	for (int L = 1; L < MAX_CLIP; L++) { // voxel debug per coarse grid
+		if (!clip_grid[L].is_valid()) {
+			continue;
+		}
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, voxel_linear_sampler, clip_grid[L]));
+		u.push_back(img(1, debug_tex));
+		u.push_back(ubo(2, camera_ubo));
+		u.push_back(tex(3, voxel_linear_sampler, clip_grid[L]));
+		voxel_debug_clip_set[L] = rd->uniform_set_create(u, RC_SHADER(voxel_debug), 0);
+	}
+
+	{ // upsample set0 (static): half irradiance in, full-res out
+		Vector<RD::Uniform> u;
+		u.push_back(tex(0, point_sampler, irradiance_half));
+		u.push_back(img(1, irradiance_tex));
+		upsample_set0 = rd->uniform_set_create(u, RC_SHADER(irradiance_upsample), 0);
+	}
+
+	{ // a-trous ping-pong set0 (static): half<->scratch
+		auto mkset = [&](RID p_in, RID p_out) {
+			Vector<RD::Uniform> u;
+			u.push_back(tex(0, point_sampler, p_in));
+			u.push_back(img(1, p_out));
+			return rd->uniform_set_create(u, RC_SHADER(irradiance_atrous), 0);
+		};
+		atrous_set0_h2s = mkset(irradiance_half, irradiance_half_b);
+		atrous_set0_s2h = mkset(irradiance_half_b, irradiance_half);
+	}
+
+	{ // upsample set2 -- c0 probes for the edge full-res gather
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(ubo(5, camera_ubo));
+		u.push_back(ssbo(6, probe_radiance));
+		u.push_back(ssbo(7, cascade_buffer));
+		upsample_set2 = rd->uniform_set_create(u, RC_SHADER(irradiance_upsample), 2);
+	}
+
+	{ // gather set0
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(img(4, irradiance_half));
+		u.push_back(ubo(5, camera_ubo));
+		u.push_back(ssbo(6, probe_radiance));
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(9, probe_inspect_buffer));
+		patch_gather_set0 = rd->uniform_set_create(u, RC_SHADER(patch_gather), 0);
+	}
+
+	{ // inject set0 (direct light -> level-0 voxels)
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, voxel_tex));
+		u.push_back(img(1, voxel_albedo));
+		u.push_back(img(2, voxel_normal));
+		u.push_back(tex(3, voxel_sampler, sdf_tex));
+		u.push_back(img(4, voxel_emission));
+		u.push_back(ssbo(5, light_buffer));
+		inject_set0 = rd->uniform_set_create(u, RC_SHADER(voxel_inject), 0);
+	}
+
+	for (int L = 1; L < MAX_CLIP; L++) { // coarse clipmap voxelize / inject / slab-clear sets
+		{
+			Vector<RD::Uniform> u;
+			u.push_back(img(0, clip_grid[L]));
+			u.push_back(ssbo(1, tri_buffer));
+			u.push_back(img(2, clip_albedo));
+			u.push_back(img(3, clip_normal));
+			u.push_back(img(4, clip_emission));
+			clip_voxelize_set[L] = rd->uniform_set_create(u, RC_SHADER(voxelize_mesh), 0);
+		}
+		{
+			Vector<RD::Uniform> u;
+			u.push_back(img(0, clip_grid[L]));
+			u.push_back(img(1, clip_albedo));
+			u.push_back(img(2, clip_normal));
+			u.push_back(img(3, clip_emission));
+			u.push_back(ssbo(4, light_buffer));
+			clip_inject_set[L] = rd->uniform_set_create(u, RC_SHADER(clip_inject), 0);
+		}
+		{
+			Vector<RD::Uniform> u;
+			u.push_back(img(0, clip_grid[L]));
+			u.push_back(img(1, clip_albedo));
+			u.push_back(img(2, clip_normal));
+			u.push_back(img(3, clip_emission));
+			clip_slab_clear_set[L] = rd->uniform_set_create(u, RC_SHADER(slab_clear), 0);
+		}
+	}
+
+	{ // level-0 voxelize set0
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, voxel_tex));
+		u.push_back(ssbo(1, tri_buffer));
+		u.push_back(img(2, voxel_albedo));
+		u.push_back(img(3, voxel_normal));
+		u.push_back(img(4, voxel_emission));
+		voxelize_set0 = rd->uniform_set_create(u, RC_SHADER(voxelize_mesh), 0);
+	}
+
+	{ // level-0 slab clear set (4 grids, no tris)
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, voxel_tex));
+		u.push_back(img(1, voxel_albedo));
+		u.push_back(img(2, voxel_normal));
+		u.push_back(img(3, voxel_emission));
+		slab_clear_set = rd->uniform_set_create(u, RC_SHADER(slab_clear), 0);
+	}
+
+	{ // dynamic voxelize set0
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, dyn_occ));
+		u.push_back(ssbo(1, dyn_tri_buffer));
+		dyn_voxelize_set0 = rd->uniform_set_create(u, RC_SHADER(voxelize_dynamic), 0);
+	}
+
+	{ // dynamic occupancy temporal-accumulate set0
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, dyn_occ));
+		u.push_back(img(1, dyn_occ_acc));
+		dyn_occ_temporal_set0 = rd->uniform_set_create(u, RC_SHADER(dyn_occ_temporal), 0);
+	}
+
+	{ // SDF jump-flood -- write A (seed_out = a)
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, sdf_seed_b)); // seed_in
+		u.push_back(img(1, sdf_seed_a)); // seed_out
+		u.push_back(img(2, voxel_tex)); // occupancy (.a)
+		u.push_back(img(3, sdf_tex)); // sdf_out
+		sdf_set_write_a = rd->uniform_set_create(u, RC_SHADER(voxel_sdf), 0);
+	}
+
+	{ // SDF jump-flood -- write B (seed_out = b)
+		Vector<RD::Uniform> u;
+		u.push_back(img(0, sdf_seed_a));
+		u.push_back(img(1, sdf_seed_b));
+		u.push_back(img(2, voxel_tex));
+		u.push_back(img(3, sdf_tex));
+		sdf_set_write_b = rd->uniform_set_create(u, RC_SHADER(voxel_sdf), 0);
+	}
+
+#undef RC_SHADER
 }
 
 /* INPUTS (engine-native render data, not the SceneTree) */
