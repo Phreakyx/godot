@@ -262,8 +262,10 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	}
 
 	// Coarse clipmap radiance grids (levels 1..N) + shared coarse-voxelize scratch.
+	// Cleared because the trace samples them but only L0 is voxelized for now.
 	for (int L = 1; L < MAX_CLIP; L++) {
 		clip_grid[L] = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_grid);
+		rd->texture_clear(clip_grid[L], Color(0, 0, 0, 0), 0, 1, 0, 1);
 	}
 	voxel_sampler = make_sampler(RD::SAMPLER_FILTER_LINEAR, RD::SAMPLER_FILTER_LINEAR);
 	clip_albedo = make_tex(RD::DATA_FORMAT_R8G8B8A8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_grid);
@@ -366,6 +368,7 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	// but no radiance.
 	if (voxel_unpack_pending) {
 		dispatch_voxel_unpack();
+		bake_voxels(); // SDF -> inject -> aniso/emission mips: light the grid for the trace
 		voxel_unpack_pending = false;
 	}
 
@@ -1284,13 +1287,160 @@ void RadianceCascade::dispatch_voxel_unpack() {
 	rd->compute_list_end();
 }
 
-void RadianceCascade::dispatch_voxel_mips() {}
-void RadianceCascade::dispatch_emission_mips() {}
+void RadianceCascade::dispatch_inject() {
+	// Inject direct light from light_buffer into the level-0 voxel radiance over the
+	// whole grid. The shader marches the SDF toward each light for visibility, so the
+	// SDF must be built first.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCInjectSlabPushConstant pc = {};
+	pc.light_count = light_count;
+	pc.vox_origin[0] = vox_origin.x;
+	pc.vox_origin[1] = vox_origin.y;
+	pc.vox_origin[2] = vox_origin.z;
+	pc.voxel_size = vox_extent.x / float(vox_res);
+	pc.blend_alpha = 1.0f;
+	pc.slab_lo[0] = 0;
+	pc.slab_lo[1] = 0;
+	pc.slab_lo[2] = 0;
+	pc.res = (uint32_t)vox_res;
+	pc.slab_dim[0] = vox_res;
+	pc.slab_dim[1] = vox_res;
+	pc.slab_dim[2] = vox_res;
+	pc.phase[0] = vox_phase.x;
+	pc.phase[1] = vox_phase.y;
+	pc.phase[2] = vox_phase.z;
+	const uint32_t g = ((uint32_t)vox_res + 3u) / 4u;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.voxel_inject_pipeline);
+	rd->compute_list_bind_uniform_set(l, inject_set0, 0);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, g, g, g);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_voxel_mips() {
+	// Build the six-axis anisotropic radiance mip chain from the level-0 grid. Each
+	// level reads the previous (finer) one, so the loop runs in order. The cone trace
+	// samples these to keep occlusion direction-aware. Transient set per level.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const RID shader_rid = sh.voxel_mip_aniso.version_get_shader(sh.voxel_mip_aniso_shader, 0);
+	for (int L = 0; L < aniso_levels; L++) {
+		const uint32_t dst_res = (uint32_t)(vox_res >> (L + 1));
+		Vector<RD::Uniform> u;
+		for (int dir = 0; dir < 6; dir++) { // dst views 0..5
+			RD::Uniform ud;
+			ud.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+			ud.binding = dir;
+			ud.append_id(aniso_views[dir][L]);
+			u.push_back(ud);
+		}
+		{ // src grid (binding 6): only read when src_is_aniso == 0 (L == 0)
+			RD::Uniform us;
+			us.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+			us.binding = 6;
+			us.append_id(voxel_sampler);
+			us.append_id(voxel_tex);
+			u.push_back(us);
+		}
+		for (int dir = 0; dir < 6; dir++) { // src aniso 7..12 = previous level
+			RD::Uniform us;
+			us.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+			us.binding = 7 + dir;
+			us.append_id(voxel_sampler);
+			us.append_id(aniso_views[dir][L == 0 ? 0 : (L - 1)]);
+			u.push_back(us);
+		}
+		RID set = rd->uniform_set_create(u, shader_rid, 0);
+
+		RCMipAnisoPushConstant pc = {};
+		pc.dst_res = dst_res;
+		pc.src_is_aniso = (L == 0) ? 0u : 1u;
+		const uint32_t g = (dst_res + 3u) / 4u;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.voxel_mip_aniso_pipeline);
+		rd->compute_list_bind_uniform_set(l, set, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, g, g, g);
+		rd->compute_list_end();
+		rd->free_rid(set);
+	}
+}
+
+void RadianceCascade::dispatch_emission_mips() {
+	// Isotropic mean mip of the emission grid. Level L reads view[L-1], writes view[L].
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const RID shader_rid = sh.voxel_emission_mip.version_get_shader(sh.voxel_emission_mip_shader, 0);
+	for (int L = 1; L < vox_mip_levels; L++) {
+		const uint32_t dst_res = (uint32_t)(vox_res >> L);
+		Vector<RD::Uniform> u;
+		RD::Uniform us;
+		us.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		us.binding = 0;
+		us.append_id(voxel_sampler);
+		us.append_id(emission_mip_views[L - 1]);
+		u.push_back(us);
+		RD::Uniform ud;
+		ud.uniform_type = RD::UNIFORM_TYPE_IMAGE;
+		ud.binding = 1;
+		ud.append_id(emission_mip_views[L]);
+		u.push_back(ud);
+		RID set = rd->uniform_set_create(u, shader_rid, 0);
+
+		RCVoxelMipPushConstant pc = {};
+		pc.dst_res = dst_res;
+		const uint32_t g = (dst_res + 3u) / 4u;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.voxel_emission_mip_pipeline);
+		rd->compute_list_bind_uniform_set(l, set, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, g, g, g);
+		rd->compute_list_end();
+		rd->free_rid(set);
+	}
+}
 void RadianceCascade::dispatch_voxel_debug() {}
 void RadianceCascade::dispatch_dynamic_voxelize() {}
 void RadianceCascade::dispatch_dyn_occ_temporal() {}
 
 /* VOXEL SCENE / SDF */
 
-void RadianceCascade::bake_voxels() {}
-void RadianceCascade::build_sdf() {}
+void RadianceCascade::bake_voxels() {
+	// Light the freshly-unpacked grid for the trace: distance field first (inject needs
+	// it for sun visibility, and the trace uses it to skip empty space), then inject
+	// direct light into voxel radiance, then the aniso + emission mip chains the cone
+	// trace samples.
+	build_sdf();
+	dispatch_inject();
+	dispatch_voxel_mips();
+	dispatch_emission_mips();
+}
+
+void RadianceCascade::build_sdf() {
+	// One-shot jump flood of the half-res distance field: seed from occupancy (mode 0),
+	// flood with halving step sizes R/2..1 (mode 1, ping-pong), finalize (mode 2).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const int R = vox_res / 2;
+	const uint32_t g = (uint32_t)((R + 3) / 4);
+	auto run = [&](RID p_set, uint32_t p_mode, int p_step) {
+		RCSdfPushConstant pc = {};
+		pc.mode = p_mode;
+		pc.step = p_step;
+		pc.res = (uint32_t)R;
+		pc.phase[0] = vox_phase.x / 2;
+		pc.phase[1] = vox_phase.y / 2;
+		pc.phase[2] = vox_phase.z / 2;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.voxel_sdf_pipeline);
+		rd->compute_list_bind_uniform_set(l, p_set, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, g, g, g);
+		rd->compute_list_end();
+	};
+	run(sdf_set_write_a, 0u, 0);
+	bool seed_in_a = true;
+	for (int step = R / 2; step >= 1; step >>= 1) {
+		run(seed_in_a ? sdf_set_write_b : sdf_set_write_a, 1u, step);
+		seed_in_a = !seed_in_a;
+	}
+	run(seed_in_a ? sdf_set_write_b : sdf_set_write_a, 2u, 0);
+}

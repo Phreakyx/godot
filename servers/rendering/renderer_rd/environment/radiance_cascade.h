@@ -512,6 +512,7 @@ private:
 	void dispatch_patch_gather();
 	void dispatch_patch_lookup(uint32_t p_debug_kind);
 	void dispatch_voxel_unpack(); // packed render targets -> voxel_albedo/normal/emission + occupancy
+	void dispatch_inject(); // direct light from light_buffer -> voxel_tex radiance (whole grid)
 	void dispatch_voxel_mips();
 	void dispatch_emission_mips();
 	void dispatch_voxel_debug();
