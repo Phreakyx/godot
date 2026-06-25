@@ -509,6 +509,20 @@ void RadianceCascade::center_grid_on(const Vector3 &p_center) {
 	update_trace_params();
 }
 
+void RadianceCascade::request_recenter(const Vector3 &p_cam_origin) {
+	if (voxel_dirty) {
+		return; // a (re)bake is already queued -- the hook will re-centre this frame
+	}
+	// Keep at least recenter_margin_frac of the grid beyond the camera on every side: the
+	// dead-zone radius is (half-extent - margin). Past it the grid follows by re-baking.
+	const Vector3 center = vox_origin + vox_extent * 0.5f;
+	const float margin = vox_extent.x * recenter_margin_frac;
+	const float threshold = MAX(vox_extent.x * 0.5f - margin, 0.0f);
+	if (p_cam_origin.distance_to(center) > threshold) {
+		voxel_dirty = true;
+	}
+}
+
 void RadianceCascade::build_static_sets() {
 	// Wire each pass's static resources (set 0, plus trace set 2) into descriptor sets
 	// once. Per-frame inputs (depth/normal/color) live in set 1, rebuilt every frame.

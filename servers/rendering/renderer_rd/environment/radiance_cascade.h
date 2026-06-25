@@ -483,7 +483,11 @@ public:
 	// Geometry voxelization: the renderer rasterizes the scene into the render targets
 	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
 	bool needs_voxel_bake() const { return voxel_dirty; }
-	void center_grid_on(const Vector3 &p_center); // place the (static) grid around the camera
+	void center_grid_on(const Vector3 &p_center); // place the grid around the camera
+	// Flag a re-bake when the camera has roamed far enough from the grid centre that the
+	// trailing edge is closing in; the bake hook then re-centres + re-voxelizes the grid
+	// so it follows the player. A full re-bake (not yet toroidal slab streaming).
+	void request_recenter(const Vector3 &p_cam_origin);
 	void mark_voxel_baked() {
 		voxel_dirty = false;
 		voxel_unpack_pending = true;
