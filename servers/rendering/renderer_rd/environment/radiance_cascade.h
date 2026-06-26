@@ -718,7 +718,7 @@ private:
 	// ── Voxel clipmap (coarse levels) ──
 	bool clip_origins_inited = false;
 	bool level_dirty[MAX_CLIP] = { true, true, true, true, true };
-	int clip_levels = 5;
+	int clip_levels = 1; // TEMP: coarse cascades disabled for L0-only testing (revert to 5)
 	RID clip_grid[MAX_CLIP]; // [0] unused (level 0 = voxel_tex); [1..4] coarse
 	RID clip_voxelize_set[MAX_CLIP];
 	RID clip_inject_set[MAX_CLIP];
