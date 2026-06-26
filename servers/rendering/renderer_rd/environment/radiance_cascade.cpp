@@ -536,14 +536,16 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		for (const VoxelShell &s : pending_shells) {
 			dispatch_voxel_unpack(s.lo, s.dim);
 		}
-		// Amortized SDF flood (cheap; not the flash cause -- a one-shot consistent flood still
-		// flashed). inject runs after so sun visibility uses the current field.
-		if (!sdf_built_once) {
-			build_sdf();
-			sdf_built_once = true;
-		} else if (sdf_pass < 0) {
-			sdf_amortize_begin();
-		}
+		// Build the SDF SYNCHRONOUSLY this frame. The jump-flood distance math is phase-relative
+		// (rc3d_voxel_sdf.glsl rel(c) = (c - phase) % R), so seed/flood/finalize must all run under
+		// ONE toroidal phase. The grid now scrolls every frame (no dead-zone gate), so an amortized
+		// flood spread over ~5 frames would mix phases between its passes -> a fully-built GARBAGE
+		// field -> the cone trace over-skips -> whole-level white flash when each bad field finalizes
+		// (the ~5-frame cadence). A one-shot build under the current frame's fixed phase is always
+		// consistent. inject runs after so sun visibility uses the freshly-built field.
+		// (Perf follow-up: localized region flood of just the scrolled-in shell + a margin.)
+		build_sdf();
+		sdf_built_once = true;
 		for (const VoxelShell &s : pending_shells) {
 			dispatch_inject(s.lo, s.dim);
 		}
@@ -551,7 +553,6 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		dispatch_emission_mips();
 		pending_shells.clear();
 	}
-	sdf_amortize_step(); // advance the amortized flood (no-op when idle)
 
 	// Per-frame probe chain. A draw-command label groups it for GPU debuggers (RenderDoc/
 	// Nsight); the per-pass RENDER_TIMESTAMPs feed the engine's built-in visual profiler --
