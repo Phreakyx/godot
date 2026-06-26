@@ -477,6 +477,12 @@ private:
 	void _fill_instance_data(RenderListType p_render_list, int *p_render_info = nullptr, uint32_t p_offset = 0, int32_t p_max_elements = -1, bool p_update_buffer = true);
 	void _fill_render_list(RenderListType p_render_list, const RenderDataRD *p_render_data, PassMode p_pass_mode, bool p_using_sdfgi = false, bool p_using_opaque_gi = false, bool p_using_motion_pass = false, bool p_append = false);
 
+	// When active, _fill_render_list drops instances whose world AABB misses this box. Set only by
+	// the RC voxelize (per-shell bounds) so the per-scroll secondary list is the leading-edge
+	// geometry, not the whole visible scene; false (the default) for every other pass.
+	bool rc_voxelize_cull = false;
+	AABB rc_voxelize_cull_aabb;
+
 	HashMap<Size2i, RID> sdfgi_framebuffer_size_cache;
 
 	struct GeometryInstanceData;

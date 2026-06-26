@@ -954,6 +954,14 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 	for (int i = 0; i < (int)p_render_data->instances->size(); i++) {
 		GeometryInstanceForwardClustered *inst = static_cast<GeometryInstanceForwardClustered *>((*p_render_data->instances)[i]);
 
+		// RC voxelize: skip instances whose geometry can't reach this shell's region. The AABB
+		// test is conservative (the bound encloses the geometry), so anything kept might still miss
+		// but nothing that contributes is dropped -- the slab gets voxelized correctly from a far
+		// smaller list. Inactive (and zero-cost) for every other pass.
+		if (rc_voxelize_cull && !rc_voxelize_cull_aabb.intersects(inst->transformed_aabb)) {
+			continue;
+		}
+
 		Vector3 center = inst->transform.origin;
 		if (p_render_data->scene_data->cam_orthogonal) {
 			if (inst->use_aabb_center) {
@@ -3317,7 +3325,15 @@ void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_ren
 	global_pipeline_data_required.use_sdfgi = true;
 
 	PassMode pass_mode = PASS_MODE_SDF;
+	// Cull the secondary list to this region's bounds: the per-scroll shell is a thin slab, so
+	// only the leading-edge geometry is listed/rasterized instead of the whole visible scene
+	// (which the fill + 3 ortho passes would otherwise process in full every frame). The full
+	// first/teleport bake passes the whole-grid bounds, which still usefully drops instances
+	// outside the grid. Cleared right after the fill so no other pass sees it.
+	rc_voxelize_cull_aabb = p_bounds;
+	rc_voxelize_cull = true;
 	_fill_render_list(RENDER_LIST_SECONDARY, &render_data, pass_mode);
+	rc_voxelize_cull = false;
 	render_list[RENDER_LIST_SECONDARY].sort_by_key();
 	_fill_instance_data(RENDER_LIST_SECONDARY);
 
