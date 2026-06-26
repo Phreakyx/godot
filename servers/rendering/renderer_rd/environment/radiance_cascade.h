@@ -462,7 +462,7 @@ public:
 	// Back-pointer to the owning GI (holds the shared RadianceCascadeShaders).
 	GI *gi = nullptr;
 
-	virtual void configure(RenderSceneBuffersRD *p_render_buffers) override {}
+	virtual void configure(RenderSceneBuffersRD *p_render_buffers) override;
 	virtual void free_data() override;
 	~RadianceCascade();
 

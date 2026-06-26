@@ -32,7 +32,9 @@
 #include "servers/rendering/renderer_rd/environment/gi.h"
 #include "servers/rendering/renderer_rd/storage_rd/light_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
+#include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
+#include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 #include "servers/rendering/rendering_server_globals.h"
 #include "servers/rendering/storage/utilities.h"
 
@@ -142,8 +144,160 @@ void RadianceCascade::free_data() {
 	free_resources();
 }
 
+void RadianceCascade::configure(RenderSceneBuffersRD *p_render_buffers) {
+	// The render buffers call this whenever the viewport is (re)configured -- notably an
+	// editor resize. Our screen-sized resources (irradiance chain, debug target) and the
+	// cached screen_size the gather reconstructs world position from would otherwise stay
+	// at the old dimensions, skewing the GI. Re-create at the new internal size. Only valid
+	// once create() has run (gi set); the first-time allocation still comes through create().
+	if (gi == nullptr) {
+		return;
+	}
+	const Size2i new_size = p_render_buffers->get_internal_size();
+	if (new_size.x == 0 || new_size.y == 0) {
+		return;
+	}
+	free_resources();
+	create(gi, new_size);
+}
+
 void RadianceCascade::free_resources() {
-	// TODO(port): release every per-viewport RID allocated in create().
+	// Release every per-viewport RID create() allocated. Idempotent (guards + nulls), so it
+	// doubles as the resize path: the render buffers call free_data() then configure() when
+	// the viewport is reconfigured, and configure() re-runs create() at the new size. The
+	// frame_* RIDs are render-buffer-owned (never ours to free), and the five per-frame sets
+	// live in UniformSetCacheRD (it owns their lifetime) -- just drop our stale handles.
+	RenderingDevice *d = RD::get_singleton();
+	auto fr = [&](RID &r) {
+		if (r.is_valid()) {
+			d->free_rid(r);
+			r = RID();
+		}
+	};
+
+	// Uniform sets MUST be freed before the textures/buffers they reference: freeing a
+	// resource auto-frees every uniform set that bound it, so freeing the resource first
+	// would leave us double-freeing an already-reclaimed set ("free invalid ID"). So tear
+	// down in dependency order -- sets, then the shared views, then the resources.
+
+	// Static (set 0 / set 2) uniform sets.
+	fr(patch_add_set0);
+	fr(patch_clear_set0);
+	fr(patch_rebuild_set0);
+	fr(patch_lookup_set0);
+	fr(patch_indirect_set0);
+	fr(patch_trace_set0);
+	fr(patch_gather_set0);
+	fr(patch_merge_set0);
+	fr(patch_neighbours_set0);
+	fr(patch_reduce_set0);
+	fr(voxelize_set0);
+	fr(slab_clear_set);
+	fr(dyn_voxelize_set0);
+	fr(dyn_occ_temporal_set0);
+	fr(trace_voxel_set2);
+	fr(voxel_debug_set0);
+	fr(inject_set0);
+	fr(voxel_unpack_set0);
+	fr(sdf_set_write_a);
+	fr(sdf_set_write_b);
+	fr(atrous_set0_h2s);
+	fr(atrous_set0_s2h);
+	fr(upsample_set2);
+	fr(composite_set0);
+	fr(composite_set1);
+	for (int L = 0; L < MAX_CLIP; L++) {
+		fr(voxel_debug_clip_set[L]);
+		fr(clip_voxelize_set[L]);
+		fr(clip_inject_set[L]);
+		fr(clip_slab_clear_set[L]);
+	}
+
+	// Cache-owned per-frame sets: drop our handles, don't free (UniformSetCacheRD owns them).
+	patch_add_set1 = RID();
+	patch_lookup_set1 = RID();
+	atrous_set1 = RID();
+	upsample_set0 = RID();
+	upsample_set1 = RID();
+
+	// Shared texture slices, before their parent textures (voxel_aniso / voxel_emission).
+	for (int dir = 0; dir < 6; dir++) {
+		for (RID &v : aniso_views[dir]) {
+			fr(v);
+		}
+		aniso_views[dir].clear();
+	}
+	for (RID &v : emission_mip_views) {
+		fr(v);
+	}
+	emission_mip_views.clear();
+
+	// Camera / cascade table / probe store buffers.
+	fr(camera_ubo);
+	fr(cascade_buffer);
+	fr(patch_buckets);
+	fr(patch_alloc);
+	fr(patch_keys);
+	fr(patch_world);
+	fr(patch_live);
+	fr(patch_freelist);
+	fr(patch_alloc_state);
+	fr(probe_radiance);
+	fr(probe_rad_tag);
+	fr(probe_last_seen);
+	fr(patch_neighbours);
+	fr(patch_indirect_buffer);
+	fr(reduced_radiance);
+	fr(probe_inspect_buffer);
+
+	// Voxel grid + render targets + mips.
+	fr(voxel_tex);
+	fr(voxel_albedo);
+	fr(voxel_normal);
+	fr(voxel_emission);
+	fr(render_albedo);
+	fr(render_emission);
+	fr(render_emission_aniso);
+	fr(render_geom_facing);
+	for (int dir = 0; dir < 6; dir++) {
+		fr(voxel_aniso[dir]);
+	}
+	fr(dyn_occ);
+	fr(dyn_occ_acc);
+
+	// SDF + clip grids + buffers.
+	fr(sdf_tex);
+	fr(sdf_seed_a);
+	fr(sdf_seed_b);
+	for (int L = 0; L < MAX_CLIP; L++) {
+		fr(clip_grid[L]);
+	}
+	fr(clip_params_ubo);
+	fr(dummy_clip_tex);
+	fr(clip_albedo);
+	fr(clip_normal);
+	fr(clip_emission);
+	fr(trace_params_ubo);
+	fr(light_buffer);
+	fr(tri_buffer);
+	fr(dyn_tri_buffer);
+
+	// Screen-space irradiance chain + debug + dummies.
+	fr(irradiance_tex);
+	fr(irradiance_half);
+	fr(irradiance_half_b);
+	fr(debug_tex);
+	fr(dummy_color_tex);
+	fr(dummy_albedo_tex);
+
+	// Samplers.
+	fr(voxel_sampler);
+	fr(voxel_linear_sampler);
+	fr(point_sampler);
+	fr(depth_sampler);
+	fr(normal_sampler);
+	fr(color_sampler);
+	fr(albedo_sampler);
 }
 
 void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
@@ -151,6 +305,15 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	rd = RD::get_singleton();
 	screen_size = p_size;
 	half_size = Size2i((p_size.x + 1) / 2, (p_size.y + 1) / 2);
+
+	// Fresh allocation -> fresh (empty) grid + probe pool, so reset the transient state too.
+	// create() is reused as the resize path (configure() frees then re-creates), and the
+	// object persists across that, so these can't rely on member initializers.
+	voxel_dirty = true;
+	voxel_unpack_pending = false;
+	has_last_cam = false;
+	sdf_pass = -1;
+	clip_origins_inited = false;
 
 	// Toroidal phase: the grid cell the world-origin voxel maps to (the trace samples
 	// the grid as fract(W / vox_extent), so a cell holds world_voxel % res).
@@ -914,6 +1077,15 @@ void RadianceCascade::rebuild_per_frame_sets() {
 		return;
 	}
 
+	// These sets reference this frame's render-buffer textures (depth / normal / ambient),
+	// which the engine frees and recreates whenever the viewport is reconfigured (e.g. an
+	// editor resize). Freeing such a texture auto-frees the uniform sets that referenced it,
+	// so a manually-cached set RID goes stale and double-freeing it spams "free invalid ID"
+	// and leaves the dispatch reading garbage. Route them through UniformSetCacheRD instead:
+	// it keys by contents, registers an invalidation callback, and owns the lifetime -- we
+	// never free these ourselves, and a fresh valid set is returned whenever inputs change.
+	UniformSetCacheRD *usc = UniformSetCacheRD::get_singleton();
+
 	auto tex = [](int p_bind, RID p_sampler, RID p_tex) {
 		RD::Uniform u;
 		u.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
@@ -923,38 +1095,22 @@ void RadianceCascade::rebuild_per_frame_sets() {
 		return u;
 	};
 
-	{ // lookup set1: depth(0) + normal(1) -- also bound by gather
-		Vector<RD::Uniform> u;
-		u.push_back(tex(0, depth_sampler, frame_depth));
-		u.push_back(tex(1, normal_sampler, frame_normal));
-		if (patch_lookup_set1.is_valid()) {
-			rd->free_rid(patch_lookup_set1);
-		}
-		patch_lookup_set1 = rd->uniform_set_create(u, sh.patch_lookup.version_get_shader(sh.patch_lookup_shader, 0), 1);
-	}
+	// lookup set1: depth(0) + normal(1) -- also bound by gather
+	patch_lookup_set1 = usc->get_cache(sh.patch_lookup.version_get_shader(sh.patch_lookup_shader, 0), 1,
+			tex(0, depth_sampler, frame_depth), tex(1, normal_sampler, frame_normal));
 
-	{ // add set1: depth(0) only
-		Vector<RD::Uniform> u;
-		u.push_back(tex(0, depth_sampler, frame_depth));
-		if (patch_add_set1.is_valid()) {
-			rd->free_rid(patch_add_set1);
-		}
-		patch_add_set1 = rd->uniform_set_create(u, sh.patch_add.version_get_shader(sh.patch_add_shader, 0), 1);
-	}
+	// add set1: depth(0) only
+	patch_add_set1 = usc->get_cache(sh.patch_add.version_get_shader(sh.patch_add_shader, 0), 1,
+			tex(0, depth_sampler, frame_depth));
 
 	{ // upsample set0: half-res irradiance in (b0), RB_TEX_AMBIENT out (b1)
 		const RID out = frame_ambient.is_valid() ? frame_ambient : irradiance_tex;
-		Vector<RD::Uniform> u;
-		u.push_back(tex(0, point_sampler, irradiance_half));
 		RD::Uniform o;
 		o.uniform_type = RD::UNIFORM_TYPE_IMAGE;
 		o.binding = 1;
 		o.append_id(out);
-		u.push_back(o);
-		if (upsample_set0.is_valid()) {
-			rd->free_rid(upsample_set0);
-		}
-		upsample_set0 = rd->uniform_set_create(u, sh.irradiance_upsample.version_get_shader(sh.irradiance_upsample_shader, 0), 0);
+		upsample_set0 = usc->get_cache(sh.irradiance_upsample.version_get_shader(sh.irradiance_upsample_shader, 0), 0,
+				tex(0, point_sampler, irradiance_half), o);
 	}
 }
 
@@ -1210,24 +1366,18 @@ void RadianceCascade::dispatch_irradiance_atrous() {
 		return;
 	}
 	RadianceCascadeShaders &sh = *gi->rc_shader;
-	{ // per-frame set1: depth + normal (NEAREST)
-		Vector<RD::Uniform> u;
+	{ // per-frame set1: depth + normal (NEAREST). Cached -- see rebuild_per_frame_sets.
 		RD::Uniform ud;
 		ud.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
 		ud.binding = 0;
 		ud.append_id(point_sampler);
 		ud.append_id(frame_depth);
-		u.push_back(ud);
 		RD::Uniform un;
 		un.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
 		un.binding = 1;
 		un.append_id(point_sampler);
 		un.append_id(frame_normal);
-		u.push_back(un);
-		if (atrous_set1.is_valid()) {
-			rd->free_rid(atrous_set1);
-		}
-		atrous_set1 = rd->uniform_set_create(u, sh.irradiance_atrous.version_get_shader(sh.irradiance_atrous_shader, 0), 1);
+		atrous_set1 = UniformSetCacheRD::get_singleton()->get_cache(sh.irradiance_atrous.version_get_shader(sh.irradiance_atrous_shader, 0), 1, ud, un);
 	}
 
 	RCAtrousPushConstant pc = {};
@@ -1256,24 +1406,18 @@ void RadianceCascade::dispatch_irradiance_upsample() {
 	// Bilateral upsample of the half-res irradiance to full-res, depth/normal weighted;
 	// strong edges additionally do a direct full-res cascade-0 gather (set 2).
 	RadianceCascadeShaders &sh = *gi->rc_shader;
-	{ // per-frame set1: depth + normal
-		Vector<RD::Uniform> u;
+	{ // per-frame set1: depth + normal. Cached -- see rebuild_per_frame_sets.
 		RD::Uniform ud;
 		ud.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
 		ud.binding = 0;
 		ud.append_id(point_sampler);
 		ud.append_id(frame_depth);
-		u.push_back(ud);
 		RD::Uniform un;
 		un.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
 		un.binding = 1;
 		un.append_id(point_sampler);
 		un.append_id(frame_normal);
-		u.push_back(un);
-		if (upsample_set1.is_valid()) {
-			rd->free_rid(upsample_set1);
-		}
-		upsample_set1 = rd->uniform_set_create(u, sh.irradiance_upsample.version_get_shader(sh.irradiance_upsample_shader, 0), 1);
+		upsample_set1 = UniformSetCacheRD::get_singleton()->get_cache(sh.irradiance_upsample.version_get_shader(sh.irradiance_upsample_shader, 0), 1, ud, un);
 	}
 
 	RCUpsamplePushConstant pc = {};
