@@ -959,7 +959,8 @@ void RadianceCascade::build_static_sets() {
 		patch_clear_set0 = rd->uniform_set_create(u, RC_SHADER(patch_clear), 0);
 	}
 
-	{ // patch add (+ camera at b5, cascade table at b7)
+	{ // patch add (+ camera at b5, cascade table at b7). ADD appends only its NEW allocs to the live list;
+		// REBUILD appends carried-over probes + owns eviction.
 		Vector<RD::Uniform> u;
 		u.push_back(ssbo(0, patch_buckets));
 		u.push_back(ssbo(1, patch_alloc));
@@ -975,12 +976,16 @@ void RadianceCascade::build_static_sets() {
 		patch_add_set0 = rd->uniform_set_create(u, RC_SHADER(patch_add), 0);
 	}
 
-	{ // patch rebuild (dense pool -> repopulate hashmap + evict aged ids)
+	{ // patch rebuild (dense pool -> repopulate hashmap + append live list + spatial evict)
 		Vector<RD::Uniform> u;
 		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(1, patch_alloc)); // live counter (append target)
 		u.push_back(ssbo(2, patch_keys));
+		u.push_back(ssbo(3, patch_world)); // probe centers (spatial eviction test)
+		u.push_back(ssbo(4, patch_live)); // live list (now built here)
 		u.push_back(ssbo(7, cascade_buffer));
 		u.push_back(ssbo(8, probe_last_seen));
+		u.push_back(ssbo(9, probe_rad_tag)); // bootstrap detect
 		u.push_back(ssbo(11, patch_freelist));
 		u.push_back(ssbo(12, patch_alloc_state));
 		patch_rebuild_set0 = rd->uniform_set_create(u, RC_SHADER(patch_rebuild), 0);
@@ -1428,8 +1433,10 @@ void RadianceCascade::dispatch_patch_clear() {
 }
 
 void RadianceCascade::dispatch_patch_rebuild() {
-	// Repopulate the cleared hashmap from the persistent dense pool (one thread per
-	// dense id per cascade); aged-out ids are freed to the free-list.
+	// Repopulate the cleared hashmap from the persistent dense pool (one thread per dense id per
+	// cascade) AND append every alive in-window probe to the live list (so the trace updates it this
+	// frame regardless of camera facing — view-independent). Probes whose center scrolled OUT of the
+	// grid window are evicted to the free-list (spatial eviction; in-range probes are immortal).
 	RadianceCascadeShaders &sh = *gi->rc_shader;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.patch_rebuild_pipeline);
@@ -1437,8 +1444,13 @@ void RadianceCascade::dispatch_patch_rebuild() {
 	for (uint32_t c = 0; c < MAX_CASCADES; c++) {
 		RCPatchRebuildPushConstant pc = {};
 		pc.frame = frame_index;
-		pc.evict_age = evict_age;
 		pc.cascade = c;
+		pc.win_min[0] = vox_origin.x;
+		pc.win_min[1] = vox_origin.y;
+		pc.win_min[2] = vox_origin.z;
+		pc.win_max[0] = vox_origin.x + vox_extent.x;
+		pc.win_max[1] = vox_origin.y + vox_extent.y;
+		pc.win_max[2] = vox_origin.z + vox_extent.z;
 		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
 		rd->compute_list_dispatch(l, (cascades[c].probe_cap + 63u) / 64u, 1, 1);
 	}

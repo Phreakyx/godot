@@ -113,12 +113,15 @@ struct RCPatchClearPushConstant {
 	uint32_t pad[2];
 };
 
-// rc_patch_rebuild.glsl — per dense id: evict aged ids (free-list push) else re-insert (key->id).
+// rc_patch_rebuild.glsl — per dense id: evict OUT-OF-WINDOW ids (free-list push) else re-insert
+// (key->id) + append to the live list. win_min/win_max = grid window (world) for spatial eviction.
 struct RCPatchRebuildPushConstant {
 	uint32_t frame;
-	uint32_t evict_age;
 	uint32_t cascade;
-	uint32_t pad;
+	uint32_t pad0;
+	uint32_t pad1;
+	float win_min[4]; // xyz = vox_origin
+	float win_max[4]; // xyz = vox_origin + vox_extent
 };
 
 // rc_patch_add.glsl — find-or-allocate probes for a screen-pixel grid over cascades [begin,end).

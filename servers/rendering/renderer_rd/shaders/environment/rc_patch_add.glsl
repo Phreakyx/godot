@@ -23,7 +23,7 @@ layout(set = 0, binding = 0, std430) coherent buffer Buckets {
 };
 layout(set = 0, binding = 1, std430) coherent buffer Alloc {
 	uint alloc_count[];
-};
+}; // per-cascade live counter (bumped only when we append a NEW alloc)
 layout(set = 0, binding = 2, std430) coherent buffer ProbeKeys {
 	ivec4 probe_keys[];
 };
@@ -36,6 +36,10 @@ layout(set = 0, binding = 4, std430) writeonly buffer LiveList {
 layout(set = 0, binding = 8, std430) coherent buffer RadTag {
 	uint rad_tag[];
 }; // per dense id owner hash
+// LIVE-LIST OWNERSHIP (Build 1a): REBUILD appends every alive CARRIED-OVER probe (alive at rebuild time);
+// ADD appends only the probes it NEWLY allocates THIS frame (they don't exist at rebuild time → no
+// overlap, no double-count). So a new probe still traces the SAME frame it's seeded (no 1-frame stale
+// read at disocclusion edges), and every in-window probe traces regardless of camera facing.
 layout(set = 0, binding = 10, std430) coherent buffer LastSeen {
 	uint last_seen[];
 }; // per dense id (0 = free)
@@ -115,20 +119,15 @@ uint alloc_id(uint c, CascadeDesc cd) {
 	return (b < cd.probe_cap) ? (cd.probe_off + b) : INVALID;
 }
 
-// Stamp the dense id as seen this frame and, for the FIRST toucher only, append it to the live list with
-// the bootstrap bit. Fast-path plain read avoids the per-pixel atomic on coarse cells (thousands of
-// pixels per cell). rad_tag mismatch (a freed/reused id) bootstraps all dirs → no stale radiance.
-void mark_seen(uint c, CascadeDesc cd, uint gid, uint h) {
-	if (last_seen[gid] == pc.frame) {
-		return;
-	}
-	if (atomicExchange(last_seen[gid], pc.frame) == pc.frame) {
-		return;
-	}
-	uint boot = (rad_tag[gid] != h) ? 0x80000000u : 0u;
+// Seed a NEWLY ALLOCATED probe: mark it alive, set its owner hash, and append it to the live list with
+// the bootstrap bit so it traces THIS frame (its radiance slot holds a prior owner's value / nothing →
+// the first trace must overwrite, not blend). Called once per new cell, by the CAS-winning thread only,
+// so there's no per-pixel atomic storm. Carried-over probes are appended by REBUILD, not here.
+void seed_new(uint c, CascadeDesc cd, uint gid, uint h) {
+	last_seen[gid] = pc.frame;
 	rad_tag[gid] = h;
-	uint live_i = atomicAdd(alloc_count[c], 1u);
-	live_list[cd.probe_off + live_i] = (gid - cd.probe_off) | boot; // id_local + bootstrap bit
+	uint li = atomicAdd(alloc_count[c], 1u);
+	live_list[cd.probe_off + li] = (gid - cd.probe_off) | 0x80000000u; // id_local + bootstrap bit
 }
 
 void touch_cell(uint c, ivec3 cell, vec3 center) {
@@ -154,7 +153,7 @@ void touch_cell(uint c, ivec3 cell, vec3 center) {
 				probe_world[gid] = vec4(center, float(c));
 				memoryBarrierBuffer(); // key/world visible before .y is published
 				buckets[slot].y = gid;
-				mark_seen(c, cd, gid, h);
+				seed_new(c, cd, gid, h); // NEW probe → append + bootstrap (traces this frame)
 				return;
 			}
 			if (prev != h) {
@@ -168,8 +167,7 @@ void touch_cell(uint c, ivec3 cell, vec3 center) {
 				return; // sibling mid-insert; it seeds the cell → give up
 			}
 			if (probe_keys[gid] == key) {
-				mark_seen(c, cd, gid, h);
-				return;
+				return; // carried-over probe: already alive + appended to the live list by REBUILD
 			}
 			// same hash, different key (rare full-32-bit collision) → keep probing
 		}
