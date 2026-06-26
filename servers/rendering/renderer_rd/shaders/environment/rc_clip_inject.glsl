@@ -19,6 +19,22 @@ layout(set = 0, binding = 3, rgba16f) uniform readonly image3D emission_in;
 layout(set = 0, binding = 4, std430) readonly buffer Lights {
 	RCLight lights[];
 };
+// Level 0's lit radiance grid (mipped). Where a coarse cell overlaps L0 we take L0's already-
+// correct radiance (downsampled to this level's mip) instead of re-lighting coarsely -- L0
+// resolves the fine canopy gaps this level can't, so this keeps the L0->coarse handoff seamless.
+layout(set = 0, binding = 5) uniform sampler3D l0_radiance;
+struct LevelDesc {
+	vec3 origin;
+	float voxel_size;
+	vec3 extent;
+	float pad;
+};
+layout(set = 0, binding = 6, std140) uniform Clip {
+	LevelDesc lvl[5]; // [0] = level 0 (origin/extent of the fine grid)
+	uint num_levels;
+	uint _cp0, _cp1, _cp2;
+}
+clip;
 
 layout(push_constant) uniform PC {
 	vec3 sun_dir;
@@ -30,7 +46,7 @@ layout(push_constant) uniform PC {
 	ivec3 slab_dim;
 	uint light_count; // was _p2
 	ivec3 phase;
-	uint _p3;
+	uint level; // this coarse level (1..4); L0 overlap downsamples l0_radiance at mip = level
 }
 pc;
 
@@ -109,6 +125,18 @@ void main() {
 	float R = float(pc.res);
 	vec3 rstart = vec3(rel(cell)) + 0.5;
 	vec3 W = (vec3(wv) + 0.5) * pc.voxel_size;
+
+	// L0 overlap: where this coarse cell sits inside the fine grid, take L0's already-lit radiance
+	// (downsampled to this level via mip = level) instead of re-lighting coarsely. L0 resolved the
+	// fine canopy gaps this level can't, so the coarse level MATCHES it exactly here -> the L0->coarse
+	// handoff is seamless. Only the ring BEYOND L0 falls through to the coarse sun/sky inject below.
+	vec3 g0 = (W - clip.lvl[0].origin) / clip.lvl[0].extent;
+	if (all(greaterThanEqual(g0, vec3(0.0))) && all(lessThan(g0, vec3(1.0)))) {
+		vec3 l0 = textureLod(l0_radiance, fract(W / clip.lvl[0].extent.x), float(pc.level)).rgb;
+		rad.rgb = mix(rad.rgb, l0, pc.blend_alpha);
+		imageStore(radiance, cell, rad);
+		return;
+	}
 
 	// Sky ambient: coarse voxels are far/big, so a sun-only coarse inject reads black wherever the
 	// sun is occluded. Bake a flat skylight term (alb * sky) so distant shaded surfaces read as lit

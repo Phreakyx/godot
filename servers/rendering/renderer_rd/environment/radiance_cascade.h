@@ -273,14 +273,14 @@ struct RCInjectSlabPushConstant {
 struct RCClipInjectSlabPushConstant {
 	float sun_dir[3];
 	float blend_alpha;
-	float sun_color[3];
+	float sun_color[3]; // = sky ambient
 	float voxel_size;
 	int32_t slab_lo[3];
 	uint32_t res;
 	int32_t slab_dim[3];
 	uint32_t light_count;
 	int32_t phase[3];
-	uint32_t pad;
+	uint32_t level; // this coarse level (1..4); L0 overlap downsamples l0_radiance at mip = level
 };
 
 // rc3d_voxel_sdf.glsl — jump-flood distance field (mode = init/flood/finalize, step = jump size).

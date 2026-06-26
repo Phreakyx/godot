@@ -883,6 +883,7 @@ void RadianceCascade::dispatch_clip_inject(int p_level, const Vector3i &p_lo, co
 	pc.phase[0] = clip_phase[p_level].x;
 	pc.phase[1] = clip_phase[p_level].y;
 	pc.phase[2] = clip_phase[p_level].z;
+	pc.level = (uint32_t)p_level;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.clip_inject_pipeline);
 	rd->compute_list_bind_uniform_set(l, clip_inject_set[p_level], 0);
@@ -1168,6 +1169,8 @@ void RadianceCascade::build_static_sets() {
 			u.push_back(img(2, clip_normal));
 			u.push_back(img(3, clip_emission));
 			u.push_back(ssbo(4, light_buffer));
+			u.push_back(tex(5, voxel_linear_sampler, voxel_tex)); // L0 lit radiance (mipped) for the overlap downsample
+			u.push_back(ubo(6, clip_params_ubo)); // per-level origin/extent table (reads lvl[0] = L0)
 			clip_inject_set[L] = rd->uniform_set_create(u, RC_SHADER(clip_inject), 0);
 		}
 		{
