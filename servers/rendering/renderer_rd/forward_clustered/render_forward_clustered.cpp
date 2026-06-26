@@ -1647,8 +1647,19 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		} else {
 			uint32_t usage = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
 			rc_ambient = rb->create_texture(RB_SCOPE_GI, RB_TEX_AMBIENT, RD::DATA_FORMAT_R16G16B16A16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, rb->get_internal_size());
+			// Create the matching reflection target as well. RC doesn't write it yet, but the
+			// engine's GI-buffer set always binds ambient+reflection as a pair, and gi.process_gi
+			// only creates the pair when ambient is absent. If RC leaves a lone ambient behind,
+			// switching to SDFGI/VoxelGI finds ambient present, skips creating reflection, then
+			// binds a missing reflection -> broken GI. Keep them a complete, interchangeable pair.
+			rb->create_texture(RB_SCOPE_GI, RB_TEX_REFLECTION, RD::DATA_FORMAT_R16G16B16A16_SFLOAT, usage, RD::TEXTURE_SAMPLES_1, rb->get_internal_size());
 		}
 		rc->process(p_render_data, rb->get_depth_texture(), rc_normal, rb->get_internal_texture(), rc_ambient);
+	} else if (rb.is_valid() && rb->has_custom_data(RB_SCOPE_RC)) {
+		// RC was turned off (e.g. switched to another GI mode): drop its per-viewport data so it
+		// stops reallocating on every reconfigure and releases its GPU resources (the destructor
+		// runs free_resources()). The shared RB_TEX_AMBIENT/REFLECTION stay for the active mode.
+		rb->set_custom_data(RB_SCOPE_RC, Ref<RendererRD::RadianceCascade>());
 	}
 
 	if (render_shadows) {
