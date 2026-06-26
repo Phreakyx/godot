@@ -98,29 +98,26 @@ void main() {
 	float R = float(pc.res);
 	vec3 rstart = vec3(rel(cell)) + 0.5;
 	vec3 W = (vec3(wv) + 0.5) * pc.voxel_size;
-	bool is_roofed = roofed(rstart);
 
-	// Sky ambient: coarse voxels are far/big and can't resolve the small canopy gaps that let sun
-	// through, so a sun-only coarse inject self-shadows to black under any cover. Bake a flat
-	// skylight term (alb * sky) so distant shaded surfaces read as lit ambient instead of pure
-	// black -- this is the long-range fill the coarse levels are FOR. (pc.sun_color carries the sky
-	// colour now; the directional sun comes from the light buffer below.)
+	// Sky ambient: coarse voxels are far/big, so a sun-only coarse inject reads black wherever the
+	// sun is occluded. Bake a flat skylight term (alb * sky) so distant shaded surfaces read as lit
+	// ambient instead of pure black -- the long-range fill the coarse levels are FOR. (pc.sun_color
+	// carries the sky colour now; the directional sun comes from the light buffer below.)
 	vec3 Lo = em + alb * pc.sun_color;
 
-	// Light every buffer light the same way level 0 does (rc_eval_light = alb.color.ndl/pi), so the
-	// coarse sun matches L0 exactly -- the directional comes from the light buffer, NOT a separate
-	// push-constant sun (which is why coarse used to stay dark). Visibility is the coarse-occupancy
-	// march (no SDF up here); a roofed coarse voxel can't see the SUN even if the under-resolved
-	// march would miss the thin roof, so gate the directional on roofed() (level 0 keeps sharp
-	// shadows). Positional lights just march.
+	// Light every buffer light like level 0 does (rc_eval_light = alb.color.ndl/pi), so the coarse
+	// sun matches L0 -- the directional comes from the light buffer, not a separate push constant.
+	// Visibility is the coarse-occupancy march TOWARD EACH LIGHT (no SDF up here). This marches the
+	// actual sun direction, so it shadows under solid roof but passes through the canopy gaps that
+	// align with the (angled) sun -- the warm dappled sun the finer coarse levels can resolve. (We
+	// don't use a straight-up roofed() test: that over-shadows an angled sun, blocking the gaps.)
 	for (uint i = 0u; i < pc.light_count; ++i) {
 		vec3 Ldir, radiance;
 		float reach;
 		if (!rc_eval_light(lights[i], W, N, alb, pc.voxel_size, R, Ldir, radiance, reach)) {
 			continue;
 		}
-		float vis = (lights[i].type < 0.5 && is_roofed) ? 0.0 : clip_vis(rstart, Ldir, reach);
-		Lo += radiance * vis;
+		Lo += radiance * clip_vis(rstart, Ldir, reach);
 	}
 	rad.rgb = mix(rad.rgb, Lo, pc.blend_alpha);
 	imageStore(radiance, cell, rad);
