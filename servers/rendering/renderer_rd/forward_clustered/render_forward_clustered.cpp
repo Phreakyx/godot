@@ -1609,8 +1609,11 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 	}
 
 	// Radiance Cascades GI runs as an alternative indirect-light source, writing the
-	// same screen-space ambient target the forward pass folds in with material albedo.
-	if (rb.is_valid() && p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment)) {
+	// same screen-space ambient target the forward pass folds in with material albedo. Main view
+	// only: scroll_to + the streaming voxelize run at the hoisted hook, which skips reflection
+	// probes, so this hook must skip them too (its full-bake voxelize + process() rely on the
+	// shell state scroll_to produces).
+	if (rb.is_valid() && p_render_data->reflection_probe.is_null() && p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment)) {
 		Ref<RendererRD::RadianceCascade> rc;
 		if (rb->has_custom_data(RB_SCOPE_RC)) {
 			rc = rb->get_custom_data(RB_SCOPE_RC);
@@ -1621,13 +1624,14 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		rc->set_gi_intensity(environment_get_rc_energy(p_render_data->environment));
 		rc->set_trace_amortization(environment_get_rc_amortization(p_render_data->environment));
 		rc->set_debug_view(environment_get_rc_debug(p_render_data->environment));
-		// Toroidal streaming: snap the grid to follow the camera in whole-voxel steps and get
-		// the thin shell(s) that scrolled into view this frame (the whole grid on the first
-		// frame / teleport). Rasterize each shell region into RC's voxel render targets;
-		// process() then unpacks + injects just those cells. Only the first region clears the
-		// targets (shells are disjoint in grid space).
-		if (p_render_data->instances != nullptr) {
-			rc->scroll_to(p_render_data->scene_data->cam_transform.origin);
+		// Toroidal streaming: scroll_to already ran at the hoisted pre-opaque hook (in
+		// _render_scene) and recorded the shell(s) that scrolled in. The thin per-scroll shells
+		// were rasterized there; only the full first-frame/teleport bake is voxelized HERE, at the
+		// post-opaque hook -- a single full-grid submission hangs at the hoisted hook but is safe
+		// here, and its 1-frame opaque glitch is acceptable on a rare bake (invisible on frame 1).
+		// process() below then unpacks + injects whichever shells were recorded. Only the first
+		// region clears the targets (shells are disjoint in grid space).
+		if (p_render_data->instances != nullptr && rc->is_voxel_bake_full()) {
 			const int shell_count = rc->voxel_shell_count();
 			for (int s = 0; s < shell_count; s++) {
 				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
@@ -1790,6 +1794,31 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	// sdfgi first
 	_update_sdfgi(p_render_data);
+
+	// Radiance Cascades streaming voxelize. Snap the grid to follow the camera and rasterize the
+	// thin shell(s) that scrolled into view THIS hook -- before the opaque list is filled, the
+	// SDFGI-correct ordering where a bounded voxelize doesn't clobber the opaque pass. Only the
+	// thin per-scroll shells run here; the full first-frame/teleport bake is deferred to the
+	// post-opaque hook in _pre_opaque_render (a single full-grid submission hangs here, but is
+	// safe there). process() also stays post-opaque -- it needs the depth/normal prepass. The
+	// scroll_to call must run here regardless so the full-bake flag + pending shells are ready
+	// for the post-opaque hook to consume.
+	if (!is_reflection_probe && rb.is_valid() && p_render_data->environment.is_valid() && environment_get_rc_enabled(p_render_data->environment) && p_render_data->instances != nullptr) {
+		Ref<RendererRD::RadianceCascade> rc;
+		if (rb->has_custom_data(RB_SCOPE_RC)) {
+			rc = rb->get_custom_data(RB_SCOPE_RC);
+		} else {
+			rc = gi.create_rc(rb->get_internal_size());
+			rb->set_custom_data(RB_SCOPE_RC, rc);
+		}
+		rc->scroll_to(p_render_data->scene_data->cam_transform.origin);
+		if (!rc->is_voxel_bake_full()) {
+			const int shell_count = rc->voxel_shell_count();
+			for (int s = 0; s < shell_count; s++) {
+				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+			}
+		}
+	}
 
 	// assign render indices to voxel_gi_instances
 	for (uint32_t i = 0; i < (uint32_t)p_render_data->voxel_gi_instances->size(); i++) {

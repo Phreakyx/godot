@@ -498,6 +498,10 @@ public:
 	// cells -- so movement cost is a thin shell, not a full re-bake. See [[rc-movement-streaming]].
 	void scroll_to(const Vector3 &p_cam_origin);
 	int voxel_shell_count() const { return (int)pending_shells.size(); }
+	// True when this frame's bake is the whole grid (first frame / teleport). The renderer
+	// voxelizes a full bake at the safe post-opaque hook (it hangs as one giant submission if
+	// hoisted), but streams the thin per-scroll shells from the hoisted pre-opaque hook.
+	bool is_voxel_bake_full() const { return voxel_bake_full; }
 	AABB voxel_shell_bounds(int p_i) const; // world AABB of shell p_i (for the ortho cameras)
 	Vector3i voxel_shell_offset(int p_i) const { return pending_shells[p_i].lo; } // render-grid offset
 	Vector3i voxel_shell_size(int p_i) const { return pending_shells[p_i].dim; }
@@ -617,6 +621,7 @@ private:
 	Vector3 vox_extent = Vector3(64, 64, 64);
 	Vector3i vox_phase; // origin_voxel % res (toroidal addressing)
 	bool voxel_dirty = true; // force a full re-voxelize next scroll_to (first frame / teleport)
+	bool voxel_bake_full = false; // last scroll_to produced a full-grid bake (first frame / teleport)
 
 	// Shells that scrolled into view this frame: render-grid offset + size in voxels. The
 	// renderer voxelizes each, process() unpacks + injects each, then process() clears them.

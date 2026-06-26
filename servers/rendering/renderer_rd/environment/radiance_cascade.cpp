@@ -688,19 +688,13 @@ void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
 	// re-voxelizing. First frame / teleport / external dirty = the whole grid as one shell.
 	pending_shells.clear();
 
-	// Dead-zone gate. The voxelize is a full SDFGI-style rasterization of the scene; running it
-	// EVERY frame the grid scrolls a voxel is too entangled with the main render -- at its hook
-	// point it corrupts the opaque pass (a whole-screen flash while moving) and moving it earlier
-	// deadlocks the first full bake. So only re-voxelize once the camera has roamed a good way
-	// from where the grid last baked; the grid then catches up in a few large shells (rare, so
-	// the 1-frame opaque glitch is unnoticeable) instead of flashing every frame. TODO: a
-	// compute-based voxelizer (no main-render entanglement) would let this stream per frame again.
-	const Vector3 center = vox_origin + vox_extent * 0.5f;
-	const float dead_zone = vox_extent.x * 0.35f; // ~22 m for the default 64 m grid
-	if (!voxel_dirty && p_cam_origin.distance_to(center) < dead_zone) {
-		return;
-	}
-
+	// Continuous per-frame streaming: re-voxelize the thin band that scrolled into view every
+	// frame the grid moves a whole voxel. This used to be gated behind a dead-zone (only re-bake
+	// after roaming ~22 m) because the voxelize is an SDFGI-style main-pipeline rasterization that
+	// corrupted the opaque pass when run per frame. That's resolved by WHERE the renderer runs it:
+	// the thin per-scroll shells are rasterized at the hoisted pre-opaque hook (bounded submission,
+	// correct ordering -> no corruption, no hang), and only the rare full first-frame/teleport bake
+	// runs at the post-opaque hook. So the gate is gone and the grid follows the camera smoothly.
 	const float vsize = vox_extent.x / float(vox_res);
 	const int R = vox_res;
 
@@ -714,6 +708,7 @@ void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
 	const Vector3i delta = new_ovn - old_ovn;
 
 	const bool full = voxel_dirty || Math::abs(delta.x) >= R || Math::abs(delta.y) >= R || Math::abs(delta.z) >= R;
+	voxel_bake_full = full; // tells the renderer which hook to voxelize this frame's bake at
 
 	if (!full && delta == Vector3i()) {
 		return; // no whole-voxel movement this frame -> nothing to re-voxelize
