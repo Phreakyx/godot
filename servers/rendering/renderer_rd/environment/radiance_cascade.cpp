@@ -1897,6 +1897,10 @@ void RadianceCascade::dispatch_voxel_debug(int p_level) {
 	pc.vox_extent[1] = extent;
 	pc.vox_extent[2] = extent;
 	pc.occ_threshold = 0.3f;
+	// L0's rgb is emission only (relief carries the geometry); coarse rgb IS the baked sun+sky
+	// radiance, which is dim -- boost it and dim the relief so "is it lit / how much" reads clearly.
+	pc.radiance_gain = coarse ? 6.0f : 1.0f;
+	pc.relief_gain = coarse ? 0.12f : 1.0f;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.voxel_debug_pipeline);
 	rd->compute_list_bind_uniform_set(l, coarse ? voxel_debug_clip_set[p_level] : voxel_debug_set0, 0);

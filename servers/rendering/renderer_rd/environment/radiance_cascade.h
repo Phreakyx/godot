@@ -318,6 +318,10 @@ struct RCVoxelDebugPushConstant {
 	float voxel_size;
 	float vox_extent[3];
 	float occ_threshold;
+	float radiance_gain; // multiplies the grid rgb (radiance); high for coarse to surface its dim GI
+	float relief_gain; // multiplies the gray occupancy relief; low for coarse so the radiance shows
+	float pad0;
+	float pad1;
 };
 
 // rc_composite.glsl — final blend of GI over the lit scene color.

@@ -35,6 +35,9 @@ layout(push_constant) uniform PC {
 	float voxel_size;
 	vec3 vox_extent;
 	float occ_threshold;
+	float radiance_gain; // grid rgb multiplier (coarse: high, to surface dim baked GI)
+	float relief_gain; // gray occupancy-relief multiplier (coarse: low, so radiance dominates)
+	float pad0, pad1;
 }
 pc;
 
@@ -75,7 +78,9 @@ void main() {
 			vec3 emis = textureLod(emission_tex, fract(p / pc.vox_extent), 0.0).rgb;
 			float ndl = max(dot(n, normalize(vec3(0.5, 0.8, 0.3))), 0.0);
 			vec3 shade = vec3(0.18 + 0.6 * ndl); // gray relief
-			imageStore(debug_out, px, vec4(shade + emis, 1.0));
+			// relief shows geometry; radiance (rgb) shows the baked GI. Coarse passes a low relief
+			// gain + high radiance gain so its dim sky/sun radiance isn't swamped by the gray.
+			imageStore(debug_out, px, vec4(shade * pc.relief_gain + emis * pc.radiance_gain, 1.0));
 			return;
 		}
 		t += pc.voxel_size; // mip-0 step
