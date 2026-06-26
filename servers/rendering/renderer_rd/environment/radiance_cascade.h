@@ -568,7 +568,7 @@ private:
 	void dispatch_clip_inject(int p_level, const Vector3i &p_lo, const Vector3i &p_dim); // sun/lights -> clip_grid[L] radiance (region)
 	void dispatch_voxel_mips();
 	void dispatch_emission_mips();
-	void dispatch_voxel_debug();
+	void dispatch_voxel_debug(int p_level = 0); // 0 = L0 voxel grid; 1..4 = coarse clip level
 	void dispatch_dynamic_voxelize();
 	void dispatch_dyn_occ_temporal();
 	void dispatch_irradiance_atrous();

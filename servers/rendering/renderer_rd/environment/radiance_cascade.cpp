@@ -1850,7 +1850,7 @@ void RadianceCascade::dispatch_debug() {
 	// 3=Probe Radiance.
 	switch (debug_view) {
 		case 1:
-			dispatch_voxel_debug();
+			dispatch_voxel_debug(0);
 			break;
 		case 2:
 			dispatch_patch_lookup(0);
@@ -1858,33 +1858,46 @@ void RadianceCascade::dispatch_debug() {
 		case 3:
 			dispatch_patch_lookup(1);
 			break;
+		case 4:
+		case 5:
+		case 6:
+		case 7:
+			dispatch_voxel_debug(debug_view - 3); // Clip L1..L4
+			break;
 		default:
 			break;
 	}
 }
 
-void RadianceCascade::dispatch_voxel_debug() {
-	// Debug visualization: march a primary ray per pixel through the level-0 voxel grid
-	// and shade the first solid voxel (gradient normal + captured emission) into debug_tex,
-	// so we can confirm the geometry voxelized at the right scale/position. Level-0 only
-	// for now (coarse clip levels are not voxelized yet).
+void RadianceCascade::dispatch_voxel_debug(int p_level) {
+	// Debug visualization: march a primary ray per pixel through a voxel grid and shade the
+	// first solid voxel (gradient normal relief + the grid's stored rgb) into debug_tex. p_level
+	// 0 = the L0 grid (rgb = emission; lit radiance lives elsewhere). p_level 1..4 = a coarse clip
+	// level, whose rgb IS the baked sun+bounce radiance -- so a coarse level reads as GRAY relief
+	// if voxelized-but-dark, COLOURED if lit, BLACK if not voxelized. The level's own origin/extent/
+	// voxel_size drive the march so it samples the right toroidal cells.
 	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const bool coarse = p_level >= 1 && p_level < clip_levels && clip_grid[p_level].is_valid();
+	const float base = vox_extent.x / float(vox_res);
+	const float vsize = coarse ? base * float(1 << p_level) : base;
+	const float extent = vsize * float(vox_res);
+	const Vector3 origin = coarse ? clip_origin[p_level] : vox_origin;
 	RCVoxelDebugPushConstant pc = {};
 	pc.sw = (uint32_t)screen_size.x;
 	pc.sh = (uint32_t)screen_size.y;
 	pc.res = (uint32_t)vox_res;
 	pc.max_steps = 512;
-	pc.vox_origin[0] = vox_origin.x;
-	pc.vox_origin[1] = vox_origin.y;
-	pc.vox_origin[2] = vox_origin.z;
-	pc.voxel_size = vox_extent.x / float(vox_res);
-	pc.vox_extent[0] = vox_extent.x;
-	pc.vox_extent[1] = vox_extent.y;
-	pc.vox_extent[2] = vox_extent.z;
+	pc.vox_origin[0] = origin.x;
+	pc.vox_origin[1] = origin.y;
+	pc.vox_origin[2] = origin.z;
+	pc.voxel_size = vsize;
+	pc.vox_extent[0] = extent;
+	pc.vox_extent[1] = extent;
+	pc.vox_extent[2] = extent;
 	pc.occ_threshold = 0.3f;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.voxel_debug_pipeline);
-	rd->compute_list_bind_uniform_set(l, voxel_debug_set0, 0);
+	rd->compute_list_bind_uniform_set(l, coarse ? voxel_debug_clip_set[p_level] : voxel_debug_set0, 0);
 	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
 	rd->compute_list_dispatch(l, ((uint32_t)screen_size.x + 7u) / 8u, ((uint32_t)screen_size.y + 7u) / 8u, 1);
 	rd->compute_list_end();

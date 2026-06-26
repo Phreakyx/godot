@@ -1442,7 +1442,7 @@ void Environment::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "rc_enabled", PROPERTY_HINT_GROUP_ENABLE), "set_rc_enabled", "is_rc_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rc_energy", PROPERTY_HINT_RANGE, "0,16,0.01,or_greater"), "set_rc_energy", "get_rc_energy");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "rc_amortization", PROPERTY_HINT_RANGE, "1,64,1"), "set_rc_amortization", "get_rc_amortization");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "rc_debug", PROPERTY_HINT_ENUM, "Off,Voxel Grid,Probe Occupancy,Probe Radiance"), "set_rc_debug", "get_rc_debug");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "rc_debug", PROPERTY_HINT_ENUM, "Off,Voxel Grid,Probe Occupancy,Probe Radiance,Clip L1,Clip L2,Clip L3,Clip L4"), "set_rc_debug", "get_rc_debug");
 
 	// SDFGI
 
