@@ -510,6 +510,21 @@ void RadianceCascade::center_grid_on(const Vector3 &p_center) {
 }
 
 void RadianceCascade::request_recenter(const Vector3 &p_cam_origin) {
+	// Re-bake on a big single-frame camera jump even if the grid isn't already dirty. The
+	// first rendered frame after a launch/scene-load often has a default camera (near the
+	// origin) before the gameplay camera is positioned; the frame-1 bake then centres the
+	// grid on that wrong spot, and if the real camera lands inside the dead-zone below it
+	// never corrects. A jump much larger than per-frame motion (teleport, spawn, scene swap)
+	// forces a fresh bake at the new location. Skipped on the very first call (no previous).
+	if (has_last_cam) {
+		const float jump = p_cam_origin.distance_to(last_cam_origin);
+		if (jump > vox_extent.x * 0.125f) { // ~8 m at the default 64 m grid; well above normal motion
+			voxel_dirty = true;
+		}
+	}
+	last_cam_origin = p_cam_origin;
+	has_last_cam = true;
+
 	if (voxel_dirty) {
 		return; // a (re)bake is already queued -- the hook will re-centre this frame
 	}

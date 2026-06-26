@@ -1631,8 +1631,10 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 			rc->mark_voxel_baked();
 		}
 
-		// TODO: force normal-roughness allocation when rc_enabled so this is the real
-		// buffer; for now fall back to a flat default when no other consumer produced it.
+		// rc_enabled forces the normal-roughness depth prepass (see depth_pass_mode below), so
+		// this is the real per-pixel view-space normal buffer the gather needs. The default is a
+		// flat camera-facing normal that, converted to world per frame, rotates with the camera
+		// and makes the GI swing with view direction -- only used as a null safety net.
 		RID rc_normal = (p_normal_roughness_slices != nullptr) ? p_normal_roughness_slices[0] : RID();
 		if (rc_normal.is_null()) {
 			rc_normal = RendererRD::TextureStorage::get_singleton()->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_NORMAL);
@@ -1973,6 +1975,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		} else if (p_render_data->environment.is_valid()) {
 			if (using_ssr ||
 					using_sdfgi ||
+					using_rc ||
 					environment_get_ssao_enabled(p_render_data->environment) ||
 					using_ssil ||
 					ce_needs_normal_roughness ||
