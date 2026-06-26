@@ -544,7 +544,9 @@ private:
 
 	// ── Voxel scene / SDF ──
 	void bake_voxels();
-	void build_sdf();
+	void build_sdf(); // one-shot jump flood (whole field this frame)
+	void sdf_amortize_begin(); // arm the amortized flood (sdf_pass = 0)
+	bool sdf_amortize_step(); // advance ~2 flood passes/frame; returns true the frame it completes
 
 	// ════════════════════════════ MEMBER DATA ════════════════════════════
 
@@ -663,6 +665,7 @@ private:
 	RID sdf_set_write_a, sdf_set_write_b;
 	int sdf_pass = -1; // -1 idle; else amortized flood step
 	bool sdf_seed_in_a = true;
+	bool sdf_built_once = false; // first bake floods synchronously; re-bakes amortize
 
 	// ── Voxel clipmap (coarse levels) ──
 	bool clip_origins_inited = false;

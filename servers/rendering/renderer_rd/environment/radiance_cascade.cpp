@@ -312,6 +312,7 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	voxel_dirty = true;
 	voxel_unpack_pending = false;
 	sdf_pass = -1;
+	sdf_built_once = false;
 	clip_origins_inited = false;
 
 	// Toroidal phase: the grid cell the world-origin voxel maps to (the trace samples
@@ -535,6 +536,15 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		dispatch_voxel_unpack();
 		bake_voxels(); // SDF -> inject -> aniso/emission mips: light the grid for the trace
 		voxel_unpack_pending = false;
+	}
+
+	// Advance the amortized SDF flood a couple of passes (no-op when idle). When it finishes,
+	// re-light the grid so sun shadows are correct against the now-complete distance field --
+	// the inject during bake_voxels used the previous frame's still-converging SDF.
+	if (sdf_amortize_step()) {
+		dispatch_inject();
+		dispatch_voxel_mips();
+		dispatch_emission_mips();
 	}
 
 	// Per-frame probe chain. A draw-command label groups it for GPU debuggers (RenderDoc/
@@ -1652,7 +1662,18 @@ void RadianceCascade::bake_voxels() {
 	// it for sun visibility, and the trace uses it to skip empty space), then inject
 	// direct light into voxel radiance, then the aniso + emission mip chains the cone
 	// trace samples.
-	build_sdf();
+	//
+	// The first bake floods the SDF synchronously (startup, a one-time spike is fine). Every
+	// re-bake (the camera recenter, frequent in fast motion) instead arms the AMORTIZED flood
+	// so the ~9-pass jump flood spreads over a few frames rather than spiking -- inject runs
+	// now against the previous (still-close) SDF, and process() re-lights once the new flood
+	// finishes. This is the spike SDFGI pays in full on every move.
+	if (!sdf_built_once) {
+		build_sdf();
+		sdf_built_once = true;
+	} else {
+		sdf_amortize_begin();
+	}
 	dispatch_inject();
 	dispatch_voxel_mips();
 	dispatch_emission_mips();
@@ -1686,4 +1707,60 @@ void RadianceCascade::build_sdf() {
 		seed_in_a = !seed_in_a;
 	}
 	run(seed_in_a ? sdf_set_write_b : sdf_set_write_a, 2u, 0);
+}
+
+void RadianceCascade::sdf_amortize_begin() {
+	sdf_pass = 0;
+	sdf_seed_in_a = true;
+}
+
+bool RadianceCascade::sdf_amortize_step() {
+	// Spread the jump flood (1 seed + ~log2(R) flood + 1 finalize passes) across frames at
+	// ~2 passes/frame instead of all at once -- this is the single biggest rebake spike, and
+	// the one SDFGI pays in full on every motion. The SDF is only used for empty-space skip,
+	// so a few frames of a converging field cost a little trace speed / brief leak, never a
+	// frame drop. Returns true on the frame it finishes (so the caller can re-light correctly).
+	if (sdf_pass < 0) {
+		return false;
+	}
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const int R = vox_res / 2;
+	int flood = 0;
+	for (int s = R / 2; s >= 1; s >>= 1) {
+		++flood;
+	}
+	const int total = 1 + flood + 1;
+	const uint32_t g = (uint32_t)((R + 3) / 4);
+	auto run = [&](RID p_set, uint32_t p_mode, int p_step) {
+		RCSdfPushConstant pc = {};
+		pc.mode = p_mode;
+		pc.step = p_step;
+		pc.res = (uint32_t)R;
+		pc.phase[0] = vox_phase.x / 2;
+		pc.phase[1] = vox_phase.y / 2;
+		pc.phase[2] = vox_phase.z / 2;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.voxel_sdf_pipeline);
+		rd->compute_list_bind_uniform_set(l, p_set, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, g, g, g);
+		rd->compute_list_end();
+	};
+	for (int n = 0; n < 2 && sdf_pass < total; ++n, ++sdf_pass) {
+		if (sdf_pass == 0) {
+			run(sdf_set_write_a, 0u, 0); // seed from occupancy
+			sdf_seed_in_a = true;
+		} else if (sdf_pass <= flood) {
+			const int step = 1 << (flood - sdf_pass); // R/2 .. 1
+			run(sdf_seed_in_a ? sdf_set_write_b : sdf_set_write_a, 1u, step);
+			sdf_seed_in_a = !sdf_seed_in_a;
+		} else {
+			run(sdf_seed_in_a ? sdf_set_write_b : sdf_set_write_a, 2u, 0); // finalize to distances
+		}
+	}
+	if (sdf_pass >= total) {
+		sdf_pass = -1;
+		return true; // flood complete this frame
+	}
+	return false;
 }
