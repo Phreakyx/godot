@@ -536,12 +536,8 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		for (const VoxelShell &s : pending_shells) {
 			dispatch_voxel_unpack(s.lo, s.dim);
 		}
-		// inject marches the SDF for sun visibility, so the field must exist before it runs.
-		// The first bake floods synchronously (then injects against a correct field); later
-		// scrolls light the new shells against the previous, slightly-lagging field and arm an
-		// amortized re-flood for the next frames. Deliberately NO global re-inject when the
-		// flood completes: the per-shell injects already light the grid, and re-lighting the
-		// whole grid each time the flood finished popped the entire level every few frames.
+		// Amortized SDF flood (cheap; not the flash cause -- a one-shot consistent flood still
+		// flashed). inject runs after so sun visibility uses the current field.
 		if (!sdf_built_once) {
 			build_sdf();
 			sdf_built_once = true;
@@ -555,11 +551,7 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		dispatch_emission_mips();
 		pending_shells.clear();
 	}
-
-	// Advance the amortized SDF flood a couple of passes (no-op when idle); the trace reads
-	// sdf_tex for empty-space skipping. sdf_tex only updates when the flood completes, so the
-	// trace always sees a complete (if slightly stale) field, never a half-built one.
-	sdf_amortize_step();
+	sdf_amortize_step(); // advance the amortized flood (no-op when idle)
 
 	// Per-frame probe chain. A draw-command label groups it for GPU debuggers (RenderDoc/
 	// Nsight); the per-pass RENDER_TIMESTAMPs feed the engine's built-in visual profiler --
@@ -696,12 +688,16 @@ void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
 	// re-voxelizing. First frame / teleport / external dirty = the whole grid as one shell.
 	pending_shells.clear();
 
-	// Freeze the grid while an amortized SDF flood is running. The flood spans several frames
-	// and its distance math is phase-relative (rel()); if the phase moved mid-flood the field
-	// would be computed across mismatched frames -- garbage that over-skips and flashes the
-	// whole level. So only scroll when the flood is idle: the grid catches up in one consistent
-	// step per flood. (A forced full re-bake -- first frame / teleport -- overrides this.)
-	if (sdf_pass >= 0 && !voxel_dirty) {
+	// Dead-zone gate. The voxelize is a full SDFGI-style rasterization of the scene; running it
+	// EVERY frame the grid scrolls a voxel is too entangled with the main render -- at its hook
+	// point it corrupts the opaque pass (a whole-screen flash while moving) and moving it earlier
+	// deadlocks the first full bake. So only re-voxelize once the camera has roamed a good way
+	// from where the grid last baked; the grid then catches up in a few large shells (rare, so
+	// the 1-frame opaque glitch is unnoticeable) instead of flashing every frame. TODO: a
+	// compute-based voxelizer (no main-render entanglement) would let this stream per frame again.
+	const Vector3 center = vox_origin + vox_extent * 0.5f;
+	const float dead_zone = vox_extent.x * 0.35f; // ~22 m for the default 64 m grid
+	if (!voxel_dirty && p_cam_origin.distance_to(center) < dead_zone) {
 		return;
 	}
 
