@@ -284,13 +284,18 @@ struct RCClipInjectSlabPushConstant {
 };
 
 // rc3d_voxel_sdf.glsl — jump-flood distance field (mode = init/flood/finalize, step = jump size).
+// region 0 = whole grid; region 1 = localized window-relative slab [slab_lo, slab_lo+slab_dim).
 struct RCSdfPushConstant {
 	uint32_t mode;
 	int32_t step;
 	uint32_t res;
-	uint32_t pad0;
+	uint32_t region;
 	int32_t phase[3];
+	uint32_t pad0;
+	int32_t slab_lo[3];
 	uint32_t pad1;
+	int32_t slab_dim[3];
+	uint32_t pad2;
 };
 
 // rc_voxel_unpack.glsl — unpack the packed voxelization targets into the RC grid.
@@ -549,6 +554,11 @@ private:
 
 	// ── Voxel scene / SDF ──
 	void build_sdf(); // one-shot jump flood (whole field this frame)
+	// Localized jump flood of just one scrolled-in shell + a margin (half-res, window-relative).
+	// The rest of the field keeps its prior distances; finalize mins with them so it stays
+	// leak-safe. Far cheaper than a whole-field reflood per scroll. p_hlo/p_hdim are the shell in
+	// window-relative HALF-res voxels; the margin is added internally.
+	void build_sdf_region(const Vector3i &p_hlo, const Vector3i &p_hdim);
 	void sdf_amortize_begin(); // arm the amortized flood (sdf_pass = 0)
 	bool sdf_amortize_step(); // advance ~2 flood passes/frame; returns true the frame it completes
 

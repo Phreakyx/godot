@@ -538,13 +538,21 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		}
 		// Build the SDF SYNCHRONOUSLY this frame. The jump-flood distance math is phase-relative
 		// (rc3d_voxel_sdf.glsl rel(c) = (c - phase) % R), so seed/flood/finalize must all run under
-		// ONE toroidal phase. The grid now scrolls every frame (no dead-zone gate), so an amortized
+		// ONE toroidal phase. The grid scrolls every frame (no dead-zone gate), so an amortized
 		// flood spread over ~5 frames would mix phases between its passes -> a fully-built GARBAGE
-		// field -> the cone trace over-skips -> whole-level white flash when each bad field finalizes
-		// (the ~5-frame cadence). A one-shot build under the current frame's fixed phase is always
-		// consistent. inject runs after so sun visibility uses the freshly-built field.
-		// (Perf follow-up: localized region flood of just the scrolled-in shell + a margin.)
-		build_sdf();
+		// field -> the cone trace over-skips -> whole-level white flash when each bad field
+		// finalizes. A one-shot build under the current frame's fixed phase is always consistent.
+		// A full bake (first frame / teleport) refloods the whole field; a normal per-scroll bake
+		// refloods only the thin shell(s) that streamed in + a margin, keeping the rest of the field
+		// (cheap). inject runs after so sun visibility uses the freshly-built field.
+		if (voxel_bake_full || !sdf_built_once) {
+			build_sdf();
+		} else {
+			for (const VoxelShell &s : pending_shells) {
+				// shell is window-relative full-res render-grid voxels -> half-res (ceil the size).
+				build_sdf_region(s.lo / 2, (s.dim + Vector3i(1, 1, 1)) / 2);
+			}
+		}
 		sdf_built_once = true;
 		for (const VoxelShell &s : pending_shells) {
 			dispatch_inject(s.lo, s.dim);
@@ -1742,6 +1750,61 @@ void RadianceCascade::build_sdf() {
 		seed_in_a = !seed_in_a;
 	}
 	run(seed_in_a ? sdf_set_write_b : sdf_set_write_a, 2u, 0);
+}
+
+void RadianceCascade::build_sdf_region(const Vector3i &p_hlo, const Vector3i &p_hdim) {
+	// Localized jump flood: same seed → flood (R/2..1) → finalize as build_sdf, but restricted to
+	// a window-relative half-res slab = the scrolled-in shell + a margin. Only that band is
+	// re-dispatched; the rest of sdf_tex keeps its prior (valid, phase-independent) distances, and
+	// the finalize mins the slab against them so a cell never gets a LARGER distance than before
+	// (leak-safe). Cheap because the dispatch volume shrinks to the thin band -- the flood still
+	// runs R/2..1 steps so lateral occluders inside the slab propagate fully (out-of-slab
+	// neighbours are skipped in-shader; occluders beyond the margin are covered by the min).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const int R = vox_res / 2; // HALF res
+	const int margin = 8; // half-res voxels of overlap into the existing field on every side
+	Vector3i lo, dim;
+	for (int i = 0; i < 3; i++) {
+		const int a = MAX(0, p_hlo[i] - margin);
+		const int b = MIN(R, p_hlo[i] + p_hdim[i] + margin);
+		lo[i] = a;
+		dim[i] = b - a;
+	}
+	if (dim.x <= 0 || dim.y <= 0 || dim.z <= 0) {
+		return;
+	}
+	const uint32_t gx = (uint32_t)((dim.x + 3) / 4);
+	const uint32_t gy = (uint32_t)((dim.y + 3) / 4);
+	const uint32_t gz = (uint32_t)((dim.z + 3) / 4);
+	auto run = [&](RID p_set, uint32_t p_mode, int p_step) {
+		RCSdfPushConstant pc = {};
+		pc.mode = p_mode;
+		pc.step = p_step;
+		pc.res = (uint32_t)R;
+		pc.region = 1u;
+		pc.phase[0] = vox_phase.x / 2;
+		pc.phase[1] = vox_phase.y / 2;
+		pc.phase[2] = vox_phase.z / 2;
+		pc.slab_lo[0] = lo.x;
+		pc.slab_lo[1] = lo.y;
+		pc.slab_lo[2] = lo.z;
+		pc.slab_dim[0] = dim.x;
+		pc.slab_dim[1] = dim.y;
+		pc.slab_dim[2] = dim.z;
+		RD::ComputeListID l = rd->compute_list_begin();
+		rd->compute_list_bind_compute_pipeline(l, sh.voxel_sdf_pipeline);
+		rd->compute_list_bind_uniform_set(l, p_set, 0);
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, gx, gy, gz);
+		rd->compute_list_end();
+	};
+	run(sdf_set_write_a, 0u, 0); // seed the slab from occupancy
+	bool seed_in_a = true;
+	for (int step = R / 2; step >= 1; step >>= 1) {
+		run(seed_in_a ? sdf_set_write_b : sdf_set_write_a, 1u, step);
+		seed_in_a = !seed_in_a;
+	}
+	run(seed_in_a ? sdf_set_write_b : sdf_set_write_a, 2u, 0); // finalize (min with prior field)
 }
 
 void RadianceCascade::sdf_amortize_begin() {
