@@ -544,7 +544,6 @@ private:
 	void dispatch_composite(); // TEMPORARY bring-up output; replaced by RB_TEX_AMBIENT write
 
 	// ── Voxel scene / SDF ──
-	void bake_voxels();
 	void build_sdf(); // one-shot jump flood (whole field this frame)
 	void sdf_amortize_begin(); // arm the amortized flood (sdf_pass = 0)
 	bool sdf_amortize_step(); // advance ~2 flood passes/frame; returns true the frame it completes

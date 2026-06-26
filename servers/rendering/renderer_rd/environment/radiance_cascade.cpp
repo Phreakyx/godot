@@ -535,20 +535,31 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	if (!pending_shells.is_empty()) {
 		for (const VoxelShell &s : pending_shells) {
 			dispatch_voxel_unpack(s.lo, s.dim);
+		}
+		// inject marches the SDF for sun visibility, so the field must exist before it runs.
+		// The first bake floods synchronously (then injects against a correct field); later
+		// scrolls light the new shells against the previous, slightly-lagging field and arm an
+		// amortized re-flood for the next frames. Deliberately NO global re-inject when the
+		// flood completes: the per-shell injects already light the grid, and re-lighting the
+		// whole grid each time the flood finished popped the entire level every few frames.
+		if (!sdf_built_once) {
+			build_sdf();
+			sdf_built_once = true;
+		} else if (sdf_pass < 0) {
+			sdf_amortize_begin();
+		}
+		for (const VoxelShell &s : pending_shells) {
 			dispatch_inject(s.lo, s.dim);
 		}
-		bake_voxels(); // (re)flood SDF + rebuild aniso/emission mips for the changed grid
+		dispatch_voxel_mips();
+		dispatch_emission_mips();
 		pending_shells.clear();
 	}
 
-	// Advance the amortized SDF flood a couple of passes (no-op when idle). When it finishes,
-	// re-light the WHOLE grid + re-mip so sun shadows are correct against the now-complete
-	// field (the per-shell inject above used the previous, still-converging SDF).
-	if (sdf_amortize_step()) {
-		dispatch_inject(Vector3i(), Vector3i(vox_res, vox_res, vox_res));
-		dispatch_voxel_mips();
-		dispatch_emission_mips();
-	}
+	// Advance the amortized SDF flood a couple of passes (no-op when idle); the trace reads
+	// sdf_tex for empty-space skipping. sdf_tex only updates when the flood completes, so the
+	// trace always sees a complete (if slightly stale) field, never a half-built one.
+	sdf_amortize_step();
 
 	// Per-frame probe chain. A draw-command label groups it for GPU debuggers (RenderDoc/
 	// Nsight); the per-pass RENDER_TIMESTAMPs feed the engine's built-in visual profiler --
@@ -1700,26 +1711,6 @@ void RadianceCascade::dispatch_dynamic_voxelize() {}
 void RadianceCascade::dispatch_dyn_occ_temporal() {}
 
 /* VOXEL SCENE / SDF */
-
-void RadianceCascade::bake_voxels() {
-	// Global re-light after the per-shell unpack + inject changed the grid: (re)build the
-	// distance field (the trace skips empty space with it) and the aniso/emission mip chains
-	// the cone trace samples. The shells were already lit by their own dispatch_inject.
-	//
-	// The first bake floods the SDF synchronously (startup, a one-time spike is fine). Re-bakes
-	// (the camera scroll, frequent in fast motion) arm the AMORTIZED flood so the ~9-pass jump
-	// flood spreads over a few frames rather than spiking -- but only when the flood is idle, so
-	// continuous motion doesn't restart it mid-way and stall it. This is the spike SDFGI pays in
-	// full on every move.
-	if (!sdf_built_once) {
-		build_sdf();
-		sdf_built_once = true;
-	} else if (sdf_pass < 0) {
-		sdf_amortize_begin();
-	}
-	dispatch_voxel_mips();
-	dispatch_emission_mips();
-}
 
 void RadianceCascade::build_sdf() {
 	// One-shot jump flood of the half-res distance field: seed from occupancy (mode 0),
