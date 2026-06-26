@@ -866,9 +866,11 @@ void RadianceCascade::dispatch_clip_inject(int p_level, const Vector3i &p_lo, co
 	pc.sun_dir[1] = sun_dir.y;
 	pc.sun_dir[2] = sun_dir.z;
 	pc.blend_alpha = 1.0f;
-	pc.sun_color[0] = sun_color.x;
-	pc.sun_color[1] = sun_color.y;
-	pc.sun_color[2] = sun_color.z;
+	// sun_color slot now carries the SKY ambient (the sun itself comes from the light buffer in the
+	// shader). Distant coarse surfaces bake this as flat skylight so they aren't pure black.
+	pc.sun_color[0] = sky_color.x;
+	pc.sun_color[1] = sky_color.y;
+	pc.sun_color[2] = sky_color.z;
 	pc.voxel_size = vsize;
 	pc.slab_lo[0] = ovn.x + p_lo.x;
 	pc.slab_lo[1] = ovn.y + p_lo.y;

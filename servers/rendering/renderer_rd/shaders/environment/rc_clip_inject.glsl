@@ -100,13 +100,19 @@ void main() {
 	vec3 W = (vec3(wv) + 0.5) * pc.voxel_size;
 	bool is_roofed = roofed(rstart);
 
+	// Sky ambient: coarse voxels are far/big and can't resolve the small canopy gaps that let sun
+	// through, so a sun-only coarse inject self-shadows to black under any cover. Bake a flat
+	// skylight term (alb * sky) so distant shaded surfaces read as lit ambient instead of pure
+	// black -- this is the long-range fill the coarse levels are FOR. (pc.sun_color carries the sky
+	// colour now; the directional sun comes from the light buffer below.)
+	vec3 Lo = em + alb * pc.sun_color;
+
 	// Light every buffer light the same way level 0 does (rc_eval_light = alb.color.ndl/pi), so the
 	// coarse sun matches L0 exactly -- the directional comes from the light buffer, NOT a separate
 	// push-constant sun (which is why coarse used to stay dark). Visibility is the coarse-occupancy
 	// march (no SDF up here); a roofed coarse voxel can't see the SUN even if the under-resolved
 	// march would miss the thin roof, so gate the directional on roofed() (level 0 keeps sharp
 	// shadows). Positional lights just march.
-	vec3 Lo = em;
 	for (uint i = 0u; i < pc.light_count; ++i) {
 		vec3 Ldir, radiance;
 		float reach;
