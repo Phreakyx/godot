@@ -617,8 +617,6 @@ private:
 	bool voxel_dirty = true;
 	bool voxel_unpack_pending = false; // renderer just voxelized; process() unpacks + injects
 	float recenter_margin_frac = 0.125;
-	Vector3 last_cam_origin; // previous frame's camera origin (jump/teleport detection)
-	bool has_last_cam = false;
 
 	// ── Geometry voxelization render targets (SDFGI-style PASS_MODE_SDF output) ──
 	// The renderer rasterizes scene instances into these packed integer grids; an
