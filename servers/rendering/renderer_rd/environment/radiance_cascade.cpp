@@ -695,6 +695,16 @@ void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
 	// toroidal phase exact, so the unchanged cells stay valid -- only the exposed band needs
 	// re-voxelizing. First frame / teleport / external dirty = the whole grid as one shell.
 	pending_shells.clear();
+
+	// Freeze the grid while an amortized SDF flood is running. The flood spans several frames
+	// and its distance math is phase-relative (rel()); if the phase moved mid-flood the field
+	// would be computed across mismatched frames -- garbage that over-skips and flashes the
+	// whole level. So only scroll when the flood is idle: the grid catches up in one consistent
+	// step per flood. (A forced full re-bake -- first frame / teleport -- overrides this.)
+	if (sdf_pass >= 0 && !voxel_dirty) {
+		return;
+	}
+
 	const float vsize = vox_extent.x / float(vox_res);
 	const int R = vox_res;
 
