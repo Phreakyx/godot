@@ -94,26 +94,27 @@ void main() {
 	vec3 N = normalize(imageLoad(normal_in, cell).rgb * 2.0 - 1.0);
 	vec3 alb = imageLoad(albedo_in, cell).rgb;
 	vec3 em = imageLoad(emission_in, cell).rgb;
-	vec3 L = normalize(pc.sun_dir);
-	float ndl = max(dot(N, L), 0.0);
 
 	float R = float(pc.res);
 	vec3 rstart = vec3(rel(cell)) + 0.5;
 	vec3 W = (vec3(wv) + 0.5) * pc.voxel_size;
-	float svis = (ndl > 0.0 && !roofed(rstart)) ? clip_vis(rstart, L, R) : 0.0;
+	bool is_roofed = roofed(rstart);
 
-	vec3 Lo = em + alb * pc.sun_color * (ndl * svis * 0.31830988618);
-
-	for (uint i = 0u; i < pc.light_count; ++i) { // positional only; directional = sun above
-		if (lights[i].type < 0.5) {
-			continue;
-		}
+	// Light every buffer light the same way level 0 does (rc_eval_light = alb.color.ndl/pi), so the
+	// coarse sun matches L0 exactly -- the directional comes from the light buffer, NOT a separate
+	// push-constant sun (which is why coarse used to stay dark). Visibility is the coarse-occupancy
+	// march (no SDF up here); a roofed coarse voxel can't see the SUN even if the under-resolved
+	// march would miss the thin roof, so gate the directional on roofed() (level 0 keeps sharp
+	// shadows). Positional lights just march.
+	vec3 Lo = em;
+	for (uint i = 0u; i < pc.light_count; ++i) {
 		vec3 Ldir, radiance;
 		float reach;
 		if (!rc_eval_light(lights[i], W, N, alb, pc.voxel_size, R, Ldir, radiance, reach)) {
 			continue;
 		}
-		Lo += radiance * clip_vis(rstart, Ldir, reach);
+		float vis = (lights[i].type < 0.5 && is_roofed) ? 0.0 : clip_vis(rstart, Ldir, reach);
+		Lo += radiance * vis;
 	}
 	rad.rgb = mix(rad.rgb, Lo, pc.blend_alpha);
 	imageStore(radiance, cell, rad);
