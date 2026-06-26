@@ -29,6 +29,10 @@ layout(set = 0, binding = 6, rgba16f) uniform restrict writeonly image3D emissio
 layout(push_constant) uniform PC {
 	ivec3 phase; // origin_voxel % res; toroidal write offset
 	uint res;
+	ivec3 slab_lo; // region origin in render-grid coords (0 for a full unpack)
+	uint pad0;
+	ivec3 slab_dim; // region size in voxels ((res,res,res) for a full unpack)
+	uint pad1;
 }
 pc;
 
@@ -48,10 +52,13 @@ const vec3 aniso_dir[6] = vec3[](
 		vec3(-1, 0, 0), vec3(0, -1, 0), vec3(0, 0, -1));
 
 void main() {
-	ivec3 gp = ivec3(gl_GlobalInvocationID);
-	if (any(greaterThanEqual(gp, ivec3(pc.res)))) {
+	ivec3 local = ivec3(gl_GlobalInvocationID);
+	if (any(greaterThanEqual(local, pc.slab_dim))) {
 		return;
 	}
+	// Render targets are in direct grid coords; for a streamed shell only [slab_lo, slab_lo+dim)
+	// was rasterized. The toroidal voxel cell wraps via the phase (see rc_trace_inc fract()).
+	ivec3 gp = pc.slab_lo + local;
 	ivec3 cell = (pc.phase + gp) % int(pc.res);
 
 	uint a = imageLoad(src_albedo, gp).r;

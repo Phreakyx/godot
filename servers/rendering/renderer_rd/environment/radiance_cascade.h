@@ -297,6 +297,10 @@ struct RCSdfPushConstant {
 struct RCVoxelUnpackPushConstant {
 	int32_t phase[3];
 	uint32_t res;
+	int32_t slab_lo[3];
+	uint32_t pad0;
+	int32_t slab_dim[3];
+	uint32_t pad1;
 };
 
 // rc_voxel_debug.glsl — raymarch a grid level to the screen for visualization.
@@ -487,19 +491,16 @@ public:
 	RID get_debug_texture() const { return debug_tex; }
 	void dispatch_debug();
 
-	// Geometry voxelization: the renderer rasterizes the scene into the render targets
-	// below (RC voxelize pass), then process() unpacks + injects them into the grid.
-	bool needs_voxel_bake() const { return voxel_dirty; }
-	void center_grid_on(const Vector3 &p_center); // place the grid around the camera
-	// Flag a re-bake when the camera has roamed far enough from the grid centre that the
-	// trailing edge is closing in; the bake hook then re-centres + re-voxelizes the grid
-	// so it follows the player. A full re-bake (not yet toroidal slab streaming).
-	void request_recenter(const Vector3 &p_cam_origin);
-	void mark_voxel_baked() {
-		voxel_dirty = false;
-		voxel_unpack_pending = true;
-	}
-	AABB voxel_bounds() const { return AABB(vox_origin, vox_extent); }
+	// Geometry voxelization (toroidal streaming): scroll_to() snaps the grid to follow the
+	// camera in whole-voxel steps and records the thin shell(s) that scrolled into view this
+	// frame (the whole grid on the first frame or a teleport). The renderer then rasterizes
+	// each shell region into the render targets, and process() unpacks + injects just those
+	// cells -- so movement cost is a thin shell, not a full re-bake. See [[rc-movement-streaming]].
+	void scroll_to(const Vector3 &p_cam_origin);
+	int voxel_shell_count() const { return (int)pending_shells.size(); }
+	AABB voxel_shell_bounds(int p_i) const; // world AABB of shell p_i (for the ortho cameras)
+	Vector3i voxel_shell_offset(int p_i) const { return pending_shells[p_i].lo; } // render-grid offset
+	Vector3i voxel_shell_size(int p_i) const { return pending_shells[p_i].dim; }
 	int voxel_resolution() const { return vox_res; }
 	RID get_render_albedo() const { return render_albedo; }
 	RID get_render_emission() const { return render_emission; }
@@ -531,8 +532,8 @@ private:
 	void dispatch_patch_merge();
 	void dispatch_patch_gather();
 	void dispatch_patch_lookup(uint32_t p_debug_kind);
-	void dispatch_voxel_unpack(); // packed render targets -> voxel_albedo/normal/emission + occupancy
-	void dispatch_inject(); // direct light from light_buffer -> voxel_tex radiance (whole grid)
+	void dispatch_voxel_unpack(const Vector3i &p_lo, const Vector3i &p_dim); // packed render targets -> voxel grid (region)
+	void dispatch_inject(const Vector3i &p_lo, const Vector3i &p_dim); // direct light from light_buffer -> voxel_tex radiance (region)
 	void dispatch_voxel_mips();
 	void dispatch_emission_mips();
 	void dispatch_voxel_debug();
@@ -616,9 +617,15 @@ private:
 	Vector3 vox_origin = Vector3(-32, -2, -32);
 	Vector3 vox_extent = Vector3(64, 64, 64);
 	Vector3i vox_phase; // origin_voxel % res (toroidal addressing)
-	bool voxel_dirty = true;
-	bool voxel_unpack_pending = false; // renderer just voxelized; process() unpacks + injects
-	float recenter_margin_frac = 0.125;
+	bool voxel_dirty = true; // force a full re-voxelize next scroll_to (first frame / teleport)
+
+	// Shells that scrolled into view this frame: render-grid offset + size in voxels. The
+	// renderer voxelizes each, process() unpacks + injects each, then process() clears them.
+	struct VoxelShell {
+		Vector3i lo;
+		Vector3i dim;
+	};
+	LocalVector<VoxelShell> pending_shells;
 
 	// ── Geometry voxelization render targets (SDFGI-style PASS_MODE_SDF output) ──
 	// The renderer rasterizes scene instances into these packed integer grids; an

@@ -1621,14 +1621,17 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		rc->set_gi_intensity(environment_get_rc_energy(p_render_data->environment));
 		rc->set_trace_amortization(environment_get_rc_amortization(p_render_data->environment));
 		rc->set_debug_view(environment_get_rc_debug(p_render_data->environment));
-		// Rasterize the scene geometry into RC's voxel grid (SDFGI-style) when it needs
-		// a (re)bake; process() then unpacks + injects it. The grid bakes on the first
-		// frame and re-bakes (re-centred) whenever the camera roams past the dead-zone.
-		rc->request_recenter(p_render_data->scene_data->cam_transform.origin);
-		if (rc->needs_voxel_bake() && p_render_data->instances != nullptr) {
-			rc->center_grid_on(p_render_data->scene_data->cam_transform.origin);
-			_render_rc_voxelize(rb, rc->voxel_bounds(), rc->voxel_resolution(), *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
-			rc->mark_voxel_baked();
+		// Toroidal streaming: snap the grid to follow the camera in whole-voxel steps and get
+		// the thin shell(s) that scrolled into view this frame (the whole grid on the first
+		// frame / teleport). Rasterize each shell region into RC's voxel render targets;
+		// process() then unpacks + injects just those cells. Only the first region clears the
+		// targets (shells are disjoint in grid space).
+		if (p_render_data->instances != nullptr) {
+			rc->scroll_to(p_render_data->scene_data->cam_transform.origin);
+			const int shell_count = rc->voxel_shell_count();
+			for (int s = 0; s < shell_count; s++) {
+				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+			}
 		}
 
 		// rc_enabled forces the normal-roughness depth prepass (see depth_pass_mode below), so
@@ -3249,23 +3252,28 @@ void RenderForwardClustered::_render_sdfgi(Ref<RenderSceneBuffersRD> p_render_bu
 	RD::get_singleton()->draw_command_end_label();
 }
 
-void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_render_buffers, const AABB &p_bounds, int p_grid_size, const PagedArray<RenderGeometryInstance *> &p_instances, const RID &p_albedo_texture, const RID &p_emission_texture, const RID &p_emission_aniso_texture, const RID &p_geom_facing_texture, float p_exposure_normalization) {
+void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_render_buffers, const AABB &p_bounds, const Vector3i &p_offset, const Vector3i &p_size, bool p_clear, const PagedArray<RenderGeometryInstance *> &p_instances, const RID &p_albedo_texture, const RID &p_emission_texture, const RID &p_emission_aniso_texture, const RID &p_geom_facing_texture, float p_exposure_normalization) {
 	// Rasterize the scene geometry into Radiance Cascades' voxel grid, mirroring
 	// _render_sdfgi: render the instances three times (one orthographic camera per
 	// axis) with PASS_MODE_SDF, whose shader image-stores each fragment's voxel-space
-	// albedo/emission/normal into the packed render targets. Unlike SDFGI this covers
-	// the whole grid as a single region (from = 0, size = grid_size on each axis).
+	// albedo/emission/normal into the packed render targets. p_bounds is the world AABB of
+	// the region being voxelized, p_offset/p_size its placement in the render grid: the full
+	// grid on a (re)bake, or a thin scrolled-in shell during streaming.
 	RD::get_singleton()->draw_command_begin_label("Render RC Voxelize");
 
 	// Ensure the advanced (SDF) scene-shader pipeline variants are compiled, otherwise
 	// PASS_MODE_SDF has no vertex shader. SDFGI does this in sdfgi_update.
 	scene_shader.enable_advanced_shader_group();
 
-	// The voxelize pass accumulates (facing OR, emission max), so start from empty.
-	RD::get_singleton()->texture_clear(p_albedo_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
-	RD::get_singleton()->texture_clear(p_emission_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
-	RD::get_singleton()->texture_clear(p_emission_aniso_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
-	RD::get_singleton()->texture_clear(p_geom_facing_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	// The voxelize pass accumulates (facing OR, emission max), so start from empty. Cleared
+	// only on the first region of the frame: the shells are disjoint in grid space, so a later
+	// shell's clear would wipe an earlier shell's data before process() unpacks it.
+	if (p_clear) {
+		RD::get_singleton()->texture_clear(p_albedo_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+		RD::get_singleton()->texture_clear(p_emission_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+		RD::get_singleton()->texture_clear(p_emission_aniso_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+		RD::get_singleton()->texture_clear(p_geom_facing_texture, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	}
 
 	RenderSceneDataRD scene_data;
 
@@ -3288,8 +3296,8 @@ void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_ren
 	Vector3 center = p_bounds.position + half_size;
 
 	for (int i = 0; i < 3; i++) {
-		scene_state.ubo.sdf_offset[i] = 0;
-		scene_state.ubo.sdf_size[i] = p_grid_size;
+		scene_state.ubo.sdf_offset[i] = p_offset[i];
+		scene_state.ubo.sdf_size[i] = p_size[i];
 	}
 
 	for (int i = 0; i < 3; i++) {
@@ -3302,8 +3310,8 @@ void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_ren
 		right[right_axis] = 1.0;
 
 		Size2i fb_size;
-		fb_size.x = p_grid_size;
-		fb_size.y = p_grid_size;
+		fb_size.x = p_size[right_axis];
+		fb_size.y = p_size[up_axis];
 
 		scene_data.cam_transform.origin = center + axis * half_size;
 		scene_data.cam_transform.basis.set_column(0, right);

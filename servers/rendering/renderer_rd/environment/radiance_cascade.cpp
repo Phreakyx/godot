@@ -310,7 +310,7 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	// create() is reused as the resize path (configure() frees then re-creates), and the
 	// object persists across that, so these can't rely on member initializers.
 	voxel_dirty = true;
-	voxel_unpack_pending = false;
+	pending_shells.clear();
 	sdf_pass = -1;
 	sdf_built_once = false;
 	clip_origins_inited = false;
@@ -528,21 +528,24 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		return; // no depth this frame
 	}
 
-	// If the renderer just (re)voxelized the scene, unpack the packed targets into the
-	// voxel grid (albedo/normal/emission + occupancy). Inject/SDF/mips -- which light
-	// the grid for the trace -- are the next step; until then the trace sees geometry
-	// but no radiance.
-	if (voxel_unpack_pending) {
-		dispatch_voxel_unpack();
-		bake_voxels(); // SDF -> inject -> aniso/emission mips: light the grid for the trace
-		voxel_unpack_pending = false;
+	// The renderer just rasterized the shell(s) that scrolled into view (a thin band during
+	// motion, the whole grid on the first frame / teleport). Unpack + light only those cells
+	// into the toroidal grid -- the rest keeps its content -- then (re)build the global SDF +
+	// cone-trace mips. This is what makes movement a thin shell rather than a full re-bake.
+	if (!pending_shells.is_empty()) {
+		for (const VoxelShell &s : pending_shells) {
+			dispatch_voxel_unpack(s.lo, s.dim);
+			dispatch_inject(s.lo, s.dim);
+		}
+		bake_voxels(); // (re)flood SDF + rebuild aniso/emission mips for the changed grid
+		pending_shells.clear();
 	}
 
 	// Advance the amortized SDF flood a couple of passes (no-op when idle). When it finishes,
-	// re-light the grid so sun shadows are correct against the now-complete distance field --
-	// the inject during bake_voxels used the previous frame's still-converging SDF.
+	// re-light the WHOLE grid + re-mip so sun shadows are correct against the now-complete
+	// field (the per-shell inject above used the previous, still-converging SDF).
 	if (sdf_amortize_step()) {
-		dispatch_inject();
+		dispatch_inject(Vector3i(), Vector3i(vox_res, vox_res, vox_res));
 		dispatch_voxel_mips();
 		dispatch_emission_mips();
 	}
@@ -669,29 +672,60 @@ void RadianceCascade::update_trace_params() {
 	rd->buffer_update(clip_params_ubo, 0, sizeof(gc), &gc);
 }
 
-void RadianceCascade::center_grid_on(const Vector3 &p_center) {
-	// Place the (currently static) voxel grid so it surrounds the camera, then refresh
-	// the toroidal phase + trace UBOs. One-time at bake; streaming/recenter is later.
-	vox_origin = p_center - vox_extent * 0.5f;
+AABB RadianceCascade::voxel_shell_bounds(int p_i) const {
 	const float vsize = vox_extent.x / float(vox_res);
-	const int ox = (int)Math::floor(vox_origin.x / vsize);
-	const int oy = (int)Math::floor(vox_origin.y / vsize);
-	const int oz = (int)Math::floor(vox_origin.z / vsize);
-	vox_phase = Vector3i(((ox % vox_res) + vox_res) % vox_res, ((oy % vox_res) + vox_res) % vox_res, ((oz % vox_res) + vox_res) % vox_res);
-	update_trace_params();
+	const VoxelShell &s = pending_shells[p_i];
+	return AABB(vox_origin + Vector3(s.lo) * vsize, Vector3(s.dim) * vsize);
 }
 
-void RadianceCascade::request_recenter(const Vector3 &p_cam_origin) {
-	if (voxel_dirty) {
-		return; // a (re)bake is already queued -- the hook will re-centre this frame
+void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
+	// Snap the grid so it surrounds the camera in whole-voxel steps and record the thin
+	// shell(s) that scrolled into view since last frame. Whole-voxel snapping keeps the
+	// toroidal phase exact, so the unchanged cells stay valid -- only the exposed band needs
+	// re-voxelizing. First frame / teleport / external dirty = the whole grid as one shell.
+	pending_shells.clear();
+	const float vsize = vox_extent.x / float(vox_res);
+	const int R = vox_res;
+
+	auto ovn_of = [&](const Vector3 &o) {
+		return Vector3i((int)Math::floor(o.x / vsize), (int)Math::floor(o.y / vsize), (int)Math::floor(o.z / vsize));
+	};
+
+	const Vector3i old_ovn = ovn_of(vox_origin);
+	const Vector3 want_origin = p_cam_origin - vox_extent * 0.5f;
+	const Vector3i new_ovn = ovn_of(want_origin);
+	const Vector3i delta = new_ovn - old_ovn;
+
+	const bool full = voxel_dirty || Math::abs(delta.x) >= R || Math::abs(delta.y) >= R || Math::abs(delta.z) >= R;
+
+	if (!full && delta == Vector3i()) {
+		return; // no whole-voxel movement this frame -> nothing to re-voxelize
 	}
-	// Keep at least recenter_margin_frac of the grid beyond the camera on every side: the
-	// dead-zone radius is (half-extent - margin). Past it the grid follows by re-baking.
-	const Vector3 center = vox_origin + vox_extent * 0.5f;
-	const float margin = vox_extent.x * recenter_margin_frac;
-	const float threshold = MAX(vox_extent.x * 0.5f - margin, 0.0f);
-	if (p_cam_origin.distance_to(center) > threshold) {
-		voxel_dirty = true;
+
+	// Commit the new grid placement (snapped to the voxel lattice) + toroidal phase.
+	vox_origin = Vector3(new_ovn) * vsize;
+	vox_phase = Vector3i(((new_ovn.x % R) + R) % R, ((new_ovn.y % R) + R) % R, ((new_ovn.z % R) + R) % R);
+	update_trace_params();
+	voxel_dirty = false;
+
+	if (full) {
+		pending_shells.push_back({ Vector3i(), Vector3i(R, R, R) }); // whole grid
+		return;
+	}
+
+	// One shell per moved axis: the band of |delta| voxels newly exposed at the leading edge
+	// (render-grid coords, relative to the new origin). Other axes span the full grid.
+	for (int axis = 0; axis < 3; axis++) {
+		const int d = delta[axis];
+		if (d == 0) {
+			continue;
+		}
+		VoxelShell s;
+		s.lo = Vector3i();
+		s.dim = Vector3i(R, R, R);
+		s.dim[axis] = Math::abs(d);
+		s.lo[axis] = (d > 0) ? (R - Math::abs(d)) : 0;
+		pending_shells.push_back(s);
 	}
 }
 
@@ -1478,51 +1512,61 @@ void RadianceCascade::dispatch_patch_lookup(uint32_t p_debug_kind) {
 	rd->compute_list_dispatch(l, ((uint32_t)screen_size.x + 7u) / 8u, ((uint32_t)screen_size.y + 7u) / 8u, 1);
 	rd->compute_list_end();
 }
-void RadianceCascade::dispatch_voxel_unpack() {
-	// Unpack the packed voxelization targets into the RC voxel grid (one thread/cell).
+void RadianceCascade::dispatch_voxel_unpack(const Vector3i &p_lo, const Vector3i &p_dim) {
+	// Unpack the packed voxelization targets into the RC voxel grid, over a render-grid
+	// region [p_lo, p_lo+p_dim) (the shell that was just rasterized there). One thread/cell;
+	// the shader wraps the write into the toroidal grid via the phase.
 	RadianceCascadeShaders &sh = *gi->rc_shader;
 	RCVoxelUnpackPushConstant pc = {};
 	pc.phase[0] = vox_phase.x;
 	pc.phase[1] = vox_phase.y;
 	pc.phase[2] = vox_phase.z;
 	pc.res = (uint32_t)vox_res;
-	const uint32_t g = ((uint32_t)vox_res + 3u) / 4u;
+	pc.slab_lo[0] = p_lo.x;
+	pc.slab_lo[1] = p_lo.y;
+	pc.slab_lo[2] = p_lo.z;
+	pc.slab_dim[0] = p_dim.x;
+	pc.slab_dim[1] = p_dim.y;
+	pc.slab_dim[2] = p_dim.z;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.voxel_unpack_pipeline);
 	rd->compute_list_bind_uniform_set(l, voxel_unpack_set0, 0);
 	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
-	rd->compute_list_dispatch(l, g, g, g);
+	rd->compute_list_dispatch(l, ((uint32_t)p_dim.x + 3u) / 4u, ((uint32_t)p_dim.y + 3u) / 4u, ((uint32_t)p_dim.z + 3u) / 4u);
 	rd->compute_list_end();
 }
 
-void RadianceCascade::dispatch_inject() {
-	// Inject direct light from light_buffer into the level-0 voxel radiance over the
-	// whole grid. The shader marches the SDF toward each light for visibility, so the
-	// SDF must be built first.
+void RadianceCascade::dispatch_inject(const Vector3i &p_lo, const Vector3i &p_dim) {
+	// Inject direct light from light_buffer into the level-0 voxel radiance over a render-grid
+	// region [p_lo, p_lo+p_dim) (a freshly-streamed shell, or the whole grid). The shader
+	// marches the SDF toward each light for visibility, so the SDF must already be built. It
+	// indexes by absolute world voxel (slab_lo = origin voxel + p_lo), which both wraps to the
+	// right toroidal cell (== the unpack's cell) and gives the correct world position.
 	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const float vsize = vox_extent.x / float(vox_res);
+	const Vector3i ovn((int)Math::floor(vox_origin.x / vsize), (int)Math::floor(vox_origin.y / vsize), (int)Math::floor(vox_origin.z / vsize));
 	RCInjectSlabPushConstant pc = {};
 	pc.light_count = light_count;
 	pc.vox_origin[0] = vox_origin.x;
 	pc.vox_origin[1] = vox_origin.y;
 	pc.vox_origin[2] = vox_origin.z;
-	pc.voxel_size = vox_extent.x / float(vox_res);
+	pc.voxel_size = vsize;
 	pc.blend_alpha = 1.0f;
-	pc.slab_lo[0] = 0;
-	pc.slab_lo[1] = 0;
-	pc.slab_lo[2] = 0;
+	pc.slab_lo[0] = ovn.x + p_lo.x;
+	pc.slab_lo[1] = ovn.y + p_lo.y;
+	pc.slab_lo[2] = ovn.z + p_lo.z;
 	pc.res = (uint32_t)vox_res;
-	pc.slab_dim[0] = vox_res;
-	pc.slab_dim[1] = vox_res;
-	pc.slab_dim[2] = vox_res;
+	pc.slab_dim[0] = p_dim.x;
+	pc.slab_dim[1] = p_dim.y;
+	pc.slab_dim[2] = p_dim.z;
 	pc.phase[0] = vox_phase.x;
 	pc.phase[1] = vox_phase.y;
 	pc.phase[2] = vox_phase.z;
-	const uint32_t g = ((uint32_t)vox_res + 3u) / 4u;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.voxel_inject_pipeline);
 	rd->compute_list_bind_uniform_set(l, inject_set0, 0);
 	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
-	rd->compute_list_dispatch(l, g, g, g);
+	rd->compute_list_dispatch(l, ((uint32_t)p_dim.x + 3u) / 4u, ((uint32_t)p_dim.y + 3u) / 4u, ((uint32_t)p_dim.z + 3u) / 4u);
 	rd->compute_list_end();
 }
 
@@ -1658,23 +1702,21 @@ void RadianceCascade::dispatch_dyn_occ_temporal() {}
 /* VOXEL SCENE / SDF */
 
 void RadianceCascade::bake_voxels() {
-	// Light the freshly-unpacked grid for the trace: distance field first (inject needs
-	// it for sun visibility, and the trace uses it to skip empty space), then inject
-	// direct light into voxel radiance, then the aniso + emission mip chains the cone
-	// trace samples.
+	// Global re-light after the per-shell unpack + inject changed the grid: (re)build the
+	// distance field (the trace skips empty space with it) and the aniso/emission mip chains
+	// the cone trace samples. The shells were already lit by their own dispatch_inject.
 	//
-	// The first bake floods the SDF synchronously (startup, a one-time spike is fine). Every
-	// re-bake (the camera recenter, frequent in fast motion) instead arms the AMORTIZED flood
-	// so the ~9-pass jump flood spreads over a few frames rather than spiking -- inject runs
-	// now against the previous (still-close) SDF, and process() re-lights once the new flood
-	// finishes. This is the spike SDFGI pays in full on every move.
+	// The first bake floods the SDF synchronously (startup, a one-time spike is fine). Re-bakes
+	// (the camera scroll, frequent in fast motion) arm the AMORTIZED flood so the ~9-pass jump
+	// flood spreads over a few frames rather than spiking -- but only when the flood is idle, so
+	// continuous motion doesn't restart it mid-way and stall it. This is the spike SDFGI pays in
+	// full on every move.
 	if (!sdf_built_once) {
 		build_sdf();
 		sdf_built_once = true;
-	} else {
+	} else if (sdf_pass < 0) {
 		sdf_amortize_begin();
 	}
-	dispatch_inject();
 	dispatch_voxel_mips();
 	dispatch_emission_mips();
 }
