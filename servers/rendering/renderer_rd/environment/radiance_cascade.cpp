@@ -211,6 +211,7 @@ void RadianceCascade::free_resources() {
 		fr(clip_voxelize_set[L]);
 		fr(clip_inject_set[L]);
 		fr(clip_slab_clear_set[L]);
+		fr(clip_unpack_set[L]);
 	}
 
 	// Cache-owned per-frame sets: drop our handles, don't free (UniformSetCacheRD owns them).
@@ -529,13 +530,11 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	}
 
 	// The renderer just rasterized the shell(s) that scrolled into view (a thin band during
-	// motion, the whole grid on the first frame / teleport). Unpack + light only those cells
-	// into the toroidal grid -- the rest keeps its content -- then (re)build the global SDF +
-	// cone-trace mips. This is what makes movement a thin shell rather than a full re-bake.
+	// motion, the whole grid on the first frame / teleport) AND unpacked them into the grid (the
+	// unpack runs at the renderer's voxelize hook now, so the shared packed scratch is consumed
+	// before coarse levels reuse it -- see unpack_voxels()). Here we only (re)light those cells:
+	// build the global SDF, inject, rebuild cone-trace mips. Thin shell, not a full re-bake.
 	if (!pending_shells.is_empty()) {
-		for (const VoxelShell &s : pending_shells) {
-			dispatch_voxel_unpack(s.lo, s.dim);
-		}
 		// Build the SDF SYNCHRONOUSLY this frame. The jump-flood distance math is phase-relative
 		// (rc3d_voxel_sdf.glsl rel(c) = (c - phase) % R), so seed/flood/finalize must all run under
 		// ONE toroidal phase. The grid scrolls every frame (no dead-zone gate), so an amortized
@@ -560,6 +559,17 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 		dispatch_voxel_mips();
 		dispatch_emission_mips();
 		pending_shells.clear();
+	}
+
+	// Coarse clipmap: the renderer rasterized + unpacked this frame's one round-robin level into
+	// clip_grid[clip_active] (occupancy) + clip scratch. Light its scrolled-in shells -- sun +
+	// positional, no SDF march (level 0 carries the sharp shadows). No mips: the trace samples the
+	// coarse radiance directly for long range. One level per frame keeps this cheap.
+	if (clip_active >= 1 && !clip_pending[clip_active].is_empty()) {
+		for (const VoxelShell &s : clip_pending[clip_active]) {
+			dispatch_clip_inject(clip_active, s.lo, s.dim);
+		}
+		clip_pending[clip_active].clear();
 	}
 
 	// Per-frame probe chain. A draw-command label groups it for GPU debuggers (RenderDoc/
@@ -747,6 +757,150 @@ void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
 		s.dim[axis] = Math::abs(d);
 		s.lo[axis] = (d > 0) ? (R - Math::abs(d)) : 0;
 		pending_shells.push_back(s);
+	}
+}
+
+int RadianceCascade::clip_step(const Vector3 &p_cam_origin) {
+	// Round-robin: voxelize ONE coarse level per frame. Coarse levels change slowly (2x the voxel
+	// size per level, up to 4 m), so a 1-in-(clip_levels-1) update rate is invisible, and it lets
+	// every coarse level share the single packed/clip scratch (no per-level VRAM). Returns the
+	// level the renderer should rasterize this frame, or -1 if nothing scrolled at that level.
+	clip_active = -1;
+	if (clip_levels <= 1) {
+		return -1;
+	}
+	clip_rr_cursor++;
+	if (clip_rr_cursor >= clip_levels) {
+		clip_rr_cursor = 1;
+	}
+	const int L = clip_rr_cursor;
+	clip_scroll(L, p_cam_origin);
+	if (!clip_pending[L].is_empty()) {
+		clip_active = L;
+		update_trace_params(); // publish the level's new origin to the trace UBO
+	}
+	return clip_active;
+}
+
+void RadianceCascade::clip_scroll(int p_level, const Vector3 &p_cam_origin) {
+	// Same toroidal snap + leading-edge shell math as scroll_to, at this level's coarser voxel
+	// size / larger extent. First touch of a level (level_dirty) or a teleport = the whole grid.
+	clip_pending[p_level].clear();
+	const int R = vox_res;
+	const float vsize = (vox_extent.x / float(R)) * float(1 << p_level);
+	const float extent = vsize * float(R);
+	auto ovn_of = [&](const Vector3 &o) {
+		return Vector3i((int)Math::floor(o.x / vsize), (int)Math::floor(o.y / vsize), (int)Math::floor(o.z / vsize));
+	};
+	const Vector3i old_ovn = ovn_of(clip_origin[p_level]);
+	const Vector3 want_origin = p_cam_origin - Vector3(extent, extent, extent) * 0.5f;
+	const Vector3i new_ovn = ovn_of(want_origin);
+	const Vector3i delta = new_ovn - old_ovn;
+	const bool full = level_dirty[p_level] || Math::abs(delta.x) >= R || Math::abs(delta.y) >= R || Math::abs(delta.z) >= R;
+	clip_bake_full[p_level] = full;
+	if (!full && delta == Vector3i()) {
+		return; // no whole-voxel movement at this level this frame
+	}
+	clip_origin[p_level] = Vector3(new_ovn) * vsize;
+	clip_phase[p_level] = Vector3i(((new_ovn.x % R) + R) % R, ((new_ovn.y % R) + R) % R, ((new_ovn.z % R) + R) % R);
+	level_dirty[p_level] = false;
+	if (full) {
+		clip_pending[p_level].push_back({ Vector3i(), Vector3i(R, R, R) });
+		return;
+	}
+	for (int axis = 0; axis < 3; axis++) {
+		const int d = delta[axis];
+		if (d == 0) {
+			continue;
+		}
+		VoxelShell s;
+		s.lo = Vector3i();
+		s.dim = Vector3i(R, R, R);
+		s.dim[axis] = Math::abs(d);
+		s.lo[axis] = (d > 0) ? (R - Math::abs(d)) : 0;
+		clip_pending[p_level].push_back(s);
+	}
+}
+
+AABB RadianceCascade::clip_shell_bounds(int p_i) const {
+	const int L = clip_active;
+	const float vsize = (vox_extent.x / float(vox_res)) * float(1 << L);
+	const VoxelShell &s = clip_pending[L][p_i];
+	return AABB(clip_origin[L] + Vector3(s.lo) * vsize, Vector3(s.dim) * vsize);
+}
+
+void RadianceCascade::dispatch_clip_unpack(int p_level, const Vector3i &p_lo, const Vector3i &p_dim) {
+	// Unpack the shared packed render targets (just rasterized at this level's extent) into
+	// clip_grid[p_level] (occupancy in .a) + clip scratch (albedo/normal/emission). Same shader as
+	// the L0 unpack; the toroidal write uses this level's phase.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RCVoxelUnpackPushConstant pc = {};
+	pc.phase[0] = clip_phase[p_level].x;
+	pc.phase[1] = clip_phase[p_level].y;
+	pc.phase[2] = clip_phase[p_level].z;
+	pc.res = (uint32_t)vox_res;
+	pc.slab_lo[0] = p_lo.x;
+	pc.slab_lo[1] = p_lo.y;
+	pc.slab_lo[2] = p_lo.z;
+	pc.slab_dim[0] = p_dim.x;
+	pc.slab_dim[1] = p_dim.y;
+	pc.slab_dim[2] = p_dim.z;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.voxel_unpack_pipeline);
+	rd->compute_list_bind_uniform_set(l, clip_unpack_set[p_level], 0);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)p_dim.x + 3u) / 4u, ((uint32_t)p_dim.y + 3u) / 4u, ((uint32_t)p_dim.z + 3u) / 4u);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_clip_inject(int p_level, const Vector3i &p_lo, const Vector3i &p_dim) {
+	// Light a coarse level's shell: sun (from sun_dir/sun_color) + positional lights, no SDF march
+	// (vis from coarse occupancy; level 0 carries the sharp shadows). Indexes by absolute world
+	// voxel (slab_lo = level origin voxel + p_lo) so the toroidal cell matches the unpack's.
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	const int R = vox_res;
+	const float vsize = (vox_extent.x / float(R)) * float(1 << p_level);
+	const Vector3i ovn((int)Math::floor(clip_origin[p_level].x / vsize), (int)Math::floor(clip_origin[p_level].y / vsize), (int)Math::floor(clip_origin[p_level].z / vsize));
+	RCClipInjectSlabPushConstant pc = {};
+	pc.sun_dir[0] = sun_dir.x;
+	pc.sun_dir[1] = sun_dir.y;
+	pc.sun_dir[2] = sun_dir.z;
+	pc.blend_alpha = 1.0f;
+	pc.sun_color[0] = sun_color.x;
+	pc.sun_color[1] = sun_color.y;
+	pc.sun_color[2] = sun_color.z;
+	pc.voxel_size = vsize;
+	pc.slab_lo[0] = ovn.x + p_lo.x;
+	pc.slab_lo[1] = ovn.y + p_lo.y;
+	pc.slab_lo[2] = ovn.z + p_lo.z;
+	pc.res = (uint32_t)R;
+	pc.slab_dim[0] = p_dim.x;
+	pc.slab_dim[1] = p_dim.y;
+	pc.slab_dim[2] = p_dim.z;
+	pc.light_count = light_count;
+	pc.phase[0] = clip_phase[p_level].x;
+	pc.phase[1] = clip_phase[p_level].y;
+	pc.phase[2] = clip_phase[p_level].z;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.clip_inject_pipeline);
+	rd->compute_list_bind_uniform_set(l, clip_inject_set[p_level], 0);
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)p_dim.x + 3u) / 4u, ((uint32_t)p_dim.y + 3u) / 4u, ((uint32_t)p_dim.z + 3u) / 4u);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::unpack_voxels() {
+	for (const VoxelShell &s : pending_shells) {
+		dispatch_voxel_unpack(s.lo, s.dim);
+	}
+}
+
+void RadianceCascade::unpack_clip() {
+	if (clip_active < 1) {
+		return;
+	}
+	for (const VoxelShell &s : clip_pending[clip_active]) {
+		dispatch_clip_unpack(clip_active, s.lo, s.dim);
 	}
 }
 
@@ -1022,6 +1176,19 @@ void RadianceCascade::build_static_sets() {
 			u.push_back(img(3, clip_emission));
 			clip_slab_clear_set[L] = rd->uniform_set_create(u, RC_SHADER(slab_clear), 0);
 		}
+		{ // coarse unpack: shared packed render targets -> clip_grid[L] (occupancy) + clip scratch.
+			// Reuses rc_voxel_unpack (formats match voxel_*); the SDFGI rasterizer fills the packed
+			// targets at the coarse level's extent, this writes them toroidally into the coarse grid.
+			Vector<RD::Uniform> u;
+			u.push_back(img(0, render_albedo));
+			u.push_back(img(1, render_emission));
+			u.push_back(img(2, render_geom_facing));
+			u.push_back(img(3, clip_grid[L]));
+			u.push_back(img(4, clip_albedo));
+			u.push_back(img(5, clip_normal));
+			u.push_back(img(6, clip_emission));
+			clip_unpack_set[L] = rd->uniform_set_create(u, RC_SHADER(voxel_unpack), 0);
+		}
 	}
 
 	{ // level-0 voxelize set0
@@ -1203,6 +1370,11 @@ void RadianceCascade::update_lights(RenderDataRD *p_render_data) {
 		if (type == RSE::LIGHT_DIRECTIONAL) {
 			g.type = 0.0f;
 			g.inv_range = 0.0f;
+			// The coarse clip_inject takes the sun from its push constant (it skips directional
+			// lights in the buffer), so mirror this frame's directional light into sun_dir/sun_color.
+			// sun_dir points TOWARD the sun (-shine), so N.L lights up-facing surfaces under it.
+			sun_dir = -dir;
+			sun_color = Vector3(g.color[0], g.color[1], g.color[2]);
 		} else {
 			const float range = light_storage->light_get_param(base, RSE::LIGHT_PARAM_RANGE);
 			g.inv_range = range > 0.0f ? 1.0f / range : 0.0f;

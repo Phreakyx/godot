@@ -1639,10 +1639,24 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		// here, and its 1-frame opaque glitch is acceptable on a rare bake (invisible on frame 1).
 		// process() below then unpacks + injects whichever shells were recorded. Only the first
 		// region clears the targets (shells are disjoint in grid space).
-		if (p_render_data->instances != nullptr && rc->is_voxel_bake_full()) {
-			const int shell_count = rc->voxel_shell_count();
-			for (int s = 0; s < shell_count; s++) {
-				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+		if (p_render_data->instances != nullptr) {
+			// Coarse full bake (first touch of a level / teleport): rasterize + unpack here, where a
+			// full-grid submission is safe (it hangs hoisted). Done before L0's full bake so each
+			// consumes the shared packed scratch before the next overwrites it.
+			if (rc->clip_active_level() >= 1 && rc->is_clip_bake_full()) {
+				const int n = rc->clip_shell_count();
+				for (int s = 0; s < n; s++) {
+					_render_rc_voxelize(rb, rc->clip_shell_bounds(s), rc->clip_shell_offset(s), rc->clip_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+				}
+				rc->unpack_clip();
+			}
+			// L0 full first-frame/teleport bake.
+			if (rc->is_voxel_bake_full()) {
+				const int shell_count = rc->voxel_shell_count();
+				for (int s = 0; s < shell_count; s++) {
+					_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+				}
+				rc->unpack_voxels();
 			}
 		}
 
@@ -1819,12 +1833,29 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			rc = gi.create_rc(rb->get_internal_size());
 			rb->set_custom_data(RB_SCOPE_RC, rc);
 		}
-		rc->scroll_to(p_render_data->scene_data->cam_transform.origin);
+		const Vector3 cam_o = p_render_data->scene_data->cam_transform.origin;
+		// Coarse clipmap (open-space range): scroll ONE level per frame (round-robin) and rasterize
+		// its thin scrolled-in shells into the shared packed targets, then unpack IMMEDIATELY into
+		// clip_grid[level] -- before L0 reuses the same scratch below. Full coarse bakes (first touch
+		// / teleport) defer to the post-opaque hook (a full-grid submission hangs hoisted, like L0).
+		// process() lights the level afterward. The coarse levels extend GI range to ~1 km.
+		const int clip_level = rc->clip_step(cam_o);
+		if (clip_level >= 1 && !rc->is_clip_bake_full()) {
+			const int n = rc->clip_shell_count();
+			for (int s = 0; s < n; s++) {
+				_render_rc_voxelize(rb, rc->clip_shell_bounds(s), rc->clip_shell_offset(s), rc->clip_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+			}
+			rc->unpack_clip();
+		}
+		// L0 streaming voxelize (thin shells; full bake deferred to the post-opaque hook). Unpack
+		// immediately so the packed scratch is consumed before next frame's coarse level reuses it.
+		rc->scroll_to(cam_o);
 		if (!rc->is_voxel_bake_full()) {
 			const int shell_count = rc->voxel_shell_count();
 			for (int s = 0; s < shell_count; s++) {
 				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
 			}
+			rc->unpack_voxels();
 		}
 	}
 

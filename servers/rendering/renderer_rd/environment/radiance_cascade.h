@@ -511,6 +511,26 @@ public:
 	Vector3i voxel_shell_offset(int p_i) const { return pending_shells[p_i].lo; } // render-grid offset
 	Vector3i voxel_shell_size(int p_i) const { return pending_shells[p_i].dim; }
 	int voxel_resolution() const { return vox_res; }
+
+	// Coarse clipmap (open-space range). Scrolls one coarse level per call (round-robin over
+	// 1..clip_levels-1) and returns it, or -1 if nothing needs voxelizing this frame. The renderer
+	// rasterizes its shells into the shared packed targets (full bake post-opaque / thin shells
+	// hoisted, like L0); process() unpacks + injects them into clip_grid[level]. Coarse levels are
+	// 2x the voxel size / extent per level (128 m .. 1024 m), pre-lit radiance the trace samples for
+	// long range. One level per frame keeps the cost bounded and the scratch shared (no extra VRAM).
+	int clip_step(const Vector3 &p_cam_origin);
+	int clip_active_level() const { return clip_active; }
+	bool is_clip_bake_full() const { return clip_active >= 1 && clip_bake_full[clip_active]; }
+	int clip_shell_count() const { return clip_active >= 1 ? (int)clip_pending[clip_active].size() : 0; }
+	AABB clip_shell_bounds(int p_i) const; // world AABB of the active level's shell p_i
+	Vector3i clip_shell_offset(int p_i) const { return clip_pending[clip_active][p_i].lo; }
+	Vector3i clip_shell_size(int p_i) const { return clip_pending[clip_active][p_i].dim; }
+
+	// Unpack the packed render targets the renderer just rasterized into the voxel grids. Called
+	// IMMEDIATELY after each voxelize (at the same hook) so the shared packed scratch is consumed
+	// before the next voxelize (L0 or coarse) overwrites it. process() then injects/traces.
+	void unpack_voxels(); // L0: pending_shells -> voxel grid
+	void unpack_clip(); // active coarse level: clip_pending[clip_active] -> clip_grid[level]
 	RID get_render_albedo() const { return render_albedo; }
 	RID get_render_emission() const { return render_emission; }
 	RID get_render_emission_aniso() const { return render_emission_aniso; }
@@ -543,6 +563,9 @@ private:
 	void dispatch_patch_lookup(uint32_t p_debug_kind);
 	void dispatch_voxel_unpack(const Vector3i &p_lo, const Vector3i &p_dim); // packed render targets -> voxel grid (region)
 	void dispatch_inject(const Vector3i &p_lo, const Vector3i &p_dim); // direct light from light_buffer -> voxel_tex radiance (region)
+	void clip_scroll(int p_level, const Vector3 &p_cam_origin); // scroll one coarse level, fill clip_pending[level]
+	void dispatch_clip_unpack(int p_level, const Vector3i &p_lo, const Vector3i &p_dim); // packed targets -> clip_grid[L] + scratch
+	void dispatch_clip_inject(int p_level, const Vector3i &p_lo, const Vector3i &p_dim); // sun/lights -> clip_grid[L] radiance (region)
 	void dispatch_voxel_mips();
 	void dispatch_emission_mips();
 	void dispatch_voxel_debug();
@@ -696,7 +719,13 @@ private:
 	RID clip_voxelize_set[MAX_CLIP];
 	RID clip_inject_set[MAX_CLIP];
 	RID clip_slab_clear_set[MAX_CLIP];
+	RID clip_unpack_set[MAX_CLIP]; // packed render targets -> clip_grid[L] + clip scratch (reuses rc_voxel_unpack)
 	Vector3 clip_origin[MAX_CLIP];
+	Vector3i clip_phase[MAX_CLIP]; // origin_voxel % res, per level (toroidal addressing)
+	LocalVector<VoxelShell> clip_pending[MAX_CLIP]; // shells that scrolled into level L this frame
+	bool clip_bake_full[MAX_CLIP] = { false, false, false, false, false }; // L's pending bake is the whole grid
+	int clip_rr_cursor = 1; // round-robin: which coarse level gets rasterized this frame (1..clip_levels-1)
+	int clip_active = -1; // level chosen this frame (set by clip_step, read by the renderer + process)
 	RID clip_params_ubo;
 	RID dummy_clip_tex; // 1^3 black, fills unused bindings
 	RID clip_albedo, clip_normal, clip_emission; // shared coarse-voxelize scratch
