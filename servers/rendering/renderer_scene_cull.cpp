@@ -3289,6 +3289,16 @@ void RendererSceneCull::_scene_cull(CullData &cull_data, InstanceCullResult &cul
 			}
 		}
 
+		// Radiance Cascades: collect geometry inside the RC grid BOX regardless of the camera frustum, so the
+		// voxelize sees occluded/off-screen surfaces too (view-independent GI). Mirrors the sdfgi block above.
+		if (cull_data.cull->rc.enabled && cull_data.scenario->instance_aabbs[i].in_aabb(cull_data.cull->rc.box)) {
+			uint32_t base_type = idata.flags & InstanceData::FLAG_BASE_TYPE_MASK;
+			if (((1 << base_type) & RSE::INSTANCE_GEOMETRY_MASK) && (cull_data.visible_layers & idata.layer_mask)) {
+				cull_result.rc_geometry_instances.push_back(idata.instance_geometry);
+				mesh_visible = true;
+			}
+		}
+
 		if (mesh_visible && cull_data.scenario->instance_data[i].flags & InstanceData::FLAG_USES_MESH_INSTANCE) {
 			cull_result.mesh_instances.push_back(cull_data.scenario->instance_data[i].instance->mesh_instance);
 		}
@@ -3415,6 +3425,17 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 			}
 
 			cull.sdfgi.region_count = pending_region_count;
+		}
+	}
+
+	{ // Radiance Cascades: the camera-centred grid box the per-instance cull collects geometry into.
+		cull.rc.enabled = false;
+		if (p_reflection_probe.is_null()) {
+			AABB rc_box = scene_render->rc_get_voxelize_aabb(p_environment, camera_position);
+			if (rc_box.has_volume()) {
+				cull.rc.box = rc_box;
+				cull.rc.enabled = true;
+			}
 		}
 	}
 
@@ -3708,7 +3729,11 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 	}
 
 	RENDER_TIMESTAMP("Render 3D Scene");
+	// Hand the RC box-culled geometry to the renderer for its view-independent voxelize (consumed at the
+	// pre/post-opaque RC hooks inside render_scene); null when RC is off so the hooks use the visible set.
+	scene_render->set_rc_voxelize_instances(cull.rc.enabled ? &scene_cull_result.rc_geometry_instances : nullptr);
 	scene_render->render_scene(p_render_buffers, p_camera_data, prev_camera_data, scene_cull_result.geometry_instances, scene_cull_result.light_instances, scene_cull_result.reflections, scene_cull_result.voxel_gi_instances, scene_cull_result.decals, scene_cull_result.lightmaps, scene_cull_result.fog_volumes, p_environment, camera_attributes, p_compositor, p_shadow_atlas, occluders_tex, p_reflection_probe.is_valid() ? RID() : scenario->reflection_atlas, p_reflection_probe, p_reflection_probe_pass, p_screen_mesh_lod_threshold, render_shadow_data, max_shadows_used, render_sdfgi_data, cull.sdfgi.region_count, p_window_output_max_value, &sdfgi_update_data, r_render_info);
+	scene_render->set_rc_voxelize_instances(nullptr); // pointer into scene_cull_result; don't let it dangle
 
 	if (p_viewport.is_valid()) {
 		RSG::viewport->viewport_set_prev_camera_data(p_viewport, p_camera_data);

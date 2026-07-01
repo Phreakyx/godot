@@ -243,6 +243,13 @@ public:
 	int environment_get_rc_amortization(RID p_env) const;
 	int environment_get_rc_debug(RID p_env) const;
 
+	// Radiance Cascades box-cull plumbing. The scene cull collects geometry intersecting the RC grid box
+	// (rc_get_voxelize_aabb) — NOT just the camera-visible set — and hands that list to the renderer via
+	// set_rc_voxelize_instances, so RC's voxelize covers all in-range geometry → view-independent GI.
+	// Defaults: RC off (empty box disables the box-cull; null list = renderer falls back to the visible set).
+	virtual AABB rc_get_voxelize_aabb(RID p_environment, const Vector3 &p_camera_position) const { return AABB(); }
+	virtual void set_rc_voxelize_instances(const PagedArray<RenderGeometryInstance *> *p_instances) {}
+
 	// SDFGI
 	void environment_set_sdfgi(RID p_env, bool p_enable, int p_cascades, float p_min_cell_size, RSE::EnvironmentSDFGIYScale p_y_scale, bool p_use_occlusion, float p_bounce_feedback, bool p_read_sky, float p_energy, float p_normal_bias, float p_probe_bias);
 	bool environment_get_sdfgi_enabled(RID p_env) const;

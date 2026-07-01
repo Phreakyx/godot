@@ -1646,7 +1646,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 			if (rc->clip_active_level() >= 1 && rc->is_clip_bake_full()) {
 				const int n = rc->clip_shell_count();
 				for (int s = 0; s < n; s++) {
-					_render_rc_voxelize(rb, rc->clip_shell_bounds(s), rc->clip_shell_offset(s), rc->clip_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+					_render_rc_voxelize(rb, rc->clip_shell_bounds(s), rc->clip_shell_offset(s), rc->clip_shell_size(s), s == 0, rc_voxelize_instances ? *rc_voxelize_instances : *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
 				}
 				rc->unpack_clip();
 			}
@@ -1654,7 +1654,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 			if (rc->is_voxel_bake_full()) {
 				const int shell_count = rc->voxel_shell_count();
 				for (int s = 0; s < shell_count; s++) {
-					_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+					_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, rc_voxelize_instances ? *rc_voxelize_instances : *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
 				}
 				rc->unpack_voxels();
 			}
@@ -1843,7 +1843,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		if (clip_level >= 1 && !rc->is_clip_bake_full()) {
 			const int n = rc->clip_shell_count();
 			for (int s = 0; s < n; s++) {
-				_render_rc_voxelize(rb, rc->clip_shell_bounds(s), rc->clip_shell_offset(s), rc->clip_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+				_render_rc_voxelize(rb, rc->clip_shell_bounds(s), rc->clip_shell_offset(s), rc->clip_shell_size(s), s == 0, rc_voxelize_instances ? *rc_voxelize_instances : *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
 			}
 			rc->unpack_clip();
 		}
@@ -1853,7 +1853,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		if (!rc->is_voxel_bake_full()) {
 			const int shell_count = rc->voxel_shell_count();
 			for (int s = 0; s < shell_count; s++) {
-				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
+				_render_rc_voxelize(rb, rc->voxel_shell_bounds(s), rc->voxel_shell_offset(s), rc->voxel_shell_size(s), s == 0, rc_voxelize_instances ? *rc_voxelize_instances : *p_render_data->instances, rc->get_render_albedo(), rc->get_render_emission(), rc->get_render_emission_aniso(), rc->get_render_geom_facing(), 1.0);
 			}
 			rc->unpack_voxels();
 		}
@@ -3318,6 +3318,19 @@ void RenderForwardClustered::_render_sdfgi(Ref<RenderSceneBuffersRD> p_render_bu
 	}
 
 	RD::get_singleton()->draw_command_end_label();
+}
+
+AABB RenderForwardClustered::rc_get_voxelize_aabb(RID p_environment, const Vector3 &p_camera_position) const {
+	// The world-space box the scene cull collects voxelize geometry into: the RC grid is a camera-centred
+	// 64 m cube (RadianceCascade::vox_extent). Cull a couple of metres wider so the gather's edge neighbours
+	// and the per-frame lattice snap still have occupancy. Empty AABB ⇒ RC off ⇒ no box-cull.
+	if (p_environment.is_null() || !environment_get_rc_enabled(p_environment)) {
+		return AABB();
+	}
+	const float ext = 64.0f; // keep in sync with RadianceCascade::vox_extent
+	const float margin = 2.0f;
+	const Vector3 half = Vector3(ext, ext, ext) * 0.5f + Vector3(margin, margin, margin);
+	return AABB(p_camera_position - half, half * 2.0f);
 }
 
 void RenderForwardClustered::_render_rc_voxelize(Ref<RenderSceneBuffersRD> p_render_buffers, const AABB &p_bounds, const Vector3i &p_offset, const Vector3i &p_size, bool p_clear, const PagedArray<RenderGeometryInstance *> &p_instances, const RID &p_albedo_texture, const RID &p_emission_texture, const RID &p_emission_aniso_texture, const RID &p_geom_facing_texture, float p_exposure_normalization) {

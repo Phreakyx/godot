@@ -4,19 +4,23 @@
 
 #VERSION_DEFINES
 
-// Sparse-RC (cascaded, NON-SHARED) — ADD pass. DENSE-POOL find-or-allocate.
+// Sparse-RC (cascaded, NON-SHARED) — ADD pass. DENSE-POOL find-or-allocate, WORLD-SEEDED.
+//
+// Dispatched over the voxel-grid SHELL that streamed in this frame (one thread per shell voxel), NOT
+// over screen pixels. Occupied cells (voxel_occ.a) seed the 8 gather corners per cascade, so a probe
+// exists for every in-range surface regardless of camera facing — the fix for view-dependent GI.
 //
 // The hashmap was cleared and the rebuild pass re-inserted every ALIVE probe (key → dense id). So a
-// seeded cell is either FOUND here (a read → its stable dense id) or ABSENT (new this frame, or
-// returned after eviction) → we ALLOCATE a fresh dense id (pop the free-list, else bump a counter) and
-// insert it. Probe identity is the dense id, not the slot, so the hashmap can churn freely with no
-// effect on radiance. Per seeded cell we mark_seen: stamp last_seen and append to the live list once.
+// seeded cell is either FOUND here (a read → its stable dense id; nothing more to do — rebuild already
+// kept it alive + in the live list) or ABSENT (new, or returned after eviction) → we ALLOCATE a fresh
+// dense id (pop the free-list, else bump a counter), insert it, and seed_new() appends it to the live
+// list with the bootstrap bit. Probe identity is the dense id, not the slot, so the map churns freely.
 //
-// Concurrent insert of one new cell by its many pixels: the SINGLE thread that wins the slot's .x CAS
-// allocates the id and publishes .y; siblings that see the slot mid-insert (.y == INVALID) just give up
-// for the frame — the winner already seeded it, so there's no double-allocation and no duplicate.
+// Concurrent insert of one cell by its many corner-touchers: the SINGLE thread that wins the slot's .x
+// CAS allocates the id and publishes .y; siblings that see it mid-insert (.y == INVALID) give up for the
+// frame — the winner already seeded it, so there's no double-allocation and no duplicate.
 
-layout(local_size_x = 8, local_size_y = 8) in;
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0, std430) coherent buffer Buckets {
 	uvec2 buckets[];
@@ -49,15 +53,16 @@ layout(set = 0, binding = 11, std430) coherent buffer FreeList {
 layout(set = 0, binding = 12, std430) coherent buffer AllocState {
 	uint alloc_state[];
 }; // [c*2]=free_top,[c*2+1]=next_id
-layout(set = 0, binding = 5, std140) uniform CameraData {
-	mat4 inv_proj;
-	mat4 inv_view;
-	mat4 fwd_proj;
-	mat4 fwd_view;
-	vec2 jitter;
-	vec2 _pad;
-}
-cam;
+// Static occupancy (dedicated r8 mirror written by the inject pass) — NOT voxel_tex (sampling voxel_tex
+// here aliases the trace's set-2 sampler → device lost). Read as a STORAGE image (imageLoad), matching
+// inject's storage write, so occ_tex stays in GENERAL layout throughout — no storage→sampler transition
+// (the missing transition between inject and this pass on the full bake hung the early frames).
+layout(set = 0, binding = 6, r8) uniform readonly image3D occ_grid;
+// Voxel face normal (same grid the inject reads). We seed from the surface FACE (voxel centre + n·½voxel),
+// not the centre, so the seeded probe corners line up with where the screen-space GATHER samples (the face,
+// from depth). Without this the corners are half a voxel behind the face → on sub-spacing walls every corner
+// lands behind the surface and the gather's facing test drops them (the red holes we were papering over).
+layout(set = 0, binding = 5, rgba8) uniform readonly image3D normal_grid;
 
 struct CascadeDesc {
 	float spacing;
@@ -77,27 +82,20 @@ layout(set = 0, binding = 7, std430) readonly buffer Cascades {
 	CascadeDesc cascades[];
 };
 
-layout(set = 1, binding = 0) uniform sampler2D depth_input;
-
 layout(push_constant) uniform PC {
-	uint screen_width, screen_height, cascade_begin, cascade_end;
-	float z_near, z_far;
-	uint frame, _p2;
+	ivec3 seed_lo; // absolute world voxel of the shell corner
+	uint cascade_begin;
+	ivec3 seed_dim; // shell size in voxels (dispatch extent)
+	uint cascade_end;
+	uint res; // vox_res (toroidal modulus)
+	float voxel_size;
+	uint frame;
+	uint _pad;
 }
 pc;
 
 const uint EMPTY = 0xffffffffu, INVALID = 0xffffffffu, MAX_LINEAR = 64u;
 
-float linearize_depth(float raw) {
-	return (raw < 0.00001) ? pc.z_far : pc.z_near / raw;
-}
-vec3 screen_to_world(vec2 sc, float lin) {
-	vec2 ndc = (sc + 0.5) / vec2(pc.screen_width, pc.screen_height) * 2.0 - 1.0;
-	ndc.y = -ndc.y;
-	vec4 vh = cam.inv_proj * vec4(ndc, 1.0, 1.0);
-	vec3 vd = vh.xyz / vh.w;
-	return (cam.inv_view * vec4(vd * (lin / -vd.z), 1.0)).xyz;
-}
 uint hash_ivec4(ivec4 k) {
 	uint h = uint(k.x) * 73856093u ^ uint(k.y) * 19349663u ^ uint(k.z) * 83492791u ^ uint(k.w) * 2654435761u;
 	h ^= h >> 15;
@@ -177,29 +175,37 @@ void touch_cell(uint c, ivec3 cell, vec3 center) {
 }
 
 void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (px.x >= int(pc.screen_width) || px.y >= int(pc.screen_height)) {
+	// One thread per shell voxel (world seeding). The dispatch covers [seed_lo, seed_lo+seed_dim) in
+	// ABSOLUTE world voxels; read occupancy at the toroidal cell and seed probes only where there's a
+	// surface. This is view-independent: a probe exists for an occupied cell whenever it's in range,
+	// no matter where the camera looks. (Replaces screen-pixel + depth seeding.)
+	ivec3 off = ivec3(gl_GlobalInvocationID);
+	if (any(greaterThanEqual(off, pc.seed_dim))) {
 		return;
 	}
-	vec2 uv = (vec2(px) + 0.5) / vec2(pc.screen_width, pc.screen_height);
-	float raw = texture(depth_input, uv).r;
-	if (raw < 0.00001) {
-		return;
+	ivec3 wv = pc.seed_lo + off; // absolute world voxel
+	int R = int(pc.res);
+	ivec3 cell = ((wv % R) + R) % R; // toroidal grid cell
+	if (imageLoad(occ_grid, cell).r < 0.5) {
+		return; // empty voxel — no surface here, no probe
 	}
-
-	vec3 world = screen_to_world(vec2(px), linearize_depth(raw));
+	// Seed from the surface FACE, not the voxel centre: push out along the voxel normal by half a voxel so
+	// the 8 gather-corner cells we touch match the ones the screen gather (which samples the face) reads.
+	vec3 nrm = imageLoad(normal_grid, cell).rgb * 2.0 - 1.0;
+	nrm = (dot(nrm, nrm) > 0.0001) ? normalize(nrm) : vec3(0.0);
+	vec3 world = (vec3(wv) + 0.5 + nrm * 0.5) * pc.voxel_size; // voxel centre + n·½voxel → surface face
 
 	for (uint c = pc.cascade_begin; c < pc.cascade_end; ++c) {
 		float s = cascades[c].spacing;
-		// Insert the 8 cells the GATHER will trilinear-read for this surface point (gather bases at
-		// floor(world/s - 0.5); match exactly so no neighbour is missing). Nearest-only undersamples at
-		// grazing angles (dead probes on receding floors), so keep the 8-corner splat.
+		// Seed the 8 cells the GATHER will trilinear-read for this surface point (gather bases at
+		// floor(world/s - 0.5); match exactly so no neighbour is missing). The 8-corner splat avoids
+		// dead probes at grazing angles.
 		vec3 sp = world / s - 0.5;
 		ivec3 b = ivec3(floor(sp));
 		for (int o = 0; o < 8; ++o) {
-			ivec3 cell = b + ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
-			vec3 center = (vec3(cell) + 0.5) * s;
-			touch_cell(c, cell, center);
+			ivec3 cl = b + ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
+			vec3 center = (vec3(cl) + 0.5) * s;
+			touch_cell(c, cl, center);
 		}
 	}
 }

@@ -265,6 +265,7 @@ void RadianceCascade::free_resources() {
 	}
 	fr(dyn_occ);
 	fr(dyn_occ_acc);
+	fr(occ_tex);
 
 	// SDF + clip grids + buffers.
 	fr(sdf_tex);
@@ -374,6 +375,8 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	// Dynamic occupancy + its persistent temporal accumulator (r8).
 	dyn_occ = make_tex(RD::DATA_FORMAT_R8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_occ);
 	dyn_occ_acc = make_tex(RD::DATA_FORMAT_R8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_occ);
+	occ_tex = make_tex(RD::DATA_FORMAT_R8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_occ); // static occupancy for the seed pass
+	rd->texture_clear(occ_tex, Color(0, 0, 0, 0), 0, 1, 0, 1);
 	rd->texture_clear(dyn_occ_acc, Color(0, 0, 0, 0), 0, 1, 0, 1);
 
 	// Geometry voxelization render targets (packed, SDFGI PASS_MODE_SDF output format).
@@ -440,7 +443,7 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 
 	// Probe store: the cascade table sizes every parallel SSBO below.
 	build_cascade_table();
-	patch_alloc = rd->storage_buffer_create(sizeof(uint32_t) * MAX_CASCADES);
+	patch_alloc = filled_buffer(sizeof(uint32_t) * MAX_CASCADES, 0); // zeroed: pre-clear reads must not see garbage
 	patch_keys = rd->storage_buffer_create(total_probes * sizeof(int32_t) * 4); // ivec4 key/slot
 	patch_world = rd->storage_buffer_create(total_probes * sizeof(float) * 4); // vec4 world pos
 	probe_radiance = rd->storage_buffer_create(total_rad * sizeof(uint32_t)); // packed rgba, 4 B/(probe,dir)
@@ -452,7 +455,16 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	patch_live = rd->storage_buffer_create(total_probes * sizeof(uint32_t)); // compact live-id list
 	patch_freelist = rd->storage_buffer_create(total_probes * sizeof(uint32_t)); // recycled dense ids
 	patch_alloc_state = filled_buffer(MAX_CASCADES * 2 * sizeof(uint32_t), 0); // (free_top, next_id) per cascade
-	patch_indirect_buffer = rd->storage_buffer_create(sizeof(uint32_t) * 3 * 2 * MAX_CASCADES, Span<uint8_t>(), RD::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
+	{ // ZERO-INITIALIZED indirect args. The indirect-build → dispatch_indirect barrier in dispatch_patch_trace
+		// does not cover INDIRECT_COMMAND_READ, so the very first dispatch_indirect reads this buffer's INITIAL
+		// contents (before the build's write is visible). Uninitialized garbage there (e.g. 1.8 B) → ~28 M
+		// workgroups → instant GPU hang on the load frame. Zeroed → 0 groups → a harmless skipped first trace.
+		const uint32_t isz = sizeof(uint32_t) * 3 * 2 * MAX_CASCADES;
+		Vector<uint8_t> iz;
+		iz.resize(isz);
+		memset(iz.ptrw(), 0, isz);
+		patch_indirect_buffer = rd->storage_buffer_create(isz, Span<uint8_t>(iz.ptr(), iz.size()), RD::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
+	}
 
 	// Angular pre-reduce scratch: peak over the r>1 folds (dense id space).
 	uint32_t reduced_max = 0;
@@ -525,40 +537,75 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	frame_color = p_color;
 	frame_ambient = p_ambient;
 	rebuild_per_frame_sets();
-	if (patch_add_set1.is_null() || patch_lookup_set1.is_null()) {
-		return; // no depth this frame
+	if (patch_lookup_set1.is_null()) {
+		return; // no depth this frame (lookup/gather composite to screen still needs it; ADD does not)
 	}
 
-	// The renderer just rasterized the shell(s) that scrolled into view (a thin band during
-	// motion, the whole grid on the first frame / teleport) AND unpacked them into the grid (the
-	// unpack runs at the renderer's voxelize hook now, so the shared packed scratch is consumed
-	// before coarse levels reuse it -- see unpack_voxels()). Here we only (re)light those cells:
-	// build the global SDF, inject, rebuild cone-trace mips. Thin shell, not a full re-bake.
-	if (!pending_shells.is_empty()) {
-		// Build the SDF SYNCHRONOUSLY this frame. The jump-flood distance math is phase-relative
-		// (rc3d_voxel_sdf.glsl rel(c) = (c - phase) % R), so seed/flood/finalize must all run under
-		// ONE toroidal phase. The grid scrolls every frame (no dead-zone gate), so an amortized
-		// flood spread over ~5 frames would mix phases between its passes -> a fully-built GARBAGE
-		// field -> the cone trace over-skips -> whole-level white flash when each bad field
-		// finalizes. A one-shot build under the current frame's fixed phase is always consistent.
-		// A full bake (first frame / teleport) refloods the whole field; a normal per-scroll bake
-		// refloods only the thin shell(s) that streamed in + a margin, keeping the rest of the field
-		// (cheap). inject runs after so sun visibility uses the freshly-built field.
+	// The renderer just rasterized + unpacked the shell(s) that scrolled in (a thin band during motion, the
+	// whole grid on first frame / teleport) into the grid's occupancy. Re-light ONLY those cells here — the
+	// inject's per-cell sun-march is the costly part, so keeping it shell-local is what makes streaming cheap
+	// (re-lighting the WHOLE grid every frame roughly halved fps). BUT build the SDF FULLY first: the old
+	// localized build_sdf_region reflooded only the shell + a margin and min()-accumulated stale near-
+	// occluders, so the cone/inject saw WRONG shadows that differed by approach direction → the same spot
+	// looked lit or dark depending on which side you came from. A full reflood runs under ONE toroidal phase
+	// and is always correct, so each cell is injected ONCE with a correct SDF and stays correct (static scene)
+	// → position-independent, no per-frame full re-light. SDF→inject is one ordered chain (inject reads the
+	// freshly built sdf_tex). Standing still = no scroll = no work; the last (correct) inject persists.
+	const bool scrolled = !pending_shells.is_empty();
+	const uint32_t INJECT_AMORTIZE = 8u; // full grid re-lit every 8 frames (~imperceptible settle)
+	if (scrolled) {
+		// Localized SDF on scroll (full only on first bake / teleport): cheap, no per-scroll reflood spike.
+		// The SDF feeds the inject's sun/light visibility (window-relative march) and the cone trace.
 		if (voxel_bake_full || !sdf_built_once) {
 			build_sdf();
 		} else {
 			for (const VoxelShell &s : pending_shells) {
-				// shell is window-relative full-res render-grid voxels -> half-res (ceil the size).
 				build_sdf_region(s.lo / 2, (s.dim + Vector3i(1, 1, 1)) / 2);
 			}
 		}
 		sdf_built_once = true;
 		for (const VoxelShell &s : pending_shells) {
-			dispatch_inject(s.lo, s.dim);
+			dispatch_inject(s.lo, s.dim); // immediate light for the newly-scrolled cells (current window)
 		}
-		dispatch_voxel_mips();
-		dispatch_emission_mips();
+		// Capture the scrolled-in regions for the probe-seed pass (occupancy now fresh). A FULL bake = the
+		// whole grid as one shell; seeding it in one dispatch is a ~16.7 M-thread atomic storm that hangs the
+		// GPU, so route it to the amortized Y-slab seeder (seed_full_*); thin per-scroll shells seed in one go.
+		if (voxel_bake_full) {
+			seed_full_pending = true;
+			seed_full_y = 0;
+			seed_shells.clear();
+		} else {
+			seed_shells = pending_shells;
+		}
 		pending_shells.clear();
+	}
+
+	// AMORTIZED full re-light: re-inject one rotating Y-slab of the grid each frame so EVERY cell refreshes
+	// with the CURRENT (camera-centred) window within INJECT_AMORTIZE frames. The per-shell inject above lights
+	// a cell correctly ONCE (at scroll-in), but its sun visibility is window-relative (rc_voxel_inject marches
+	// the SDF only to the window edge), so leaving that result frozen made the same spot look lit or dark by
+	// approach direction. Re-applying it with the current window un-freezes it — the consistency full-relight
+	// gave, at ~1/N the cost. The L0 grid is refreshed EVERY frame, so the NEAR GI (which the floor gathers
+	// from L0 directly) is always consistent. Needs the SDF built (above, on scroll / at bake).
+	if (sdf_built_once) {
+		const int slab = (vox_res + int(INJECT_AMORTIZE) - 1) / int(INJECT_AMORTIZE);
+		const int y0 = int(frame_index % INJECT_AMORTIZE) * slab;
+		const int dy = MIN(slab, vox_res - y0);
+		if (dy > 0) {
+			dispatch_inject(Vector3i(0, y0, 0), Vector3i(vox_res, dy, vox_res));
+		}
+	}
+
+	// Radiance mip chain: rebuild on scroll (leading-edge geometry changed) OR once per amortize cycle (the
+	// rotating re-light has refreshed the whole grid by then). Throttling the standstill rebuild is what keeps
+	// the fps — the mips feed only the FAR/coarse cone samples (near GI is L0-direct), so a few-frame lag is
+	// invisible. Emission mips only on scroll: the emission grid changes only when geometry is (re)voxelized,
+	// never from the inject, so rebuilding it every frame was pure waste (the bulk of the lost fps).
+	if (scrolled || (sdf_built_once && (frame_index % INJECT_AMORTIZE) == 0u)) {
+		dispatch_voxel_mips();
+	}
+	if (scrolled) {
+		dispatch_emission_mips();
 	}
 
 	// Coarse clipmap: the renderer rasterized + unpacked this frame's one round-robin level into
@@ -725,6 +772,7 @@ void RadianceCascade::scroll_to(const Vector3 &p_cam_origin) {
 	const Vector3 want_origin = p_cam_origin - vox_extent * 0.5f;
 	const Vector3i new_ovn = ovn_of(want_origin);
 	const Vector3i delta = new_ovn - old_ovn;
+	origin_voxel = new_ovn; // absolute grid min corner in voxels (the ADD seed pass needs it)
 
 	const bool full = voxel_dirty || Math::abs(delta.x) >= R || Math::abs(delta.y) >= R || Math::abs(delta.z) >= R;
 	voxel_bake_full = full; // tells the renderer which hook to voxelize this frame's bake at
@@ -959,15 +1007,16 @@ void RadianceCascade::build_static_sets() {
 		patch_clear_set0 = rd->uniform_set_create(u, RC_SHADER(patch_clear), 0);
 	}
 
-	{ // patch add (+ camera at b5, cascade table at b7). ADD appends only its NEW allocs to the live list;
-		// REBUILD appends carried-over probes + owns eviction.
+	{ // patch add: world seeding from voxel-grid occupancy (b6 = voxel_tex, cascade table b7). ADD appends
+		// only its NEW allocs to the live list; REBUILD appends carried-over probes + owns eviction.
 		Vector<RD::Uniform> u;
 		u.push_back(ssbo(0, patch_buckets));
 		u.push_back(ssbo(1, patch_alloc));
 		u.push_back(ssbo(2, patch_keys));
 		u.push_back(ssbo(3, patch_world));
 		u.push_back(ssbo(4, patch_live));
-		u.push_back(ubo(5, camera_ubo));
+		u.push_back(img(6, occ_tex)); // static occupancy seed source (storage read, GENERAL — no layout transition)
+		u.push_back(img(5, voxel_normal)); // voxel normal (storage read, GENERAL) — offset the seed to the surface face
 		u.push_back(ssbo(7, cascade_buffer));
 		u.push_back(ssbo(8, probe_rad_tag));
 		u.push_back(ssbo(10, probe_last_seen));
@@ -1005,6 +1054,7 @@ void RadianceCascade::build_static_sets() {
 		u.push_back(ssbo(1, patch_alloc));
 		u.push_back(ssbo(3, patch_world));
 		u.push_back(ssbo(4, patch_live));
+		u.push_back(ubo(5, camera_ubo)); // frustum-limited tracing
 		u.push_back(ssbo(6, probe_radiance));
 		u.push_back(ssbo(7, cascade_buffer));
 		patch_trace_set0 = rd->uniform_set_create(u, RC_SHADER(patch_trace), 0);
@@ -1015,6 +1065,7 @@ void RadianceCascade::build_static_sets() {
 		u.push_back(ssbo(1, patch_alloc));
 		u.push_back(ssbo(3, patch_world));
 		u.push_back(ssbo(4, patch_live));
+		u.push_back(ubo(5, camera_ubo)); // frustum-limited (lockstep with trace)
 		u.push_back(ssbo(9, patch_neighbours));
 		u.push_back(ssbo(6, probe_radiance));
 		u.push_back(ssbo(7, cascade_buffer));
@@ -1142,6 +1193,7 @@ void RadianceCascade::build_static_sets() {
 		u.push_back(tex(3, voxel_sampler, sdf_tex));
 		u.push_back(img(4, voxel_emission));
 		u.push_back(ssbo(5, light_buffer));
+		u.push_back(img(6, occ_tex)); // static occupancy mirror for the seed pass
 		inject_set0 = rd->uniform_set_create(u, RC_SHADER(voxel_inject), 0);
 	}
 
@@ -1325,9 +1377,7 @@ void RadianceCascade::rebuild_per_frame_sets() {
 	patch_lookup_set1 = usc->get_cache(sh.patch_lookup.version_get_shader(sh.patch_lookup_shader, 0), 1,
 			tex(0, depth_sampler, frame_depth), tex(1, normal_sampler, frame_normal));
 
-	// add set1: depth(0) only
-	patch_add_set1 = usc->get_cache(sh.patch_add.version_get_shader(sh.patch_add_shader, 0), 1,
-			tex(0, depth_sampler, frame_depth));
+	// (ADD no longer uses a per-frame set: it seeds from the persistent voxel-grid occupancy, not depth.)
 
 	{ // upsample set0: half-res irradiance in (b0), RB_TEX_AMBIENT out (b1)
 		const RID out = frame_ambient.is_valid() ? frame_ambient : irradiance_tex;
@@ -1458,39 +1508,72 @@ void RadianceCascade::dispatch_patch_rebuild() {
 }
 
 void RadianceCascade::dispatch_patch_add() {
-	// Persistent find-or-insert. Pass A seeds cascade 0 on the gather's half-res
-	// lattice; Pass B seeds the coarse cascades on a lower-density seed lattice.
+	// World seeding: find-or-allocate probes from voxel-grid OCCUPANCY over the shell(s) that streamed
+	// in this frame (their occupancy in voxel_tex is fresh). One thread per shell voxel; occupied cells
+	// seed the 8 gather corners for every cascade. View-independent (no screen/depth): a probe exists
+	// for an occupied cell whenever that cell is in range, regardless of camera facing. Empty seed_shells
+	// (no scroll this frame) → nothing to do; existing in-range probes persist + keep tracing (rebuild).
+	if (seed_shells.is_empty() && !seed_full_pending && !sdf_built_once) {
+		return; // nothing voxelized yet (the continuous re-seed below runs once occupancy exists)
+	}
+	const float vsize = vox_extent.x / float(vox_res);
 	RadianceCascadeShaders &sh = *gi->rc_shader;
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.patch_add_pipeline);
 	rd->compute_list_bind_uniform_set(l, patch_add_set0, 0);
-	rd->compute_list_bind_uniform_set(l, patch_add_set1, 1);
 
-	{ // Pass A -- cascade 0, half-res lattice
+	// Seed one window-relative region [lo_rel, lo_rel+dim) of occupied cells (one thread per voxel).
+	auto seed_region = [&](const Vector3i &lo_rel, const Vector3i &dim) {
 		RCPatchAddPushConstant pc = {};
-		pc.screen_width = (uint32_t)half_size.x;
-		pc.screen_height = (uint32_t)half_size.y;
+		pc.seed_lo[0] = origin_voxel.x + lo_rel.x; // absolute world voxel of the region corner
+		pc.seed_lo[1] = origin_voxel.y + lo_rel.y;
+		pc.seed_lo[2] = origin_voxel.z + lo_rel.z;
+		pc.seed_dim[0] = dim.x;
+		pc.seed_dim[1] = dim.y;
+		pc.seed_dim[2] = dim.z;
 		pc.cascade_begin = 0;
-		pc.cascade_end = 1;
-		pc.z_near = z_near;
-		pc.z_far = z_far;
-		pc.frame = frame_index;
-		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
-		rd->compute_list_dispatch(l, ((uint32_t)half_size.x + 7u) / 8u, ((uint32_t)half_size.y + 7u) / 8u, 1);
-	}
-	{ // Pass B -- coarse cascades 1..N-1, seed lattice
-		const uint32_t seed_h = MIN((uint32_t)screen_size.y, (uint32_t)probe_seed_max_h);
-		const uint32_t seed_w = (uint32_t)Math::round(double(screen_size.x) * double(seed_h) / double(screen_size.y));
-		RCPatchAddPushConstant pc = {};
-		pc.screen_width = seed_w;
-		pc.screen_height = seed_h;
-		pc.cascade_begin = 1;
 		pc.cascade_end = MAX_CASCADES;
-		pc.z_near = z_near;
-		pc.z_far = z_far;
+		pc.res = (uint32_t)vox_res;
+		pc.voxel_size = vsize;
 		pc.frame = frame_index;
 		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
-		rd->compute_list_dispatch(l, (seed_w + 7u) / 8u, (seed_h + 7u) / 8u, 1);
+		rd->compute_list_dispatch(l, ((uint32_t)dim.x + 3u) / 4u, ((uint32_t)dim.y + 3u) / 4u, ((uint32_t)dim.z + 3u) / 4u);
+	};
+
+	for (const VoxelShell &s : seed_shells) {
+		seed_region(s.lo, s.dim); // thin per-scroll shells (small, seed in one go)
+	}
+	seed_shells.clear();
+
+	// Drain a few slabs of the amortized full-bake seed (spreads the 16.7 M-thread storm over frames).
+	if (seed_full_pending) {
+		const int SLAB = 4; // voxels in Y per slab (conservative: low per-frame bootstrap-trace load)
+		const int SLABS_PER_FRAME = 1; // ~64 frames (~1 s) to fill the 256-tall grid, bottom-up
+		for (int k = 0; k < SLABS_PER_FRAME && seed_full_pending; k++) {
+			const int dimy = MIN(SLAB, vox_res - seed_full_y);
+			seed_region(Vector3i(0, seed_full_y, 0), Vector3i(vox_res, dimy, vox_res));
+			seed_full_y += SLAB;
+			if (seed_full_y >= vox_res) {
+				seed_full_pending = false;
+			}
+		}
+	}
+
+	// CONTINUOUS amortized re-seed: cover one rotating Y-slab of the grid from occupancy EVERY frame, so every
+	// occupied cell gets a probe within N frames regardless of scroll/bake history. The one-shot bottom-up
+	// seed_full fill restarts at the floor on every full bake (frequent under fast movement) and never climbs
+	// to the walls/ceiling, so those stayed unseeded (red in the probe debug) even though their occupancy is
+	// correct (visible in the Voxel-Grid view). This self-heals that. Idempotent: an already-seeded cell just
+	// re-FINDS its probe (no alloc, no bootstrap-trace); only genuinely new cells allocate. Needs occupancy
+	// (sdf_built_once ⇒ the inject has mirrored voxel_tex.a → occ_tex at least once).
+	if (sdf_built_once) {
+		const int N = 8; // full grid re-seeded every 8 frames (~imperceptible heal latency)
+		const int slab = (vox_res + N - 1) / N;
+		const int y0 = int(frame_index % uint32_t(N)) * slab;
+		const int dy = MIN(slab, vox_res - y0);
+		if (dy > 0) {
+			seed_region(Vector3i(0, y0, 0), Vector3i(vox_res, dy, vox_res));
+		}
 	}
 	rd->compute_list_end();
 }
@@ -1520,6 +1603,8 @@ void RadianceCascade::dispatch_patch_trace() {
 			pc.local_transmittance = local_transmittance ? 1u : 0u;
 			pc.frame = frame_index;
 			pc.amortize_n = eff_amortize;
+			pc.probe_amortize = probe_amortize;
+			pc.frustum_margin = frustum_margin;
 			rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
 			rd->compute_list_dispatch_indirect(l, patch_indirect_buffer, c * 12);
 		}
@@ -1565,6 +1650,8 @@ void RadianceCascade::dispatch_patch_merge() {
 		pc.cascade = (uint32_t)c;
 		pc.frame = frame_index;
 		pc.amortize_n = eff_amortize;
+		pc.probe_amortize = probe_amortize;
+		pc.frustum_margin = frustum_margin;
 		RD::ComputeListID l = rd->compute_list_begin();
 		rd->compute_list_bind_compute_pipeline(l, sh.patch_merge_pipeline);
 		rd->compute_list_bind_uniform_set(l, patch_merge_set0, 0);

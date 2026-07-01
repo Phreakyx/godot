@@ -124,15 +124,17 @@ struct RCPatchRebuildPushConstant {
 	float win_max[4]; // xyz = vox_origin + vox_extent
 };
 
-// rc_patch_add.glsl — find-or-allocate probes for a screen-pixel grid over cascades [begin,end).
+// rc_patch_add.glsl — find-or-allocate probes from VOXEL-GRID OCCUPANCY over a shell region (world
+// seeding, not screen): dispatched over [seed_lo, seed_lo+seed_dim) absolute world voxels; occupied
+// cells seed the 8 gather corners per cascade [begin,end). Replaces the old screen-pixel + depth seed.
 struct RCPatchAddPushConstant {
-	uint32_t screen_width;
-	uint32_t screen_height;
+	int32_t seed_lo[3]; // absolute world voxel of the shell corner (origin_voxel + shell.lo)
 	uint32_t cascade_begin;
+	int32_t seed_dim[3]; // shell size in voxels (dispatch extent)
 	uint32_t cascade_end;
-	float z_near;
-	float z_far;
-	uint32_t frame; // stamps last_seen (persistence + live dedup)
+	uint32_t res; // vox_res (toroidal modulus)
+	float voxel_size;
+	uint32_t frame;
 	uint32_t pad;
 };
 
@@ -149,6 +151,8 @@ struct RCPatchTracePushConstant {
 	uint32_t local_transmittance;
 	uint32_t frame;
 	uint32_t amortize_n;
+	uint32_t probe_amortize; // per-PROBE amortization (bounds trace cost at world-seeding probe counts)
+	float frustum_margin; // NDC margin; probes outside the view frustum+margin are not re-traced
 };
 
 // rc_patch_lookup.glsl — debug readout of probes / radiance for one cascade.
@@ -181,7 +185,8 @@ struct RCPatchMergePushConstant {
 	uint32_t cascade;
 	uint32_t frame;
 	uint32_t amortize_n;
-	uint32_t pad;
+	uint32_t probe_amortize; // per-PROBE amortization, in LOCKSTEP with trace
+	float frustum_margin; // LOCKSTEP with trace
 };
 
 // rc3d_voxel_emission_mip.glsl — downsample one emission mip level.
@@ -636,6 +641,14 @@ private:
 	RID reduced_radiance; // angular pre-reduce scratch (merge ratio > 1)
 	RID probe_inspect_buffer; // debug readback
 	uint32_t evict_age = 60;
+	// FRUSTUM-LIMITED tracing: the trace/merge only re-trace probes inside the view frustum expanded by
+	// frustum_margin (NDC); off-screen probes keep cached radiance. This is the primary cost bound for the
+	// ~1M world-seeded probes. probe_amortize then amortizes the surviving frustum probes over frames.
+	uint32_t probe_amortize = 16;
+	// < 0 → trace EVERY in-window probe (view-independent, no black-behind-camera; the default now that the
+	// marches are confirmed cheap). >= 0 → frustum-cull the trace with this NDC margin (cost bound for huge
+	// scenes, but leaves never-faced probes black). See rc_patch_trace.glsl.
+	float frustum_margin = -1.0f;
 
 	// ── Patch per-frame uniform sets (depth + normal) ──
 	RID patch_add_set0, patch_add_set1;
@@ -659,6 +672,7 @@ private:
 	int vox_res = 256;
 	Vector3 vox_origin = Vector3(-32, -2, -32);
 	Vector3 vox_extent = Vector3(64, 64, 64);
+	Vector3i origin_voxel; // grid min corner in absolute voxel units (vox_origin / voxel_size)
 	Vector3i vox_phase; // origin_voxel % res (toroidal addressing)
 	bool voxel_dirty = true; // force a full re-voxelize next scroll_to (first frame / teleport)
 	bool voxel_bake_full = false; // last scroll_to produced a full-grid bake (first frame / teleport)
@@ -670,6 +684,15 @@ private:
 		Vector3i dim;
 	};
 	LocalVector<VoxelShell> pending_shells;
+	// Shells voxelized THIS frame, captured for the probe-seed (ADD) pass: their occupancy in voxel_tex
+	// is fresh, so ADD seeds probes for the cells that just streamed in (world seeding). Empty on frames
+	// with no scroll → no new seeding (existing in-range probes persist + keep tracing).
+	LocalVector<VoxelShell> seed_shells;
+	// A FULL bake (first frame / teleport) would seed the whole 256^3 grid in ONE add dispatch — a
+	// ~16.7 M-thread atomic-hashmap storm that TDRs the GPU. Instead, amortize it: seed Y-slabs over
+	// several frames. seed_full_y is the next slab's lo; pending clears when it reaches the top.
+	bool seed_full_pending = false;
+	int seed_full_y = 0;
 
 	// ── Geometry voxelization render targets (SDFGI-style PASS_MODE_SDF output) ──
 	// The renderer rasterizes scene instances into these packed integer grids; an
@@ -693,6 +716,10 @@ private:
 	RID slab_clear_set;
 	RID dyn_occ; // r8 dynamic occupancy
 	RID dyn_occ_acc; // temporally accumulated occupancy
+	RID occ_tex; // r8 STATIC occupancy mirror of voxel_tex.a, written by the inject pass. The ADD (probe
+	// seed) pass samples THIS, never voxel_tex — voxel_tex is sampled by the trace (set 2), and adding a
+	// second sampler usage of it in add broke Godot's image-layout tracking → device lost. occ_tex is
+	// sampled only in add, so there's no cross-set aliasing.
 	RID dyn_tri_buffer;
 	uint32_t dyn_tri_count = 0;
 	RID dyn_voxelize_set0;

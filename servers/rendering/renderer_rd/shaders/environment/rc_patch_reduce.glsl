@@ -47,6 +47,7 @@ layout(set = 0, binding = 7, std430) readonly buffer Cascades {
 layout(push_constant) uniform PC {
 	uint cascade;
 	uint _p0, _p1, _p2;
+	uint _p3; // pad to match RCPatchMergePushConstant (shared C++ struct, now 20 B)
 }
 pc; // target cascade c
 

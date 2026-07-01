@@ -16,6 +16,9 @@ layout(set = 0, binding = 4, rgba16f) uniform readonly image3D emission_in;
 layout(set = 0, binding = 5, std430) readonly buffer Lights {
 	RCLight lights[];
 };
+// Static occupancy mirror for the probe-seed (ADD) pass — add samples THIS, not voxel_tex (radiance),
+// to avoid a layout conflict with the trace's set-2 sampling of voxel_tex.
+layout(set = 0, binding = 6, r8) uniform writeonly image3D occ_out;
 
 layout(push_constant) uniform PC {
 	vec3 vox_origin;
@@ -69,6 +72,7 @@ void main() {
 	ivec3 cell = ((wv % int(pc.res)) + int(pc.res)) % int(pc.res);
 
 	vec4 rad = imageLoad(radiance, cell);
+	imageStore(occ_out, cell, vec4(rad.a)); // mirror occupancy for ALL cells (occupied AND empty) before the early-out
 	if (rad.a < 0.5) {
 		return;
 	}

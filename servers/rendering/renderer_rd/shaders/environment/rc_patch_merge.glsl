@@ -57,15 +57,37 @@ layout(set = 0, binding = 7, std430) readonly buffer Cascades {
 layout(set = 0, binding = 8, std430) readonly buffer Reduced {
 	uint reduced_in[];
 };
+layout(set = 0, binding = 5, std140) uniform CameraData {
+	mat4 inv_proj;
+	mat4 inv_view;
+	mat4 fwd_proj;
+	mat4 fwd_view;
+	vec2 jitter;
+	vec2 _pad;
+}
+cam;
 
 layout(push_constant) uniform PC {
 	uint cascade;
 	uint frame;
 	uint amortize_n;
-	uint _p2;
+	uint probe_amortize;
+	float frustum_margin;
 }
 pc;
-// `frame`/`amortize_n` drive the lockstep amortization gate (same values trace uses this frame).
+// frame/amortize_n/probe_amortize/frustum_margin drive the lockstep gates (SAME values trace uses).
+
+// Lockstep with rc_patch_trace's in_frustum(): merge must skip exactly the probes the trace skipped, or
+// it would re-fold the far-field continuation onto an un-retraced raw and compound/flicker.
+bool in_frustum(vec3 W) {
+	vec4 c = cam.fwd_proj * (cam.fwd_view * vec4(W, 1.0));
+	if (c.w <= 0.0) {
+		return false;
+	}
+	vec3 ndc = c.xyz / c.w;
+	float m = pc.frustum_margin;
+	return abs(ndc.x) <= 1.0 + m && abs(ndc.y) <= 1.0 + m && ndc.z >= 0.0 && ndc.z <= 1.0;
+}
 
 const uint INVALID = 0xffffffffu; // (find_in_region moved to rc_patch_neighbours; merge reads cached ids)
 
@@ -88,6 +110,15 @@ void main() {
 	bool bootstrap = (entry & 0x80000000u) != 0u; // owner changed → trace refreshed ALL dirs this frame
 	uint idx = cd.probe_off + slot_local;
 	vec3 W = probe_world[idx].xyz;
+
+	// FRUSTUM-LIMITED (OPTIONAL, default OFF — frustum_margin < 0), in LOCKSTEP with trace: when enabled,
+	// skip off-screen probes (trace didn't update their raw, so don't re-fold). SAME predicate as trace.
+	if (pc.frustum_margin >= 0.0 && !in_frustum(W)) {
+		return;
+	}
+	if (!bootstrap && pc.probe_amortize > 1u && (slot_local % pc.probe_amortize) != (pc.frame % pc.probe_amortize)) {
+		return;
+	}
 
 	vec3 sp = W / cn.spacing - 0.5;
 	ivec3 b = ivec3(floor(sp));

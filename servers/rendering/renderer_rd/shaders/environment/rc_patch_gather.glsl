@@ -143,22 +143,36 @@ void main() {
 	vec3 f = sp - vec3(b);
 	uint nidx[8];
 	float nw[8];
+	float plain[8]; // trilinear-only weight (no facing) — thin-surface fallback
 	float wsum = 0.0;
+	float psum = 0.0;
 	for (int o = 0; o < 8; ++o) {
 		ivec3 off = ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
 		ivec3 cell = b + off;
 		uint id = find_in_region(ivec4(cell, 0), cd.bucket_off, cd.bucket_cap);
-		float w = ((off.x == 1) ? f.x : 1.0 - f.x) * ((off.y == 1) ? f.y : 1.0 - f.y) * ((off.z == 1) ? f.z : 1.0 - f.z);
+		float tw = ((off.x == 1) ? f.x : 1.0 - f.x) * ((off.y == 1) ? f.y : 1.0 - f.y) * ((off.z == 1) ? f.z : 1.0 - f.z);
 		// plane (backface) weight — reject probes behind the surface so a wall thinner than the
 		// c0 spacing can't blend its front-lit probes onto a back-face pixel.
 		vec3 to_probe = (vec3(cell) + 0.5) * cd.spacing - world;
 		float pdist = length(to_probe);
 		float facing = (pdist > 1e-4) ? dot(n, to_probe / pdist) : 1.0; // ~1 front, <0 behind
 		float vis = facing * 0.5 + 0.5; // [0,1]
-		w *= step(0.0, facing) * vis; // sharpen → back probes ~0
 		nidx[o] = id;
-		nw[o] = (id == INVALID) ? 0.0 : w;
+		plain[o] = (id == INVALID) ? 0.0 : tw;
+		nw[o] = plain[o] * step(0.0, facing) * vis; // sharpen → back probes ~0
 		wsum += nw[o];
+		psum += plain[o];
+	}
+	// THIN-SURFACE FALLBACK: on a wall thinner than the c0 spacing every corner probe can land just BEHIND
+	// the face (surface point at the face, probes at the voxel centre half a voxel back) → all facing<0 →
+	// wsum 0 → the pixel gets NO GI (the pure-red holes in the probe-radiance debug). If any probe exists at
+	// all, use plain trilinear so the surface is lit rather than a hole — minor front/back bleed on sub-
+	// spacing walls, far better than a black wall. Thick surfaces keep the strict facing weight (wsum>0).
+	if (wsum <= 0.0 && psum > 0.0) {
+		for (int o = 0; o < 8; ++o) {
+			nw[o] = plain[o];
+		}
+		wsum = psum;
 	}
 	float inv = (wsum > 0.0) ? 1.0 / wsum : 0.0;
 

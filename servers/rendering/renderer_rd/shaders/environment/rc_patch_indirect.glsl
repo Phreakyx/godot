@@ -52,8 +52,9 @@ void main() {
 	}
 	CascadeDesc cd = cascades[c];
 
-	uint tn = alloc_count[c] * cd.dirs; // TRACE: live probes × dirs (compact)
-	groups[c * 3u + 0u] = (tn + pc.local_size - 1u) / pc.local_size;
+	// TRACE: now PER-PROBE (the shader loops dirs internally) — same shape as MERGE. The old per-(probe,dir)
+	// dispatch's workgroup COUNT (×dirs) alone hung the load even when every thread early-outed.
+	groups[c * 3u + 0u] = (alloc_count[c] + pc.local_size - 1u) / pc.local_size;
 	groups[c * 3u + 1u] = 1u;
 	groups[c * 3u + 2u] = 1u;
 

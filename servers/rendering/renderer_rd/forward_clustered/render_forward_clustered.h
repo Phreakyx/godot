@@ -483,6 +483,12 @@ private:
 	bool rc_voxelize_cull = false;
 	AABB rc_voxelize_cull_aabb;
 
+	// View-independent voxelize source. The scene cull box-culls geometry against the RC grid box and sets
+	// this (set_rc_voxelize_instances) right before render_scene; the RC voxelize hooks rasterize THIS list
+	// (all in-range geometry) instead of p_render_data->instances (camera-visible only). Null → RC off / fall
+	// back to the visible set. Points into RendererSceneCull::scene_cull_result; valid only during render_scene.
+	const PagedArray<RenderGeometryInstance *> *rc_voxelize_instances = nullptr;
+
 	HashMap<Size2i, RID> sdfgi_framebuffer_size_cache;
 
 	struct GeometryInstanceData;
@@ -834,6 +840,11 @@ public:
 	virtual AABB sdfgi_get_pending_region_bounds(const Ref<RenderSceneBuffers> &p_render_buffers, int p_region) const override;
 	virtual uint32_t sdfgi_get_pending_region_cascade(const Ref<RenderSceneBuffers> &p_render_buffers, int p_region) const override;
 	RID sdfgi_get_ubo() const { return gi.sdfgi_ubo; }
+
+	/* RADIANCE CASCADES — box-cull voxelize source (mirrors the sdfgi region cull, see render_scene hooks) */
+
+	virtual AABB rc_get_voxelize_aabb(RID p_environment, const Vector3 &p_camera_position) const override;
+	virtual void set_rc_voxelize_instances(const PagedArray<RenderGeometryInstance *> *p_instances) override { rc_voxelize_instances = p_instances; }
 
 	/* GEOMETRY INSTANCE */
 

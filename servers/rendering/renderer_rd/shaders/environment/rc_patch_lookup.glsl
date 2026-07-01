@@ -142,15 +142,33 @@ void main() {
 	vec3 world = screen_to_world(vec2(px), linearize_depth(raw));
 	CascadeDesc cd = cascades[pc.cascade];
 
-	// kind 0 — probe-id / miss diagnostic. RAW single nearest probe (identity must not blur).
+	// kind 0 — probe-id / coverage diagnostic. Uses the GATHER's corner grid (floor(world/spacing - 0.5)),
+	// NOT the single floor(world/spacing) cell: the latter is offset half a cell from where probes are
+	// actually seeded, so a flat floor at one constant Y reads as a solid red band even though the gather
+	// finds probes fine. Show the id of the nearest POPULATED corner; red only if all 8 are genuinely empty.
 	if (pc.debug_kind == 0u) {
-		ivec3 cell = ivec3(floor(world / cd.spacing));
-		uint idx = find_in_region(ivec4(cell, int(pc.cascade)), cd.bucket_off, cd.bucket_cap);
-		if (idx == INVALID) {
+		vec3 sp0 = world / cd.spacing - 0.5;
+		ivec3 b0 = ivec3(floor(sp0));
+		vec3 fr0 = sp0 - vec3(b0);
+		uint best = INVALID;
+		float bestw = -1.0;
+		for (int o = 0; o < 8; ++o) {
+			ivec3 off = ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
+			uint id = find_in_region(ivec4(b0 + off, int(pc.cascade)), cd.bucket_off, cd.bucket_cap);
+			if (id == INVALID) {
+				continue;
+			}
+			float w = ((off.x == 1) ? fr0.x : 1.0 - fr0.x) * ((off.y == 1) ? fr0.y : 1.0 - fr0.y) * ((off.z == 1) ? fr0.z : 1.0 - fr0.z);
+			if (w >= bestw) {
+				bestw = w;
+				best = id;
+			}
+		}
+		if (best == INVALID) {
 			imageStore(debug_out, px, vec4(1.0, 0.0, 0.0, 1.0));
 			return;
 		}
-		imageStore(debug_out, px, vec4(id_color(idx), 1.0));
+		imageStore(debug_out, px, vec4(id_color(best), 1.0));
 		return;
 	}
 
@@ -165,24 +183,33 @@ void main() {
 	vec3 f = sp - vec3(b);
 	uint nidx[8];
 	float nw[8];
+	float plain[8];
 	float wsum = 0.0;
+	float psum = 0.0;
 	for (int o = 0; o < 8; ++o) {
 		ivec3 off = ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
 		ivec3 cell = b + off;
 		uint id = find_in_region(ivec4(cell, int(pc.cascade)), cd.bucket_off, cd.bucket_cap);
-		float w = ((off.x == 1) ? f.x : 1.0 - f.x) * ((off.y == 1) ? f.y : 1.0 - f.y) * ((off.z == 1) ? f.z : 1.0 - f.z);
+		float tw = ((off.x == 1) ? f.x : 1.0 - f.x) * ((off.y == 1) ? f.y : 1.0 - f.y) * ((off.z == 1) ? f.z : 1.0 - f.z);
 		vec3 to_probe = (vec3(cell) + 0.5) * cd.spacing - world; // plane (backface) weight
 		float pdist = length(to_probe);
 		float facing = (pdist > 1e-4) ? dot(n, to_probe / pdist) : 1.0;
-		w *= step(0.0, facing) * (facing * 0.5 + 0.5);
 		nidx[o] = id;
-		nw[o] = (id == INVALID) ? 0.0 : w;
+		plain[o] = (id == INVALID) ? 0.0 : tw;
+		nw[o] = plain[o] * step(0.0, facing) * (facing * 0.5 + 0.5);
 		wsum += nw[o];
+		psum += plain[o];
+	}
+	if (wsum <= 0.0 && psum > 0.0) { // thin-surface fallback (mirrors rc_patch_gather): plain trilinear
+		for (int o = 0; o < 8; ++o) {
+			nw[o] = plain[o];
+		}
+		wsum = psum;
 	}
 	if (wsum <= 0.0) {
 		imageStore(debug_out, px, vec4(1.0, 0.0, 0.0, 1.0));
 		return;
-	} // no usable probe → red
+	} // genuinely no probe in any corner → red
 	float inv = 1.0 / wsum;
 	vec3 E = vec3(0.0);
 	float dw = 4.0 * PI / float(cd.dirs);

@@ -901,7 +901,12 @@ public:
 		PagedArray<RenderGeometryInstance *> sdfgi_region_geometry_instances[SDFGI_MAX_CASCADES * SDFGI_MAX_REGIONS_PER_CASCADE];
 		PagedArray<RID> sdfgi_cascade_lights[SDFGI_MAX_CASCADES];
 
+		// Radiance Cascades: geometry culled against the RC grid BOX (not the camera frustum), so the voxelize
+		// covers all in-range geometry regardless of facing — view-independent GI (mirrors the sdfgi box-cull).
+		PagedArray<RenderGeometryInstance *> rc_geometry_instances;
+
 		void clear() {
+			rc_geometry_instances.clear();
 			geometry_instances.clear();
 			lights.clear();
 			light_instances.clear();
@@ -927,6 +932,7 @@ public:
 		}
 
 		void reset() {
+			rc_geometry_instances.reset();
 			geometry_instances.reset();
 			lights.reset();
 			light_instances.reset();
@@ -952,6 +958,7 @@ public:
 		}
 
 		void append_from(InstanceCullResult &p_cull_result) {
+			rc_geometry_instances.merge_unordered(p_cull_result.rc_geometry_instances);
 			geometry_instances.merge_unordered(p_cull_result.geometry_instances);
 			lights.merge_unordered(p_cull_result.lights);
 			light_instances.merge_unordered(p_cull_result.light_instances);
@@ -978,6 +985,7 @@ public:
 		}
 
 		void init(PagedArrayPool<RID> *p_rid_pool, PagedArrayPool<RenderGeometryInstance *> *p_geometry_instance_pool, PagedArrayPool<Instance *> *p_instance_pool) {
+			rc_geometry_instances.set_page_pool(p_geometry_instance_pool);
 			geometry_instances.set_page_pool(p_geometry_instance_pool);
 			light_instances.set_page_pool(p_rid_pool);
 			lights.set_page_pool(p_instance_pool);
@@ -1119,6 +1127,14 @@ public:
 			uint32_t cascade_light_count = 0;
 
 		} sdfgi;
+
+		// Radiance Cascades: the world-space box of the RC voxel grid (camera-centred). When enabled, the cull
+		// also collects geometry intersecting this box (regardless of the camera frustum) into
+		// rc_geometry_instances, so the RC voxelize sees all in-range geometry → view-independent GI.
+		struct RC {
+			AABB box;
+			bool enabled = false;
+		} rc;
 
 		SpinLock lock;
 
