@@ -56,6 +56,21 @@ layout(set = 0, binding = 9, std430) buffer Inspect {
 	uint inspect[];
 }; // DEBUG: dominant-probe value dump at pc._p0,_p1 (0xffffffff = off)
 
+// Per-cascade spatial window (world origin + extent), so the gather can pick the FINEST cascade whose
+// clipmap window contains a pixel. Same table the trace reads; [0]=L0 (64 m), [1..4]=coarse clip levels.
+struct LevelDesc {
+	vec3 origin;
+	float voxel_size;
+	vec3 extent;
+	float _pad;
+};
+layout(set = 0, binding = 8, std140) uniform ClipParams {
+	LevelDesc lvl[5];
+	uint num_levels;
+	uint _cp0, _cp1, _cp2;
+}
+clip;
+
 layout(set = 1, binding = 0) uniform sampler2D depth_input;
 layout(set = 1, binding = 1) uniform sampler2D normal_input;
 
@@ -122,22 +137,19 @@ vec4 samp(uint gidx, uint rad_off, uint probe_off, uint dirs, uint d) {
 	return rc_unpack_radiance(probe_radiance[i]); // rgb radiance + cumulative transparency
 }
 
-void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (px.x >= int(pc.screen_width) || px.y >= int(pc.screen_height)) {
-		return;
-	}
-	vec2 uv = (vec2(px) + 0.5) / vec2(pc.screen_width, pc.screen_height);
-	float raw = texture(depth_input, uv).r;
-	if (raw < 0.00001) {
-		imageStore(irradiance_out, px, vec4(0.0));
-		return;
-	}
+// True if world W lies inside cascade c's clipmap window (with a small inset so we don't read a probe
+// right at the toroidal seam where its trilinear neighbours wrap).
+bool in_window(uint c, vec3 world) {
+	vec3 g = (world - clip.lvl[c].origin) / clip.lvl[c].extent;
+	return all(greaterThanEqual(g, vec3(0.01))) && all(lessThanEqual(g, vec3(0.99)));
+}
 
-	vec3 world = screen_to_world(vec2(px), linearize_depth(raw));
-	vec3 n = fetch_normal_ws(uv);
-
-	CascadeDesc cd = cascades[0];
+// Cosine-integrate one cascade's irradiance at a shaded point: 8-corner trilinear over the surrounding
+// probes (facing-weighted, with the thin-surface fallback), then a cosine hemisphere sum of their
+// directional radiance + sky through residual transparency. `coverage` (=psum) reports whether ANY probe
+// of this cascade was found (0 = none). Shared by the near cascade 0 and the standalone FAR fallback.
+vec3 gather_cascade(uint c, vec3 world, vec3 n, out float coverage) {
+	CascadeDesc cd = cascades[c];
 	vec3 sp = world / cd.spacing - 0.5;
 	ivec3 b = ivec3(floor(sp));
 	vec3 f = sp - vec3(b);
@@ -149,10 +161,10 @@ void main() {
 	for (int o = 0; o < 8; ++o) {
 		ivec3 off = ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
 		ivec3 cell = b + off;
-		uint id = find_in_region(ivec4(cell, 0), cd.bucket_off, cd.bucket_cap);
+		uint id = find_in_region(ivec4(cell, int(c)), cd.bucket_off, cd.bucket_cap);
 		float tw = ((off.x == 1) ? f.x : 1.0 - f.x) * ((off.y == 1) ? f.y : 1.0 - f.y) * ((off.z == 1) ? f.z : 1.0 - f.z);
 		// plane (backface) weight — reject probes behind the surface so a wall thinner than the
-		// c0 spacing can't blend its front-lit probes onto a back-face pixel.
+		// spacing can't blend its front-lit probes onto a back-face pixel.
 		vec3 to_probe = (vec3(cell) + 0.5) * cd.spacing - world;
 		float pdist = length(to_probe);
 		float facing = (pdist > 1e-4) ? dot(n, to_probe / pdist) : 1.0; // ~1 front, <0 behind
@@ -163,17 +175,16 @@ void main() {
 		wsum += nw[o];
 		psum += plain[o];
 	}
-	// THIN-SURFACE FALLBACK: on a wall thinner than the c0 spacing every corner probe can land just BEHIND
-	// the face (surface point at the face, probes at the voxel centre half a voxel back) → all facing<0 →
-	// wsum 0 → the pixel gets NO GI (the pure-red holes in the probe-radiance debug). If any probe exists at
-	// all, use plain trilinear so the surface is lit rather than a hole — minor front/back bleed on sub-
-	// spacing walls, far better than a black wall. Thick surfaces keep the strict facing weight (wsum>0).
+	// THIN-SURFACE FALLBACK: on a wall thinner than the spacing every corner probe can land just BEHIND the
+	// face → all facing<0 → wsum 0 → no GI (the pure-red holes in the debug). If any probe exists, use plain
+	// trilinear so the surface is lit rather than a hole. Thick surfaces keep the strict facing weight.
 	if (wsum <= 0.0 && psum > 0.0) {
 		for (int o = 0; o < 8; ++o) {
 			nw[o] = plain[o];
 		}
 		wsum = psum;
 	}
+	coverage = psum;
 	float inv = (wsum > 0.0) ? 1.0 / wsum : 0.0;
 
 	vec3 E = vec3(0.0);
@@ -198,7 +209,40 @@ void main() {
 		vec3 L = acc.rgb + acc.a * sky; // arriving radiance + sky through residual transparency
 		E += L * cw * dw;
 	}
-	E = (any(isnan(E)) || any(isinf(E))) ? vec3(0.0) : max(E, vec3(0.0));
+	return (any(isnan(E)) || any(isinf(E))) ? vec3(0.0) : max(E, vec3(0.0));
+}
+
+void main() {
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	if (px.x >= int(pc.screen_width) || px.y >= int(pc.screen_height)) {
+		return;
+	}
+	vec2 uv = (vec2(px) + 0.5) / vec2(pc.screen_width, pc.screen_height);
+	float raw = texture(depth_input, uv).r;
+	if (raw < 0.00001) {
+		imageStore(irradiance_out, px, vec4(0.0));
+		return;
+	}
+
+	vec3 world = screen_to_world(vec2(px), linearize_depth(raw));
+	vec3 n = fetch_normal_ws(uv);
+
+	// Unified clipmap gather: read the FINEST cascade whose nested window covers this pixel and has a probe.
+	// Cascade 0 (fine) near the camera, coarser cascades further out; a hole in a finer cascade falls through
+	// to the next coarser one. Each cascade holds its merged field (its interval + all coarser continuations),
+	// so the ring handoff is smooth by construction. Beyond the coarsest window there's no GI (stays 0).
+	vec3 E = vec3(0.0);
+	for (uint c = 0u; c < clip.num_levels; ++c) {
+		if (!in_window(c, world)) {
+			continue; // pixel is beyond this cascade's extent -> try the next coarser one
+		}
+		float cov;
+		vec3 Ec = gather_cascade(c, world, n, cov);
+		if (cov > 0.0) {
+			E = Ec;
+			break; // finest covering cascade with a probe
+		}
+	}
 	// ---- DEBUG probe inspector: dump the nearest probe in cascade uint(pc._p2) at the target pixel ----
 	if (pc._p0 != 0xffffffffu && uint(px.x) == pc._p0 && uint(px.y) == pc._p1) {
 		uint ic = uint(pc._p2); // inspect cascade (0..N-1); 0 = c0

@@ -57,12 +57,23 @@ layout(set = 0, binding = 12, std430) coherent buffer AllocState {
 // here aliases the trace's set-2 sampler → device lost). Read as a STORAGE image (imageLoad), matching
 // inject's storage write, so occ_tex stays in GENERAL layout throughout — no storage→sampler transition
 // (the missing transition between inject and this pass on the full bake hung the early frames).
+#ifdef RC_FAR_SEED
+// FAR-SEED variant: occupancy comes from a COARSE clip level (rgba16f, .a = occupancy), sampled toroidally
+// like the trace (fract(W/extent)). No normal grid — coarse voxels are large, so we seed at the cell centre
+// (the half-voxel face offset is negligible at this scale and there's no coarse normal mirror).
+layout(set = 0, binding = 6) uniform sampler3D coarse_occ;
+#else
+// Static occupancy (dedicated r8 mirror written by the inject pass) — NOT voxel_tex (sampling voxel_tex
+// here aliases the trace's set-2 sampler → device lost). Read as a STORAGE image (imageLoad), matching
+// inject's storage write, so occ_tex stays in GENERAL layout throughout — no storage→sampler transition
+// (the missing transition between inject and this pass on the full bake hung the early frames).
 layout(set = 0, binding = 6, r8) uniform readonly image3D occ_grid;
 // Voxel face normal (same grid the inject reads). We seed from the surface FACE (voxel centre + n·½voxel),
 // not the centre, so the seeded probe corners line up with where the screen-space GATHER samples (the face,
 // from depth). Without this the corners are half a voxel behind the face → on sub-spacing walls every corner
 // lands behind the surface and the gather's facing test drops them (the red holes we were papering over).
 layout(set = 0, binding = 5, rgba8) uniform readonly image3D normal_grid;
+#endif
 
 struct CascadeDesc {
 	float spacing;
@@ -90,7 +101,7 @@ layout(push_constant) uniform PC {
 	uint res; // vox_res (toroidal modulus)
 	float voxel_size;
 	uint frame;
-	uint _pad;
+	float coarse_extent; // RC_FAR_SEED: the far clip level's world extent (fract(W/extent) toroidal occ read)
 }
 pc;
 
@@ -183,7 +194,15 @@ void main() {
 	if (any(greaterThanEqual(off, pc.seed_dim))) {
 		return;
 	}
-	ivec3 wv = pc.seed_lo + off; // absolute world voxel
+	ivec3 wv = pc.seed_lo + off; // absolute world voxel (of this level's grid)
+#ifdef RC_FAR_SEED
+	// FAR: occupancy from the coarse clip level, sampled toroidally the same way the trace does
+	// (fract(W/extent)). Seed at the voxel centre — no normal-face offset at coarse scale.
+	vec3 world = (vec3(wv) + 0.5) * pc.voxel_size;
+	if (texture(coarse_occ, fract(world / pc.coarse_extent)).a < 0.5) {
+		return; // empty coarse voxel — no distant surface here, no far probe
+	}
+#else
 	int R = int(pc.res);
 	ivec3 cell = ((wv % R) + R) % R; // toroidal grid cell
 	if (imageLoad(occ_grid, cell).r < 0.5) {
@@ -194,6 +213,7 @@ void main() {
 	vec3 nrm = imageLoad(normal_grid, cell).rgb * 2.0 - 1.0;
 	nrm = (dot(nrm, nrm) > 0.0001) ? normalize(nrm) : vec3(0.0);
 	vec3 world = (vec3(wv) + 0.5 + nrm * 0.5) * pc.voxel_size; // voxel centre + n·½voxel → surface face
+#endif
 
 	for (uint c = pc.cascade_begin; c < pc.cascade_end; ++c) {
 		float s = cascades[c].spacing;

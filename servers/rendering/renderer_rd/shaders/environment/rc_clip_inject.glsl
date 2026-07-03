@@ -56,32 +56,25 @@ ivec3 rel(ivec3 cell) {
 }
 
 // Coarse occupancy visibility, window-relative voxels, toward L up to reach_vox (≤32 steps).
-// SOFT transmission, not a hard stop: each occupied coarse cell along the ray multiplies the
-// remaining light by COARSE_TRANSMIT. A thin, gappy occluder (a canopy that's ~1 coarse cell
-// thick -- which coarse voxelizes as solid because it can't resolve the gaps) then passes a chunk
-// of sun, approximating the dappled average L0 resolves directly; a thick wall stacks down to ~0
-// and stays shadowed. This is what keeps the floor lit across the L0->coarse handoff instead of
-// cutting to black where the finer gaps stop being resolved.
-const float COARSE_TRANSMIT = 0.5;
+// HARD shadow: the first occupied coarse cell along the ray fully blocks the sun (vis = 0). Coarse
+// voxelizes the gappy canopy as solid (it can't resolve the gaps), so soft transmission over-lit the
+// far field -- a binary occupancy test keeps distant shadows crisp instead. (The L0 overlap region
+// still uses L0's fine dappled radiance directly, so this only shapes the ring BEYOND the near grid.)
 float clip_vis(vec3 rstart, vec3 L, float reach_vox) {
 	float R = float(pc.res);
 	vec3 rp = rstart + L * 1.5;
 	int steps = int(min(reach_vox, 32.0));
-	float vis = 1.0;
 	for (int i = 0; i < steps; ++i) {
 		vec3 r = rp + L * float(i);
 		if (any(lessThan(r, vec3(0.0))) || any(greaterThanEqual(r, vec3(R)))) {
-			return vis; // exited the window → the rest is open sky
+			return 1.0; // exited the window → open sky, fully lit
 		}
 		ivec3 cell = ((ivec3(floor(r)) + pc.phase) % int(R) + int(R)) % int(R);
 		if (imageLoad(radiance, cell).a > 0.5) {
-			vis *= COARSE_TRANSMIT;
-			if (vis < 0.04) {
-				return 0.0; // enough stacked occluders → fully shadowed
-			}
+			return 0.0; // occupied cell blocks the sun → fully shadowed
 		}
 	}
-	return vis;
+	return 1.0;
 }
 
 // "Is there a ceiling above me?" — clip_vis marches the level's OWN occupancy toward the sun, but at the

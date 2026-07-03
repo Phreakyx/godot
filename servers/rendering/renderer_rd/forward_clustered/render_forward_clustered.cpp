@@ -3321,13 +3321,19 @@ void RenderForwardClustered::_render_sdfgi(Ref<RenderSceneBuffersRD> p_render_bu
 }
 
 AABB RenderForwardClustered::rc_get_voxelize_aabb(RID p_environment, const Vector3 &p_camera_position) const {
-	// The world-space box the scene cull collects voxelize geometry into: the RC grid is a camera-centred
-	// 64 m cube (RadianceCascade::vox_extent). Cull a couple of metres wider so the gather's edge neighbours
-	// and the per-frame lattice snap still have occupancy. Empty AABB ⇒ RC off ⇒ no box-cull.
+	// The world-space box the scene cull collects voxelize geometry into. The L0 grid is a
+	// camera-centred 64 m cube (RadianceCascade::vox_extent), but the coarse clipmap levels extend
+	// the grid 2x per level (clip_levels=5 -> coarsest = 64 m * 2^4 = 1024 m), so the box must reach
+	// the COARSEST level or far off-screen geometry is never collected and coarse levels stay black
+	// past 64 m. One box feeds every level this frame; each _render_rc_voxelize call narrows to its
+	// own shell bounds via rc_voxelize_cull_aabb, so the wider box doesn't inflate the L0 cost.
+	// Cull a couple of metres wider so the gather's edge neighbours still have occupancy. Empty
+	// AABB ⇒ RC off ⇒ no box-cull.
 	if (p_environment.is_null() || !environment_get_rc_enabled(p_environment)) {
 		return AABB();
 	}
-	const float ext = 64.0f; // keep in sync with RadianceCascade::vox_extent
+	const float ext = 1024.0f; // keep in sync with RadianceCascade::vox_extent * 2^(clip_levels-1); coarse clipmap range
+
 	const float margin = 2.0f;
 	const Vector3 half = Vector3(ext, ext, ext) * 0.5f + Vector3(margin, margin, margin);
 	return AABB(p_camera_position - half, half * 2.0f);

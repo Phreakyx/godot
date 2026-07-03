@@ -135,7 +135,7 @@ struct RCPatchAddPushConstant {
 	uint32_t res; // vox_res (toroidal modulus)
 	float voxel_size;
 	uint32_t frame;
-	uint32_t pad;
+	float coarse_extent; // RC_FAR_SEED only: the far clip level's world extent, for the toroidal fract(W/extent) occ read
 };
 
 // rc_patch_indirect.glsl — turn live probe counts into indirect-dispatch args.
@@ -427,6 +427,7 @@ struct RadianceCascadeShaders {
 	RID irradiance_atrous_shader, irradiance_atrous_pipeline;
 	RID irradiance_upsample_shader, irradiance_upsample_pipeline;
 	RID patch_add_shader, patch_add_pipeline;
+	RID patch_add_coarse_pipeline; // RC_FAR_SEED variant (variant 1 of patch_add): seeds a coarse cascade from a clip level's occupancy
 	RID patch_clear_shader, patch_clear_pipeline;
 	RID patch_gather_shader, patch_gather_pipeline;
 	RID patch_indirect_shader, patch_indirect_pipeline;
@@ -452,7 +453,10 @@ class RadianceCascade : public RenderBufferCustomDataRD {
 
 public:
 	enum {
-		MAX_CASCADES = 5, // probe hierarchy depth (4-6 reasonable)
+		// Unified spatial clipmap: cascade c is a nested level covering extent vox_extent*2^c at spacing
+		// spacing0*2^c, seeded from voxel level c's occupancy (L0 for c=0, clip_grid[c] for c>=1). All
+		// cascades merge (c+1 -> c) like classic RC; the gather reads the FINEST cascade covering a pixel.
+		MAX_CASCADES = 5, // one probe cascade per voxel level (L0 + 4 coarse clip levels)
 		MAX_CLIP = 5, // voxel levels: 0 = fine grid, 1..4 = coarse clipmap rings
 		MAX_LIGHTS = 256,
 		CLIP_ANISO_M = 4, // level-0 aniso depth -> L0 snap = 16 vox = 4 m
@@ -568,6 +572,7 @@ private:
 	void dispatch_patch_clear();
 	void dispatch_patch_rebuild();
 	void dispatch_patch_add();
+	void dispatch_patch_add_coarse(); // seed coarse cascades 1..N from their clip levels' occupancy (RC_FAR_SEED)
 	void dispatch_patch_trace();
 	void dispatch_patch_neighbours();
 	void dispatch_patch_merge();
@@ -652,6 +657,7 @@ private:
 
 	// ── Patch per-frame uniform sets (depth + normal) ──
 	RID patch_add_set0, patch_add_set1;
+	RID clip_add_set[MAX_CLIP]; // RC_FAR_SEED variant set 0 per coarse level c (b6 = clip_grid[c] occupancy .a, no normal grid)
 	RID patch_clear_set0;
 	RID patch_rebuild_set0;
 	RID patch_lookup_set0, patch_lookup_set1;
@@ -748,7 +754,7 @@ private:
 	// ── Voxel clipmap (coarse levels) ──
 	bool clip_origins_inited = false;
 	bool level_dirty[MAX_CLIP] = { true, true, true, true, true };
-	int clip_levels = 1; // TEMP: coarse cascades disabled for L0-only testing (revert to 5)
+	int clip_levels = 5; // L0 + 4 coarse clipmap levels (extends GI range to ~1 km)
 	RID clip_grid[MAX_CLIP]; // [0] unused (level 0 = voxel_tex); [1..4] coarse
 	RID clip_voxelize_set[MAX_CLIP];
 	RID clip_inject_set[MAX_CLIP];

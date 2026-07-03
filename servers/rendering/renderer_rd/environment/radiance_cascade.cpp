@@ -64,7 +64,15 @@ void RadianceCascadeShaders::init() {
 	// Probe build / trace / merge / gather.
 	init_compute(patch_clear, patch_clear_shader, patch_clear_pipeline, "");
 	init_compute(patch_rebuild, patch_rebuild_shader, patch_rebuild_pipeline, "");
-	init_compute(patch_add, patch_add_shader, patch_add_pipeline, "");
+	{ // patch_add has two variants: 0 = near (seed L0 occupancy image), 1 = RC_FAR_SEED (seed a coarse clip level)
+		Vector<String> variants;
+		variants.push_back("");
+		variants.push_back("\n#define RC_FAR_SEED\n");
+		patch_add.initialize(variants);
+		patch_add_shader = patch_add.version_create();
+		patch_add_pipeline = rd->compute_pipeline_create(patch_add.version_get_shader(patch_add_shader, 0));
+		patch_add_coarse_pipeline = rd->compute_pipeline_create(patch_add.version_get_shader(patch_add_shader, 1));
+	}
 	init_compute(patch_indirect, patch_indirect_shader, patch_indirect_pipeline, "");
 	init_compute(patch_trace, patch_trace_shader, patch_trace_pipeline, "\n#define RC_BACKEND_VOXEL\n");
 	init_compute(patch_neighbours, patch_neighbours_shader, patch_neighbours_pipeline, "");
@@ -108,6 +116,10 @@ void RadianceCascadeShaders::free() {
 
 	free_compute(patch_clear, patch_clear_shader, patch_clear_pipeline);
 	free_compute(patch_rebuild, patch_rebuild_shader, patch_rebuild_pipeline);
+	if (patch_add_coarse_pipeline.is_valid()) {
+		rd->free_rid(patch_add_coarse_pipeline);
+		patch_add_coarse_pipeline = RID();
+	}
 	free_compute(patch_add, patch_add_shader, patch_add_pipeline);
 	free_compute(patch_indirect, patch_indirect_shader, patch_indirect_pipeline);
 	free_compute(patch_trace, patch_trace_shader, patch_trace_pipeline);
@@ -182,6 +194,9 @@ void RadianceCascade::free_resources() {
 
 	// Static (set 0 / set 2) uniform sets.
 	fr(patch_add_set0);
+	for (int L = 0; L < MAX_CLIP; L++) {
+		fr(clip_add_set[L]);
+	}
 	fr(patch_clear_set0);
 	fr(patch_rebuild_set0);
 	fr(patch_lookup_set0);
@@ -628,6 +643,7 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	dispatch_patch_rebuild();
 	RENDER_TIMESTAMP("RC Add Probes");
 	dispatch_patch_add();
+	dispatch_patch_add_coarse(); // seed coarse cascades 1..N from their clip levels' occupancy
 	RENDER_TIMESTAMP("RC Trace");
 	dispatch_patch_trace();
 	dispatch_patch_neighbours();
@@ -657,8 +673,11 @@ void RadianceCascade::build_cascade_table() {
 	// Uses the member rd, which create() sets before calling this.
 	const float ray0 = 0.25;
 	const float interval_factor = 4.0;
+	// Unified spatial clipmap: cascade c covers extent vox_extent*2^c at spacing spacing0*2^c, so every
+	// cascade spans the SAME 256^3 cell grid (extent/spacing is constant) -- fine near, coarse far, seeded
+	// from voxel level c. Coarse cascades cover far more world per probe, so keep generous but tapering pcaps.
 	const uint32_t oct[MAX_CASCADES] = { 4, 4, 8, 8, 8 };
-	const uint32_t pcap[MAX_CASCADES] = { 1u << 20, 1u << 19, 1u << 16, 1u << 14, 1u << 12 };
+	const uint32_t pcap[MAX_CASCADES] = { 1u << 20, 1u << 19, 1u << 17, 1u << 16, 1u << 15 };
 	const float spacing0 = 0.25;
 
 	uint32_t boff = 0, poff = 0, roff = 0;
@@ -667,15 +686,15 @@ void RadianceCascade::build_cascade_table() {
 		RCCascadeDesc &cd = cascades[c];
 		float kc = Math::pow(cascade_scale, (float)c);
 
-		cd.spacing = spacing0 * kc * dist_mult;
 		cd.oct_res = oct[c];
 		cd.dirs = oct[c] * oct[c];
 		cd.aperture = 2.0 / float(oct[c]);
 
+		cd.spacing = spacing0 * kc * dist_mult;
 		float len = ray0 * kc * interval_factor * step_mult;
 		cd.t_start = t;
-		// Near cone overruns the seam by interval_overlap so it (not the offset coarse
-		// probes) owns occlusion there; the next cascade still starts at the seam.
+		// Ray shells tile [0, far): each cascade picks up where the finer one stopped, so the merge folds
+		// them into one field. The interval scales 2x per cascade (penumbra-correct for the 2x spacing).
 		cd.t_end = t + len * (1.0 + interval_overlap);
 		t += len;
 
@@ -1025,6 +1044,26 @@ void RadianceCascade::build_static_sets() {
 		patch_add_set0 = rd->uniform_set_create(u, RC_SHADER(patch_add), 0);
 	}
 
+	// Coarse seed sets (RC_FAR_SEED variant 1), one per coarse clip level: same probe buffers, but
+	// occupancy comes from clip_grid[L] (b6 = sampler, .a occupancy) and there's no normal grid (b5).
+	// cascade L is seeded from voxel level L's occupancy -- the unified clipmap seeding.
+	for (int L = 1; L < MAX_CLIP; L++) {
+		RID grid = (L < clip_levels && clip_grid[L].is_valid()) ? clip_grid[L] : dummy_clip_tex;
+		Vector<RD::Uniform> u;
+		u.push_back(ssbo(0, patch_buckets));
+		u.push_back(ssbo(1, patch_alloc));
+		u.push_back(ssbo(2, patch_keys));
+		u.push_back(ssbo(3, patch_world));
+		u.push_back(ssbo(4, patch_live));
+		u.push_back(tex(6, point_sampler, grid)); // coarse occupancy (.a), sampled toroidally like the trace
+		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ssbo(8, probe_rad_tag));
+		u.push_back(ssbo(10, probe_last_seen));
+		u.push_back(ssbo(11, patch_freelist));
+		u.push_back(ssbo(12, patch_alloc_state));
+		clip_add_set[L] = rd->uniform_set_create(u, sh.patch_add.version_get_shader(sh.patch_add_shader, 1), 0);
+	}
+
 	{ // patch rebuild (dense pool -> repopulate hashmap + append live list + spatial evict)
 		Vector<RD::Uniform> u;
 		u.push_back(ssbo(0, patch_buckets));
@@ -1181,6 +1220,7 @@ void RadianceCascade::build_static_sets() {
 		u.push_back(ubo(5, camera_ubo));
 		u.push_back(ssbo(6, probe_radiance));
 		u.push_back(ssbo(7, cascade_buffer));
+		u.push_back(ubo(8, clip_params_ubo)); // per-cascade spatial windows for finest-covering selection
 		u.push_back(ssbo(9, probe_inspect_buffer));
 		patch_gather_set0 = rd->uniform_set_create(u, RC_SHADER(patch_gather), 0);
 	}
@@ -1495,12 +1535,22 @@ void RadianceCascade::dispatch_patch_rebuild() {
 		RCPatchRebuildPushConstant pc = {};
 		pc.frame = frame_index;
 		pc.cascade = c;
-		pc.win_min[0] = vox_origin.x;
-		pc.win_min[1] = vox_origin.y;
-		pc.win_min[2] = vox_origin.z;
-		pc.win_max[0] = vox_origin.x + vox_extent.x;
-		pc.win_max[1] = vox_origin.y + vox_extent.y;
-		pc.win_max[2] = vox_origin.z + vox_extent.z;
+		// Per-cascade eviction window: cascade c lives in voxel level c's window (extent vox_extent*2^c),
+		// so it must evict against THAT -- else a coarse probe, being outside the finer L0 box, is culled
+		// the frame after it's seeded. Level 0 = the L0 grid; levels 1..N = the clip windows.
+		Vector3 wmin = vox_origin;
+		Vector3 wmax = vox_origin + vox_extent;
+		if (c >= 1 && (int)c < clip_levels) {
+			const float ext = vox_extent.x * float(1 << c);
+			wmin = clip_origin[c];
+			wmax = wmin + Vector3(ext, ext, ext);
+		}
+		pc.win_min[0] = wmin.x;
+		pc.win_min[1] = wmin.y;
+		pc.win_min[2] = wmin.z;
+		pc.win_max[0] = wmax.x;
+		pc.win_max[1] = wmax.y;
+		pc.win_max[2] = wmax.z;
 		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
 		rd->compute_list_dispatch(l, (cascades[c].probe_cap + 63u) / 64u, 1, 1);
 	}
@@ -1532,7 +1582,7 @@ void RadianceCascade::dispatch_patch_add() {
 		pc.seed_dim[1] = dim.y;
 		pc.seed_dim[2] = dim.z;
 		pc.cascade_begin = 0;
-		pc.cascade_end = MAX_CASCADES;
+		pc.cascade_end = 1; // cascade 0 only (the L0 fine level); coarse cascades 1..N seed from their clip grids
 		pc.res = (uint32_t)vox_res;
 		pc.voxel_size = vsize;
 		pc.frame = frame_index;
@@ -1578,6 +1628,54 @@ void RadianceCascade::dispatch_patch_add() {
 	rd->compute_list_end();
 }
 
+void RadianceCascade::dispatch_patch_add_coarse() {
+	// Unified clipmap seeding for the coarse cascades: cascade L is seeded from voxel level L's occupancy
+	// (clip_grid[L]) over a rotating slab of that level's window each frame (amortized, like the L0 re-seed).
+	// cascade L's spacing == clip level L's voxel size, so it's one probe per occupied coarse voxel. The
+	// per-cascade rebuild evicts probes that scroll out of level L's window.
+	if (!sdf_built_once) {
+		return; // no occupancy yet
+	}
+	const int R = vox_res;
+	const int N = 8; // whole window re-seeded every 8 frames
+	const int slab = (R + N - 1) / N;
+	const int y0 = int(frame_index % uint32_t(N)) * slab;
+	const int dy = MIN(slab, R - y0);
+	if (dy <= 0) {
+		return;
+	}
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.patch_add_coarse_pipeline);
+
+	for (int L = 1; L < (int)MAX_CASCADES && L < clip_levels; L++) {
+		if (!clip_grid[L].is_valid() || clip_add_set[L].is_null()) {
+			continue;
+		}
+		const float fvs = (vox_extent.x / float(R)) * float(1 << L); // level L voxel size == cascade L spacing
+		const float extent = fvs * float(R);
+		const Vector3 origin = clip_origin[L];
+		const Vector3i ovn((int)Math::floor(origin.x / fvs), (int)Math::floor(origin.y / fvs), (int)Math::floor(origin.z / fvs));
+		rd->compute_list_bind_uniform_set(l, clip_add_set[L], 0);
+		RCPatchAddPushConstant pc = {};
+		pc.seed_lo[0] = ovn.x;
+		pc.seed_lo[1] = ovn.y + y0;
+		pc.seed_lo[2] = ovn.z;
+		pc.seed_dim[0] = R;
+		pc.seed_dim[1] = dy;
+		pc.seed_dim[2] = R;
+		pc.cascade_begin = (uint32_t)L;
+		pc.cascade_end = (uint32_t)L + 1u;
+		pc.res = (uint32_t)R;
+		pc.voxel_size = fvs;
+		pc.frame = frame_index;
+		pc.coarse_extent = extent;
+		rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+		rd->compute_list_dispatch(l, ((uint32_t)R + 3u) / 4u, ((uint32_t)dy + 3u) / 4u, ((uint32_t)R + 3u) / 4u);
+	}
+	rd->compute_list_end();
+}
+
 void RadianceCascade::dispatch_patch_trace() {
 	RadianceCascadeShaders &sh = *gi->rc_shader;
 	{ // build N indirect arg-sets from the live per-cascade counts
@@ -1600,6 +1698,10 @@ void RadianceCascade::dispatch_patch_trace() {
 		for (uint32_t c = 0; c < MAX_CASCADES; c++) {
 			RCPatchTracePushConstant pc = {};
 			pc.cascade = c;
+			// local_trans=1 for ALL cascades incl. far: skip the from-origin pre-roll. The far probe sits
+			// INSIDE its own solid coarse cell, so a from-origin march (local_trans=0) would drive
+			// transmittance to ~0 in the first step and return black; instead it measures fresh from
+			// t_start (which the cascade table set a couple coarse voxels out to clear the self cell).
 			pc.local_transmittance = local_transmittance ? 1u : 0u;
 			pc.frame = frame_index;
 			pc.amortize_n = eff_amortize;
@@ -1619,6 +1721,7 @@ void RadianceCascade::dispatch_patch_neighbours() {
 	RD::ComputeListID l = rd->compute_list_begin();
 	rd->compute_list_bind_compute_pipeline(l, sh.patch_neighbours_pipeline);
 	rd->compute_list_bind_uniform_set(l, patch_neighbours_set0, 0);
+	// Every cascade folds into the finer one (c+1 -> c); the top cascade has no parent.
 	for (uint32_t c = 0; c + 1u < MAX_CASCADES; c++) {
 		RCPatchMergePushConstant pc = {};
 		pc.cascade = c;
@@ -1633,6 +1736,9 @@ void RadianceCascade::dispatch_patch_merge() {
 	// pre-reduce pass averages the extra directions into scratch first.
 	RadianceCascadeShaders &sh = *gi->rc_shader;
 	const uint32_t eff_amortize = effective_amortization();
+	// Fold cascade c+1 into c across the whole clipmap (spatial trilinear in the overlap; c+1 covers 2x
+	// the extent so it always contains c's probes). Each cascade ends holding its interval + all coarser
+	// continuations; the gather then reads the finest cascade that covers each pixel.
 	for (int c = (int)MAX_CASCADES - 2; c >= 0; c--) {
 		const uint32_t r = MAX(cascades[c + 1].oct_res / cascades[c].oct_res, 1u);
 		if (r > 1u) {
@@ -1948,28 +2054,21 @@ void RadianceCascade::dispatch_emission_mips() {
 	}
 }
 void RadianceCascade::dispatch_debug() {
-	// Render the selected debug view into debug_tex (the renderer blits it over the frame
-	// afterwards). Runs after process() this frame, so the voxel grid + probe field are
-	// populated. View ids match the rc_debug enum: 1=Voxel Grid, 2=Probe Occupancy,
-	// 3=Probe Radiance.
-	switch (debug_view) {
-		case 1:
-			dispatch_voxel_debug(0);
-			break;
-		case 2:
-			dispatch_patch_lookup(0);
-			break;
-		case 3:
-			dispatch_patch_lookup(1);
-			break;
-		case 4:
-		case 5:
-		case 6:
-		case 7:
-			dispatch_voxel_debug(debug_view - 3); // Clip L1..L4
-			break;
-		default:
-			break;
+	// Render the selected debug view into debug_tex (the renderer blits it over the frame afterwards).
+	// Runs after process() this frame, so the voxel grid + probe field are populated. View ids match the
+	// rc_debug enum, grouped per clipmap level L (0..MAX_CASCADES-1):
+	//   0        = Off
+	//   1..5     = Voxel L0..L4     -> march voxel level L's grid (occupancy relief + stored rgb)
+	//   6..10    = Probe Occ L0..L4 -> probe-id / coverage of cascade L (red = genuine miss)
+	//   11..15   = Probe Rad L0..L4 -> gather-preview radiance reconstructed from cascade L's probes
+	if (debug_view >= 1 && debug_view <= 5) {
+		dispatch_voxel_debug(debug_view - 1);
+	} else if (debug_view >= 6 && debug_view <= 10) {
+		debug_cascade = (uint32_t)(debug_view - 6);
+		dispatch_patch_lookup(0);
+	} else if (debug_view >= 11 && debug_view <= 15) {
+		debug_cascade = (uint32_t)(debug_view - 11);
+		dispatch_patch_lookup(1);
 	}
 }
 
