@@ -132,10 +132,14 @@ void main() {
 	}
 
 	// Sky ambient: coarse voxels are far/big, so a sun-only coarse inject reads black wherever the
-	// sun is occluded. Bake a flat skylight term (alb * sky) so distant shaded surfaces read as lit
-	// ambient instead of pure black -- the long-range fill the coarse levels are FOR. (pc.sun_color
-	// carries the sky colour now; the directional sun comes from the light buffer below.)
-	vec3 Lo = em + alb * pc.sun_color;
+	// sun is occluded. Bake a skylight term (alb * sky), BUT gate it by SKY VISIBILITY -- otherwise every
+	// enclosed coarse cell (a tunnel wall that can't see the sky) bakes flat skylight and the far field
+	// reads as a bright sky-lit open space, incoherent with the shadowed, enclosed near field (the whole
+	// point of far GI is to MATCH the near field at range). roofed() marches the coarse occupancy straight
+	// up: a cell under a ceiling/canopy sees no sky (dark, like L0's enclosed cells), an open cell sees full
+	// sky. This only shapes the ring BEYOND L0 (the overlap returned above using L0's own radiance).
+	float sky_vis = roofed(rstart) ? 0.0 : 1.0;
+	vec3 Lo = em + alb * pc.sun_color * sky_vis;
 
 	// Light every buffer light like level 0 does (rc_eval_light = alb.color.ndl/pi), so the coarse
 	// sun matches L0 -- the directional comes from the light buffer, not a separate push constant.
