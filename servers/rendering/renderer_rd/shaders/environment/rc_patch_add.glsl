@@ -185,6 +185,18 @@ void touch_cell(uint c, ivec3 cell, vec3 center) {
 	// chain full (load too high near this home) → cell skipped this frame
 }
 
+// Seed the 8 cells the GATHER will trilinear-read for a surface point at `world` (gather bases at
+// floor(world/s - 0.5); match exactly so no neighbour is missing). The 8-corner splat avoids dead probes
+// at grazing angles. touch_cell is idempotent (find-or-alloc), so seeding overlapping cells twice is cheap.
+void seed_corners(uint c, float s, vec3 world) {
+	vec3 sp = world / s - 0.5;
+	ivec3 b = ivec3(floor(sp));
+	for (int o = 0; o < 8; ++o) {
+		ivec3 cl = b + ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
+		touch_cell(c, cl, (vec3(cl) + 0.5) * s);
+	}
+}
+
 void main() {
 	// One thread per shell voxel (world seeding). The dispatch covers [seed_lo, seed_lo+seed_dim) in
 	// ABSOLUTE world voxels; read occupancy at the toroidal cell and seed probes only where there's a
@@ -198,9 +210,12 @@ void main() {
 #ifdef RC_FAR_SEED
 	// FAR: occupancy from the coarse clip level, sampled toroidally the same way the trace does
 	// (fract(W/extent)). Seed at the voxel centre — no normal-face offset at coarse scale.
-	vec3 world = (vec3(wv) + 0.5) * pc.voxel_size;
-	if (texture(coarse_occ, fract(world / pc.coarse_extent)).a < 0.5) {
+	vec3 wc = (vec3(wv) + 0.5) * pc.voxel_size;
+	if (texture(coarse_occ, fract(wc / pc.coarse_extent)).a < 0.5) {
 		return; // empty coarse voxel — no distant surface here, no far probe
+	}
+	for (uint c = pc.cascade_begin; c < pc.cascade_end; ++c) {
+		seed_corners(c, cascades[c].spacing, wc);
 	}
 #else
 	int R = int(pc.res);
@@ -208,24 +223,23 @@ void main() {
 	if (imageLoad(occ_grid, cell).r < 0.5) {
 		return; // empty voxel — no surface here, no probe
 	}
-	// Seed from the surface FACE, not the voxel centre: push out along the voxel normal by half a voxel so
-	// the 8 gather-corner cells we touch match the ones the screen gather (which samples the face) reads.
+	// Seed BOTH the surface FACE and the voxel CENTRE. The screen gather reconstructs the world position
+	// from depth: on a solid wall/floor that's the FACE, so the face-offset (voxel centre + n·½voxel) makes
+	// the seeded corners line up with the gather's. But THIN / FOLIAGE geometry has no coherent voxel normal
+	// (leaves face every way -> n averages wrong or ~0), so the depth surface sits ~at the voxel CENTRE and
+	// the face-offset misaligns -> the gather finds no probe (the red canopy in the probe-occupancy view).
+	// Seeding both covers both cases; touch_cell dedups the overlap. Centre is skipped when n~0 (offset==0).
 	vec3 nrm = imageLoad(normal_grid, cell).rgb * 2.0 - 1.0;
-	nrm = (dot(nrm, nrm) > 0.0001) ? normalize(nrm) : vec3(0.0);
-	vec3 world = (vec3(wv) + 0.5 + nrm * 0.5) * pc.voxel_size; // voxel centre + n·½voxel → surface face
-#endif
-
+	bool has_n = dot(nrm, nrm) > 0.0001;
+	nrm = has_n ? normalize(nrm) : vec3(0.0);
+	vec3 wc = (vec3(wv) + 0.5) * pc.voxel_size; // voxel centre (matches the gather on thin/foliage)
+	vec3 wf = wc + nrm * (0.5 * pc.voxel_size); // surface face (matches the gather on solid walls/floors)
 	for (uint c = pc.cascade_begin; c < pc.cascade_end; ++c) {
 		float s = cascades[c].spacing;
-		// Seed the 8 cells the GATHER will trilinear-read for this surface point (gather bases at
-		// floor(world/s - 0.5); match exactly so no neighbour is missing). The 8-corner splat avoids
-		// dead probes at grazing angles.
-		vec3 sp = world / s - 0.5;
-		ivec3 b = ivec3(floor(sp));
-		for (int o = 0; o < 8; ++o) {
-			ivec3 cl = b + ivec3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
-			vec3 center = (vec3(cl) + 0.5) * s;
-			touch_cell(c, cl, center);
+		seed_corners(c, s, wf);
+		if (has_n) {
+			seed_corners(c, s, wc);
 		}
 	}
+#endif
 }
