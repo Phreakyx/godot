@@ -144,6 +144,16 @@ bool in_window(uint c, vec3 world) {
 	return all(greaterThanEqual(g, vec3(0.01))) && all(lessThanEqual(g, vec3(0.99)));
 }
 
+// How close world is to the OUTER edge of cascade c's window (0 in the interior, ramps to 1 at the edge).
+// Used to blend cascade c into the next coarser cascade across the ring boundary so the near->far handoff
+// is smooth -- a hard switch shows a bright seam where cascade c's edge probes (whose long merged rays
+// exit the window) don't match cascade c+1.
+float edgeness(uint c, vec3 world) {
+	vec3 g = (world - clip.lvl[c].origin) / clip.lvl[c].extent;
+	vec3 d = abs(g - 0.5) * 2.0; // 0 centre .. 1 at the window face
+	return smoothstep(0.82, 0.98, max(d.x, max(d.y, d.z)));
+}
+
 // Cosine-integrate one cascade's irradiance at a shaded point: 8-corner trilinear over the surrounding
 // probes (facing-weighted, with the thin-surface fallback), then a cosine hemisphere sum of their
 // directional radiance + sky through residual transparency. `coverage` (=psum) reports whether ANY probe
@@ -229,8 +239,9 @@ void main() {
 
 	// Unified clipmap gather: read the FINEST cascade whose nested window covers this pixel and has a probe.
 	// Cascade 0 (fine) near the camera, coarser cascades further out; a hole in a finer cascade falls through
-	// to the next coarser one. Each cascade holds its merged field (its interval + all coarser continuations),
-	// so the ring handoff is smooth by construction. Beyond the coarsest window there's no GI (stays 0).
+	// to the next coarser one. Across each window's OUTER edge, blend into the next coarser cascade so the
+	// near->far ring handoff is smooth (a hard switch shows a bright seam at the boundary). Beyond the
+	// coarsest window there's no GI (stays 0).
 	vec3 E = vec3(0.0);
 	for (uint c = 0u; c < clip.num_levels; ++c) {
 		if (!in_window(c, world)) {
@@ -238,10 +249,19 @@ void main() {
 		}
 		float cov;
 		vec3 Ec = gather_cascade(c, world, n, cov);
-		if (cov > 0.0) {
-			E = Ec;
-			break; // finest covering cascade with a probe
+		if (cov <= 0.0) {
+			continue; // hole in this cascade -> fall through to the next coarser one
 		}
+		float edge = (c + 1u < clip.num_levels) ? edgeness(c, world) : 0.0;
+		if (edge > 0.0) {
+			float covn;
+			vec3 Ecn = gather_cascade(c + 1u, world, n, covn);
+			if (covn > 0.0) {
+				Ec = mix(Ec, Ecn, edge); // fade this cascade into the next coarser one across the boundary
+			}
+		}
+		E = Ec;
+		break; // finest covering cascade with a probe
 	}
 	// ---- DEBUG probe inspector: dump the nearest probe in cascade uint(pc._p2) at the target pixel ----
 	if (pc._p0 != 0xffffffffu && uint(px.x) == pc._p0 && uint(px.y) == pc._p1) {
