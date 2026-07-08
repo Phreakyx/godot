@@ -151,7 +151,11 @@ bool in_window(uint c, vec3 world) {
 float edgeness(uint c, vec3 world) {
 	vec3 g = (world - clip.lvl[c].origin) / clip.lvl[c].extent;
 	vec3 d = abs(g - 0.5) * 2.0; // 0 centre .. 1 at the window face
-	return smoothstep(0.82, 0.98, max(d.x, max(d.y, d.z)));
+	// Wide band biased toward the far cascade: start blending at ~55% out and be ~fully the coarser cascade
+	// by ~90%, so a surface is already showing the far value BEFORE it crosses the window edge -> no pop when
+	// the camera-centred boundary sweeps across it. Costs some near sharpness in the outer ring (acceptable
+	// -- that ring is mid/far distance anyway).
+	return smoothstep(0.55, 0.9, max(d.x, max(d.y, d.z)));
 }
 
 // Cosine-integrate one cascade's irradiance at a shaded point: 8-corner trilinear over the surrounding
