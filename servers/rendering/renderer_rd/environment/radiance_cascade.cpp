@@ -95,6 +95,7 @@ void RadianceCascadeShaders::init() {
 	init_compute(voxel_debug, voxel_debug_shader, voxel_debug_pipeline, "");
 
 	// Screen-space irradiance chain.
+	init_compute(temporal, temporal_shader, temporal_pipeline, "");
 	init_compute(irradiance_atrous, irradiance_atrous_shader, irradiance_atrous_pipeline, "");
 	init_compute(irradiance_upsample, irradiance_upsample_shader, irradiance_upsample_pipeline, "");
 	init_compute(composite, composite_shader, composite_pipeline, ""); // TEMPORARY bring-up output
@@ -141,6 +142,7 @@ void RadianceCascadeShaders::free() {
 	free_compute(dyn_occ_temporal, dyn_occ_temporal_shader, dyn_occ_temporal_pipeline);
 	free_compute(voxel_debug, voxel_debug_shader, voxel_debug_pipeline);
 
+	free_compute(temporal, temporal_shader, temporal_pipeline);
 	free_compute(irradiance_atrous, irradiance_atrous_shader, irradiance_atrous_pipeline);
 	free_compute(irradiance_upsample, irradiance_upsample_shader, irradiance_upsample_pipeline);
 	free_compute(composite, composite_shader, composite_pipeline);
@@ -305,6 +307,11 @@ void RadianceCascade::free_resources() {
 	fr(irradiance_tex);
 	fr(irradiance_half);
 	fr(irradiance_half_b);
+	for (int i = 0; i < 2; i++) {
+		fr(irradiance_history[i]);
+		fr(temporal_set0[i]);
+	}
+	fr(temporal_set1);
 	fr(debug_tex);
 	fr(dummy_color_tex);
 	fr(dummy_albedo_tex);
@@ -505,6 +512,11 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	irradiance_tex = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, screen_size.x, screen_size.y, 1, 1, usage_2d);
 	irradiance_half = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d);
 	irradiance_half_b = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d);
+	for (int i = 0; i < 2; i++) {
+		irradiance_history[i] = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d);
+		rd->texture_clear(irradiance_history[i], Color(0, 0, 0, 0), 0, 1, 0, 1);
+	}
+	history_valid = false; // no reprojection until we have a previous frame
 
 	point_sampler = make_sampler(RD::SAMPLER_FILTER_NEAREST, RD::SAMPLER_FILTER_NEAREST);
 	depth_sampler = make_sampler(RD::SAMPLER_FILTER_LINEAR, RD::SAMPLER_FILTER_LINEAR);
@@ -548,7 +560,9 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	const Projection projection = p_render_data->scene_data->cam_projection;
 	z_near = (float)projection.get_z_near();
 	z_far = (float)projection.get_z_far();
-	update_camera(projection, cam_to_world.affine_inverse());
+	const Transform3D view = cam_to_world.affine_inverse();
+	update_camera(projection, view);
+	const Projection cur_view_proj = projection * Projection(view); // world -> clip, for temporal reprojection next
 	update_lights(p_render_data);
 
 	// Per-frame inputs + their set-1 descriptor sets.
@@ -654,6 +668,10 @@ void RadianceCascade::process(RenderDataRD *p_render_data, RID p_depth, RID p_no
 	dispatch_patch_neighbours();
 	dispatch_patch_merge();
 	dispatch_patch_gather();
+	dispatch_temporal(); // reproject + EMA-blend the previous frame's GI (smooths the moving cascade handoff)
+	prev_view_proj = cur_view_proj; // this frame becomes next frame's history reprojection
+	history_valid = true;
+	history_write_idx ^= 1u; // ping-pong: next frame reads what we just wrote
 	dispatch_irradiance_atrous();
 	RENDER_TIMESTAMP("RC Upsample");
 	dispatch_irradiance_upsample();
@@ -1214,6 +1232,19 @@ void RadianceCascade::build_static_sets() {
 		};
 		atrous_set0_h2s = mkset(irradiance_half, irradiance_half_b);
 		atrous_set0_s2h = mkset(irradiance_half_b, irradiance_half);
+	}
+
+	{ // temporal set0[w]: blend irradiance_half with history[1-w] (read) -> write history[w] + irradiance_half
+		auto mkset = [&](int w) {
+			Vector<RD::Uniform> u;
+			u.push_back(img(0, irradiance_half)); // current gather (in) + blended (out)
+			u.push_back(tex(1, point_sampler, irradiance_history[1 - w])); // previous accumulated
+			u.push_back(img(2, irradiance_history[w])); // this frame's accumulated
+			u.push_back(ubo(3, camera_ubo));
+			return rd->uniform_set_create(u, RC_SHADER(temporal), 0);
+		};
+		temporal_set0[0] = mkset(0);
+		temporal_set0[1] = mkset(1);
 	}
 
 	{ // upsample set2 -- c0 probes for the edge full-res gather
@@ -1799,6 +1830,39 @@ void RadianceCascade::dispatch_patch_gather() {
 	rd->compute_list_bind_compute_pipeline(l, sh.patch_gather_pipeline);
 	rd->compute_list_bind_uniform_set(l, patch_gather_set0, 0);
 	rd->compute_list_bind_uniform_set(l, patch_lookup_set1, 1); // per-frame depth/normal
+	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
+	rd->compute_list_dispatch(l, ((uint32_t)half_size.x + 7u) / 8u, ((uint32_t)half_size.y + 7u) / 8u, 1);
+	rd->compute_list_end();
+}
+
+void RadianceCascade::dispatch_temporal() {
+	// Reproject the previous frame's accumulated half-res irradiance by camera motion and EMA-blend it with
+	// this frame's gather, smoothing the camera-centred cascade handoff (and denoising). First frame (or
+	// after a resize) has no history -> alpha 0 just seeds it. History ping-pongs (read 1-w, write w).
+	RadianceCascadeShaders &sh = *gi->rc_shader;
+	{ // per-frame set1: full-res depth (NEAREST), cached via the set cache
+		RD::Uniform ud;
+		ud.uniform_type = RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE;
+		ud.binding = 0;
+		ud.append_id(point_sampler);
+		ud.append_id(frame_depth);
+		temporal_set1 = UniformSetCacheRD::get_singleton()->get_cache(sh.temporal.version_get_shader(sh.temporal_shader, 0), 1, ud);
+	}
+	RCTemporalPushConstant pc = {};
+	for (int c = 0; c < 4; c++) {
+		for (int r = 0; r < 4; r++) {
+			pc.prev_view_proj[c * 4 + r] = (float)prev_view_proj.columns[c][r];
+		}
+	}
+	pc.half_w = (uint32_t)half_size.x;
+	pc.half_h = (uint32_t)half_size.y;
+	pc.z_near = z_near;
+	pc.z_far = z_far;
+	pc.alpha = history_valid ? temporal_alpha : 0.0f;
+	RD::ComputeListID l = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(l, sh.temporal_pipeline);
+	rd->compute_list_bind_uniform_set(l, temporal_set0[history_write_idx], 0);
+	rd->compute_list_bind_uniform_set(l, temporal_set1, 1);
 	rd->compute_list_set_push_constant(l, &pc, sizeof(pc));
 	rd->compute_list_dispatch(l, ((uint32_t)half_size.x + 7u) / 8u, ((uint32_t)half_size.y + 7u) / 8u, 1);
 	rd->compute_list_end();

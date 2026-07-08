@@ -85,6 +85,7 @@
 #include "servers/rendering/renderer_rd/shaders/environment/rc_patch_reduce.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_patch_trace.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_slab_clear.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/environment/rc_temporal.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxel_debug.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxel_inject.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/environment/rc_voxel_unpack.glsl.gen.h"
@@ -178,6 +179,15 @@ struct RCPatchGatherPushConstant {
 	float pad1[2];
 	float sky_color[3]; // sky fallback where no probe is hit
 	float pad2;
+};
+
+// rc_temporal.glsl — reproject + EMA-blend the previous frame's irradiance.
+struct RCTemporalPushConstant {
+	float prev_view_proj[16]; // previous frame's world->clip
+	uint32_t half_w, half_h;
+	float z_near, z_far;
+	float alpha; // history weight (0 = first frame / no accumulation)
+	float pad[3];
 };
 
 // rc_patch_merge.glsl — merge cascade c+1 down into cascade c.
@@ -412,6 +422,7 @@ struct RadianceCascadeShaders {
 	RcPatchReduceShaderRD patch_reduce;
 	RcPatchTraceShaderRD patch_trace;
 	RcSlabClearShaderRD slab_clear;
+	RcTemporalShaderRD temporal;
 	RcVoxelDebugShaderRD voxel_debug;
 	RcVoxelInjectShaderRD voxel_inject;
 	RcVoxelUnpackShaderRD voxel_unpack;
@@ -438,6 +449,7 @@ struct RadianceCascadeShaders {
 	RID patch_reduce_shader, patch_reduce_pipeline;
 	RID patch_trace_shader, patch_trace_pipeline;
 	RID slab_clear_shader, slab_clear_pipeline;
+	RID temporal_shader, temporal_pipeline;
 	RID voxel_debug_shader, voxel_debug_pipeline;
 	RID voxel_inject_shader, voxel_inject_pipeline;
 	RID voxel_unpack_shader, voxel_unpack_pipeline;
@@ -588,6 +600,7 @@ private:
 	void dispatch_voxel_debug(int p_level = 0); // 0 = L0 voxel grid; 1..4 = coarse clip level
 	void dispatch_dynamic_voxelize();
 	void dispatch_dyn_occ_temporal();
+	void dispatch_temporal();
 	void dispatch_irradiance_atrous();
 	void dispatch_irradiance_upsample();
 	void dispatch_composite(); // TEMPORARY bring-up output; replaced by RB_TEX_AMBIENT write
@@ -795,6 +808,15 @@ private:
 	RID irradiance_tex; // full-res output (-> RB_TEX_AMBIENT)
 	RID irradiance_half; // half-res gather target
 	RID irradiance_half_b; // a-trous ping-pong scratch
+	// ── Temporal accumulation ── smooth the camera-centred cascade handoff (and denoise) by blending each
+	// frame's half-res irradiance with the previous frame's, reprojected by camera motion.
+	RID irradiance_history[2]; // ping-pong accumulated irradiance
+	RID temporal_set0[2]; // [w] = read history[1-w] + write history[w] (+ irradiance_half in/out, camera)
+	RID temporal_set1; // per-frame depth
+	uint32_t history_write_idx = 0; // which history buffer we write this frame (read the other)
+	bool history_valid = false; // false on the first frame / after a resize -> no accumulation that frame
+	Projection prev_view_proj; // previous frame's world->clip, for reprojection
+	float temporal_alpha = 0.9f; // history weight (higher = smoother handoff + more denoise, slower response)
 	RID atrous_set0_h2s, atrous_set0_s2h;
 	RID atrous_set1; // per-frame depth + normal
 	int atrous_passes = 4;
