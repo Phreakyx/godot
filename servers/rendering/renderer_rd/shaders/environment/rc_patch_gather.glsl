@@ -144,19 +144,6 @@ bool in_window(uint c, vec3 world) {
 	return all(greaterThanEqual(g, vec3(0.01))) && all(lessThanEqual(g, vec3(0.99)));
 }
 
-// How close world is to the OUTER edge of cascade c's window (0 in the interior, ramps to 1 at the edge).
-// Used to blend cascade c into the next coarser cascade across the ring boundary so the near->far handoff
-// is smooth -- a hard switch shows a bright seam where cascade c's edge probes (whose long merged rays
-// exit the window) don't match cascade c+1.
-float edgeness(uint c, vec3 world) {
-	vec3 g = (world - clip.lvl[c].origin) / clip.lvl[c].extent;
-	vec3 d = abs(g - 0.5) * 2.0; // 0 centre .. 1 at the window face
-	// Wide band biased toward the far cascade: start blending at ~55% out and be ~fully the coarser cascade
-	// by ~90%, so a surface is already showing the far value BEFORE it crosses the window edge -> no pop when
-	// the camera-centred boundary sweeps across it. Costs some near sharpness in the outer ring (acceptable
-	// -- that ring is mid/far distance anyway).
-	return smoothstep(0.55, 0.9, max(d.x, max(d.y, d.z)));
-}
 
 // Cosine-integrate one cascade's irradiance at a shaded point: 8-corner trilinear over the surrounding
 // probes (facing-weighted, with the thin-surface fallback), then a cosine hemisphere sum of their
@@ -241,31 +228,30 @@ void main() {
 	vec3 world = screen_to_world(vec2(px), linearize_depth(raw));
 	vec3 n = fetch_normal_ws(uv);
 
-	// Unified clipmap gather: read the FINEST cascade whose nested window covers this pixel and has a probe.
-	// Cascade 0 (fine) near the camera, coarser cascades further out; a hole in a finer cascade falls through
-	// to the next coarser one. Across each window's OUTER edge, blend into the next coarser cascade so the
-	// near->far ring handoff is smooth (a hard switch shows a bright seam at the boundary). Beyond the
-	// coarsest window there's no GI (stays 0).
+	// Unified clipmap gather -- COVERAGE-DRIVEN mix across cascades (no hand-tuned edge blend). Each cascade's
+	// 8-corner trilinear reports how much of the pixel it actually covers (cov = its probe weight-sum: 1.0 in
+	// the interior, dropping toward 0 where probes run out at the window edge OR at an interior hole). Take the
+	// finest cascade weighted by its coverage, then FILL the remaining uncovered fraction from the next coarser
+	// cascade, and so on. The near->far handoff and interior holes both resolve where the data actually runs
+	// out -- fine field stays sharp to its true edge, gaps are filled by coarser probes, seamless by construction.
 	vec3 E = vec3(0.0);
-	for (uint c = 0u; c < clip.num_levels; ++c) {
+	float filled = 0.0; // fraction of this pixel's GI already provided by finer cascades
+	for (uint c = 0u; c < clip.num_levels && filled < 0.999; ++c) {
 		if (!in_window(c, world)) {
 			continue; // pixel is beyond this cascade's extent -> try the next coarser one
 		}
 		float cov;
-		vec3 Ec = gather_cascade(c, world, n, cov);
+		vec3 Ec = gather_cascade(c, world, n, cov); // Ec = full-brightness irradiance, cov = coverage 0..1
+		cov = clamp(cov, 0.0, 1.0);
 		if (cov <= 0.0) {
-			continue; // hole in this cascade -> fall through to the next coarser one
+			continue; // no probe here at this level -> the coarser cascade fills it
 		}
-		float edge = (c + 1u < clip.num_levels) ? edgeness(c, world) : 0.0;
-		if (edge > 0.0) {
-			float covn;
-			vec3 Ecn = gather_cascade(c + 1u, world, n, covn);
-			if (covn > 0.0) {
-				Ec = mix(Ec, Ecn, edge); // fade this cascade into the next coarser one across the boundary
-			}
-		}
-		E = Ec;
-		break; // finest covering cascade with a probe
+		float take = cov * (1.0 - filled); // this cascade fills `cov` of what's still uncovered
+		E += Ec * take;
+		filled += take;
+	}
+	if (filled > 0.001) {
+		E /= filled; // renormalise to full brightness if the coarsest cascade still left the pixel partly uncovered
 	}
 	// ---- DEBUG probe inspector: dump the nearest probe in cascade uint(pc._p2) at the target pixel ----
 	if (pc._p0 != 0xffffffffu && uint(px.x) == pc._p0 && uint(px.y) == pc._p1) {
