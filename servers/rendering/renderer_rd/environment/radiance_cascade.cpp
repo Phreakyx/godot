@@ -513,7 +513,7 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	irradiance_half = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d);
 	irradiance_half_b = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d);
 	for (int i = 0; i < 2; i++) {
-		irradiance_history[i] = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d);
+		irradiance_history[i] = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_2D, half_size.x, half_size.y, 1, 1, usage_2d | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT);
 		rd->texture_clear(irradiance_history[i], Color(0, 0, 0, 0), 0, 1, 0, 1);
 	}
 	history_valid = false; // no reprojection until we have a previous frame

@@ -144,6 +144,16 @@ bool in_window(uint c, vec3 world) {
 	return all(greaterThanEqual(g, vec3(0.01))) && all(lessThanEqual(g, vec3(0.99)));
 }
 
+// Spatial falloff of cascade c's contribution toward its window edge (1 in the interior, 0 at the face
+// over a WIDE band). Multiplying each cascade's coverage by this makes the near->far handoff a wide,
+// SPATIALLY-soft blend (so the camera-centred boundary doesn't read as a sharp line sweeping while moving)
+// while the coverage-fill still resolves interior holes.
+float window_falloff(uint c, vec3 world) {
+	vec3 g = (world - clip.lvl[c].origin) / clip.lvl[c].extent;
+	vec3 d = abs(g - 0.5) * 2.0; // 0 centre .. 1 at the window face
+	return 1.0 - smoothstep(0.6, 0.92, max(d.x, max(d.y, d.z)));
+}
+
 
 // Cosine-integrate one cascade's irradiance at a shaded point: 8-corner trilinear over the surrounding
 // probes (facing-weighted, with the thin-surface fallback), then a cosine hemisphere sum of their
@@ -243,6 +253,9 @@ void main() {
 		float cov;
 		vec3 Ec = gather_cascade(c, world, n, cov); // Ec = full-brightness irradiance, cov = coverage 0..1
 		cov = clamp(cov, 0.0, 1.0);
+		if (c + 1u < clip.num_levels) {
+			cov *= window_falloff(c, world); // fade toward the window edge -> wide spatial handoff (except coarsest)
+		}
 		if (cov <= 0.0) {
 			continue; // no probe here at this level -> the coarser cascade fills it
 		}
