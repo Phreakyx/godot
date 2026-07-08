@@ -768,7 +768,10 @@ private:
 	int clip_active = -1; // level chosen this frame (set by clip_step, read by the renderer + process)
 	RID clip_params_ubo;
 	RID dummy_clip_tex; // 1^3 black, fills unused bindings
-	RID clip_albedo, clip_normal, clip_emission; // shared coarse-voxelize scratch
+	RID clip_albedo, clip_normal; // shared coarse-voxelize scratch (transient, consumed by clip_inject)
+	RID clip_emission[MAX_CLIP]; // PERSISTENT per coarse level: emission is a material property (never stale),
+	// stored separately (like L0's voxel_emission) so the trace adds it directly -> distant emitters always
+	// cast GI regardless of the shell-local coarse radiance going stale. [0] unused; [1..4] per coarse level.
 
 	// ── Lights ──
 	RID light_buffer; // MAX_LIGHTS * RCLightData

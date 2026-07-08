@@ -293,7 +293,9 @@ void RadianceCascade::free_resources() {
 	fr(dummy_clip_tex);
 	fr(clip_albedo);
 	fr(clip_normal);
-	fr(clip_emission);
+	for (int L = 0; L < MAX_CLIP; L++) {
+		fr(clip_emission[L]);
+	}
 	fr(trace_params_ubo);
 	fr(light_buffer);
 	fr(tri_buffer);
@@ -454,7 +456,10 @@ void RadianceCascade::create(GI *p_gi, const Size2i &p_size) {
 	voxel_sampler = make_sampler(RD::SAMPLER_FILTER_LINEAR, RD::SAMPLER_FILTER_LINEAR);
 	clip_albedo = make_tex(RD::DATA_FORMAT_R8G8B8A8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_grid);
 	clip_normal = make_tex(RD::DATA_FORMAT_R8G8B8A8_UNORM, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_grid);
-	clip_emission = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_grid);
+	for (int L = 1; L < MAX_CLIP; L++) { // persistent per-level coarse emission (material property, never stale)
+		clip_emission[L] = make_tex(RD::DATA_FORMAT_R16G16B16A16_SFLOAT, RD::TEXTURE_TYPE_3D, vox_res, vox_res, vox_res, 1, usage_grid);
+		rd->texture_clear(clip_emission[L], Color(0, 0, 0, 0), 0, 1, 0, 1);
+	}
 
 	// Probe store: the cascade table sizes every parallel SSBO below.
 	build_cascade_table();
@@ -1153,6 +1158,15 @@ void RadianceCascade::build_static_sets() {
 		u.push_back(clip_tex(13, 4));
 		u.push_back(ubo(14, clip_params_ubo));
 		u.push_back(tex(15, voxel_linear_sampler, sdf_tex));
+		// Persistent per-level coarse emission (added directly by the trace, like L0's voxel_emission).
+		auto clip_em_tex = [&](int p_bind, int L) {
+			RID t = (L < clip_levels && clip_emission[L].is_valid()) ? clip_emission[L] : dummy_clip_tex;
+			return tex(p_bind, voxel_linear_sampler, t);
+		};
+		u.push_back(clip_em_tex(16, 1));
+		u.push_back(clip_em_tex(17, 2));
+		u.push_back(clip_em_tex(18, 3));
+		u.push_back(clip_em_tex(19, 4));
 		trace_voxel_set2 = rd->uniform_set_create(u, RC_SHADER(patch_trace), 2);
 	}
 
@@ -1256,7 +1270,7 @@ void RadianceCascade::build_static_sets() {
 			u.push_back(ssbo(1, tri_buffer));
 			u.push_back(img(2, clip_albedo));
 			u.push_back(img(3, clip_normal));
-			u.push_back(img(4, clip_emission));
+			u.push_back(img(4, clip_emission[L]));
 			clip_voxelize_set[L] = rd->uniform_set_create(u, RC_SHADER(voxelize_mesh), 0);
 		}
 		{
@@ -1264,7 +1278,7 @@ void RadianceCascade::build_static_sets() {
 			u.push_back(img(0, clip_grid[L]));
 			u.push_back(img(1, clip_albedo));
 			u.push_back(img(2, clip_normal));
-			u.push_back(img(3, clip_emission));
+			u.push_back(img(3, clip_emission[L]));
 			u.push_back(ssbo(4, light_buffer));
 			u.push_back(tex(5, voxel_linear_sampler, voxel_tex)); // L0 lit radiance (mipped) for the overlap downsample
 			u.push_back(ubo(6, clip_params_ubo)); // per-level origin/extent table (reads lvl[0] = L0)
@@ -1275,7 +1289,7 @@ void RadianceCascade::build_static_sets() {
 			u.push_back(img(0, clip_grid[L]));
 			u.push_back(img(1, clip_albedo));
 			u.push_back(img(2, clip_normal));
-			u.push_back(img(3, clip_emission));
+			u.push_back(img(3, clip_emission[L]));
 			clip_slab_clear_set[L] = rd->uniform_set_create(u, RC_SHADER(slab_clear), 0);
 		}
 		{ // coarse unpack: shared packed render targets -> clip_grid[L] (occupancy) + clip scratch.
@@ -1288,7 +1302,7 @@ void RadianceCascade::build_static_sets() {
 			u.push_back(img(3, clip_grid[L]));
 			u.push_back(img(4, clip_albedo));
 			u.push_back(img(5, clip_normal));
-			u.push_back(img(6, clip_emission));
+			u.push_back(img(6, clip_emission[L]));
 			clip_unpack_set[L] = rd->uniform_set_create(u, RC_SHADER(voxel_unpack), 0);
 		}
 	}

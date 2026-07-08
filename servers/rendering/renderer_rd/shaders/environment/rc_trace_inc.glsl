@@ -55,6 +55,12 @@ layout(set = 2, binding = 14, std140) uniform ClipParams {
 }
 clip;
 layout(set = 2, binding = 15) uniform sampler3D rc_sdf; // r16f: dist to nearest occluder, level-0 voxels, window-relative toroidal
+// PERSISTENT per-level coarse emission (rgb = emissive radiance). Stored separately from the (shell-local,
+// stale-prone) coarse radiance so distant emitters always cast GI -- added directly by the trace, like L0.
+layout(set = 2, binding = 16) uniform sampler3D rc_clip_em1;
+layout(set = 2, binding = 17) uniform sampler3D rc_clip_em2;
+layout(set = 2, binding = 18) uniform sampler3D rc_clip_em3;
+layout(set = 2, binding = 19) uniform sampler3D rc_clip_em4;
 
 vec4 sample_coarse_grid(int L, vec3 uvw) { // if-ladder dodges non-uniform indexing
 	if (L == 1) {
@@ -67,6 +73,18 @@ vec4 sample_coarse_grid(int L, vec3 uvw) { // if-ladder dodges non-uniform index
 		return textureLod(rc_clip3, uvw, 0.0);
 	}
 	return textureLod(rc_clip4, uvw, 0.0);
+}
+vec3 sample_coarse_emission(int L, vec3 uvw) { // if-ladder dodges non-uniform indexing
+	if (L == 1) {
+		return textureLod(rc_clip_em1, uvw, 0.0).rgb;
+	}
+	if (L == 2) {
+		return textureLod(rc_clip_em2, uvw, 0.0).rgb;
+	}
+	if (L == 3) {
+		return textureLod(rc_clip_em3, uvw, 0.0).rgb;
+	}
+	return textureLod(rc_clip_em4, uvw, 0.0).rgb;
 }
 // finest coarse level (1..num_levels-1) whose extent contains W, else -1
 int finest_coarse(vec3 W) {
@@ -159,6 +177,10 @@ Scene sample_clipmap(vec3 W, vec3 dir, float diam) {
 		o.rad = c.rgb;
 		o.occ = min(c.a * COARSE_OCC_CONSERVATISM, 1.0);
 		o.cone_occ = c.a;
+		// Persistent coarse emission (added like L0's; coverage-weighted by occupancy so a partially-filled
+		// coarse cell emits proportionally, matching how the reflected radiance is composited).
+		o.em_rgb = sample_coarse_emission(L, uvwL);
+		o.em_a = c.a;
 	}
 	return o;
 }

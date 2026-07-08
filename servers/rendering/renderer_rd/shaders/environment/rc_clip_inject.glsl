@@ -139,7 +139,10 @@ void main() {
 	// up: a cell under a ceiling/canopy sees no sky (dark, like L0's enclosed cells), an open cell sees full
 	// sky. This only shapes the ring BEYOND L0 (the overlap returned above using L0's own radiance).
 	float sky_vis = roofed(rstart) ? 0.0 : 1.0;
-	vec3 Lo = em + alb * pc.sun_color * sky_vis;
+	// NOTE: emission is NOT baked into the coarse radiance any more. It's stored persistently per level
+	// (clip_emission[L]) and added directly by the trace (like L0), so distant emitters keep casting GI even
+	// as this shell-local reflected radiance goes stale. Here we bake ONLY the reflected sun+sky.
+	vec3 Lo = alb * pc.sun_color * sky_vis;
 
 	// Light every buffer light like level 0 does (rc_eval_light = alb.color.ndl/pi), so the coarse
 	// sun matches L0 -- the directional comes from the light buffer, not a separate push constant.
