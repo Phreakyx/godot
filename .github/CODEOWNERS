@@ -256,6 +256,7 @@
 /modules/godot_physics_3d/                    @godotengine/physics
 /modules/godot_physics_3d/**/*.py             @godotengine/physics @godotengine/buildsystem
 /modules/godot_physics_3d/**/SCsub            @godotengine/physics @godotengine/buildsystem
+/modules/godot_physx/                         @uno1982
 /modules/jolt_physics/                        @godotengine/physics @godotengine/jolt-physics
 /modules/jolt_physics/**/*.py                 @godotengine/physics @godotengine/jolt-physics @godotengine/buildsystem
 /modules/jolt_physics/**/SCsub                @godotengine/physics @godotengine/jolt-physics @godotengine/buildsystem
