@@ -39,6 +39,11 @@
 #include "core/object/class_db.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
+#ifdef TOOLS_ENABLED
+#include "editor/physx_editor_plugin.h"
+#include "editor/plugins/editor_plugin.h"
+#endif
+
 static PhysicsServer3D *create_physx_physics_server() {
 #ifdef THREADS_ENABLED
 	bool run_on_separate_thread = GLOBAL_GET("physics/3d/run_on_separate_thread");
@@ -60,6 +65,12 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		GDREGISTER_CLASS(PhysXParticleFluid3D);
 	}
+
+#ifdef TOOLS_ENABLED
+	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
+		EditorPlugins::add_by_type<PhysXEditorPlugin>();
+	}
+#endif
 }
 
 void uninitialize_godot_physx_module(ModuleInitializationLevel p_level) {
