@@ -32,6 +32,7 @@
 #include "../godot_physx_conversions.h"
 
 #include "core/error/error_macros.h"
+#include "core/math/basis.h"
 #include "core/math/vector3.h"
 #include "core/typedefs.h"
 
@@ -460,6 +461,13 @@ public:
 // config needed.
 struct Vehicle4WWheelConfig {
 	Vector3 position;
+	// The wheel node's own local orientation (relative to the chassis) --
+	// identity (the default) means straight-down suspension travel, matching
+	// every existing scene/test. A non-identity basis angles the suspension
+	// travel direction and gives the wheel real camber -- e.g. a dune buggy's
+	// angled A-arms. Same convention as Vehicle2WWheelConfig::basis; see that
+	// struct's own doc comment for the stock-Godot precedent this mirrors.
+	Basis basis;
 	real_t radius = 0.35f;
 	real_t half_width = 0.15f;
 	real_t wheel_mass = 20.0f;
@@ -479,6 +487,7 @@ struct Vehicle4WWheelConfig {
 
 	real_t tire_lateral_stiffness = 20000.0f;
 	real_t tire_longitudinal_stiffness = 20000.0f;
+	real_t tire_camber_stiffness = 0.0f;
 	real_t tire_friction = 1.0f;
 	// frictionVsSlip curve, as fractions of tire_friction: grip ramps up to
 	// peak (1.0x) at 10% slip, then falls off to tire_slide_grip once fully
@@ -678,12 +687,18 @@ inline bool configure_vehicle4w(Vehicle4W &v, const Vehicle4WConfig &cfg, PxPhys
 		// "resting position" -- the opposite of VehicleWheel3D's own
 		// convention. Backing out the attachment from an estimated static
 		// jounce makes w.position mean the same thing VehicleWheel3D's own
-		// position means: where the wheel actually sits at rest.
+		// position means: where the wheel actually sits at rest. Travel
+		// direction is the wheel node's own local -Y (see
+		// Vehicle4WWheelConfig::basis's own doc comment) instead of a
+		// hardcoded (0,-1,0), so the backing-out math below projects along
+		// that direction rather than assuming +Y is "up" relative to the
+		// suspension.
+		const Vector3 travel_dir_local = w.basis.xform(Vector3(0.0f, -1.0f, 0.0f)).normalized();
 		const PxReal restLoadEstimate = v.suspensionForceParams[i].sprungMass * 9.81f;
 		const PxReal jounceAtRest = (w.suspension_stiffness > 0.0) ? PxClamp(restLoadEstimate / (PxReal)w.suspension_stiffness, 0.0f, (PxReal)w.suspension_travel) : 0.0f;
-		const Vector3 attachment_local = w.position - cfg.chassis_com_local + Vector3(0.0f, (real_t)((PxReal)w.suspension_travel - jounceAtRest), 0.0f);
-		v.suspensionParams[i].suspensionAttachment = PxTransform(to_px(attachment_local));
-		v.suspensionParams[i].suspensionTravelDir = PxVec3(0.0f, -1.0f, 0.0f);
+		const Vector3 attachment_local = (w.position - cfg.chassis_com_local) - travel_dir_local * (real_t)((PxReal)w.suspension_travel - jounceAtRest);
+		v.suspensionParams[i].suspensionAttachment = PxTransform(to_px(attachment_local), to_px(w.basis.get_rotation_quaternion()));
+		v.suspensionParams[i].suspensionTravelDir = to_px(travel_dir_local);
 		v.suspensionParams[i].suspensionTravelDist = (PxReal)w.suspension_travel;
 		v.suspensionParams[i].wheelAttachment = PxTransform(PxIdentity);
 
@@ -692,7 +707,7 @@ inline bool configure_vehicle4w(Vehicle4W &v, const Vehicle4WConfig &cfg, PxPhys
 		v.tireForceParams[i].latStiffX = 0.01f;
 		v.tireForceParams[i].latStiffY = (PxReal)w.tire_lateral_stiffness;
 		v.tireForceParams[i].longStiff = (PxReal)w.tire_longitudinal_stiffness;
-		v.tireForceParams[i].camberStiff = 0.0f;
+		v.tireForceParams[i].camberStiff = (PxReal)w.tire_camber_stiffness;
 		v.tireForceParams[i].restLoad = v.suspensionForceParams[i].sprungMass * 9.81f;
 		// Peak grip at ~10% slip, falling off once fully locked/sliding --
 		// a flat curve here would mean a locked tire grips as well as a
