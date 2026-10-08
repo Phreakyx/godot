@@ -58,6 +58,9 @@
 		</method>
 	</methods>
 	<members>
+		<member name="adhesion" type="float" setter="set_adhesion" getter="get_adhesion" default="0.0">
+			PBD solver only. How much the fluid sticks to the surfaces it touches: [code]0[/code] runs off cleanly like water, higher values cling like honey or blood on a wall. The MPM solver ignores it.
+		</member>
 		<member name="cohesion" type="float" setter="set_cohesion" getter="get_cohesion" default="0.02">
 			How strongly particles clump together. Higher values give a more gel-like fluid.
 		</member>
@@ -90,6 +93,9 @@
 		</member>
 		<member name="foam_threshold" type="float" setter="set_foam_threshold" getter="get_foam_threshold" default="300.0">
 			How agitated the fluid must be locally before diffuse particles spawn there. Lower values produce foam more readily. Only used when [member foam_enabled] is set.
+		</member>
+		<member name="gravity_scale" type="float" setter="set_gravity_scale" getter="get_gravity_scale" default="1.0">
+			Multiplies the gravity the fluid falls with. The PBD solver takes a change at once; the MPM solver takes it at its next configure ([method spawn], or a grid rebuild), like [member viscosity].
 		</member>
 		<member name="mpm_auto_colliders" type="bool" setter="set_mpm_auto_colliders" getter="is_mpm_auto_colliders" default="false">
 			MPM solver only. When enabled, the fluid also collides with every non-static [PhysicsBody3D] overlapping [member mpm_domain_size] each step — the player, thrown objects, moving platforms — without listing them in [member mpm_colliders], the way the PBD solver collides with the whole space automatically. Static bodies (walls, a floor) are skipped; put those in [member mpm_colliders] once. The nearest bodies are taken up to a shared limit of 32 colliders. Costs one overlap query per step.

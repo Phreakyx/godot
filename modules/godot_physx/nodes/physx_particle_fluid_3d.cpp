@@ -127,6 +127,7 @@ void PhysXParticleFluid3D::_mpm_configure(bool p_prefill) {
 	s.substeps = mpm_substeps;
 	s.stiffness = mpm_stiffness;
 	s.viscosity = viscosity;
+	s.gravity = Vector3(0, -9.8f, 0) * gravity_scale;
 	s.domain = mpm_domain_size;
 	s.spawn_region = spawn_region_size;
 	s.granular = _is_granular();
@@ -800,6 +801,8 @@ void PhysXParticleFluid3D::_apply_params() {
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_SURFACE_TENSION, surface_tension);
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_COHESION, cohesion);
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_VORTICITY, vorticity);
+	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_ADHESION, adhesion);
+	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_GRAVITY_SCALE, gravity_scale);
 }
 
 void PhysXParticleFluid3D::spawn() {
@@ -1580,6 +1583,16 @@ void PhysXParticleFluid3D::set_vorticity(float p_v) {
 	_apply_params();
 }
 
+void PhysXParticleFluid3D::set_adhesion(float p_v) {
+	adhesion = MAX(p_v, 0.0f);
+	_apply_params();
+}
+
+void PhysXParticleFluid3D::set_gravity_scale(float p_v) {
+	gravity_scale = p_v;
+	_apply_params(); // PBD: live; MPM takes it at the next configure (spawn / a grid rebuild), like viscosity
+}
+
 void PhysXParticleFluid3D::set_spawn_region_size(const Vector3 &p_size) {
 	spawn_region_size = p_size.maxf(0.0);
 	if (spawned && _mpm_path() && !_mpm_emit_mode) {
@@ -1757,6 +1770,10 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_cohesion"), &PhysXParticleFluid3D::get_cohesion);
 	ClassDB::bind_method(D_METHOD("set_vorticity", "vorticity"), &PhysXParticleFluid3D::set_vorticity);
 	ClassDB::bind_method(D_METHOD("get_vorticity"), &PhysXParticleFluid3D::get_vorticity);
+	ClassDB::bind_method(D_METHOD("set_adhesion", "adhesion"), &PhysXParticleFluid3D::set_adhesion);
+	ClassDB::bind_method(D_METHOD("get_adhesion"), &PhysXParticleFluid3D::get_adhesion);
+	ClassDB::bind_method(D_METHOD("set_gravity_scale", "scale"), &PhysXParticleFluid3D::set_gravity_scale);
+	ClassDB::bind_method(D_METHOD("get_gravity_scale"), &PhysXParticleFluid3D::get_gravity_scale);
 	ClassDB::bind_method(D_METHOD("set_spawn_region_size", "size"), &PhysXParticleFluid3D::set_spawn_region_size);
 	ClassDB::bind_method(D_METHOD("get_spawn_region_size"), &PhysXParticleFluid3D::get_spawn_region_size);
 	ClassDB::bind_method(D_METHOD("set_spawn_on_ready", "enable"), &PhysXParticleFluid3D::set_spawn_on_ready);
@@ -1826,6 +1843,8 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "surface_tension", PROPERTY_HINT_RANGE, "0,1,0.001,or_greater"), "set_surface_tension", "get_surface_tension");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cohesion", PROPERTY_HINT_RANGE, "0,1,0.001,or_greater"), "set_cohesion", "get_cohesion");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "vorticity", PROPERTY_HINT_RANGE, "0,50,0.01,or_greater"), "set_vorticity", "get_vorticity");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "adhesion", PROPERTY_HINT_RANGE, "0,1,0.001,or_greater"), "set_adhesion", "get_adhesion");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "gravity_scale", PROPERTY_HINT_RANGE, "-2,4,0.01,or_less,or_greater"), "set_gravity_scale", "get_gravity_scale");
 }
 
 PhysXParticleFluid3D::PhysXParticleFluid3D() {
