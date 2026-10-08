@@ -156,6 +156,12 @@ private:
 	// Pairs touching as of the last poll_area_overlap() call, for enter/exit
 	// edge detection (there is no trigger event to diff against instead).
 	HashSet<AreaOverlapKey, AreaOverlapKeyHasher> touching_areas;
+	// World bounds of the actor + of each of its shapes, refreshed once per step (refresh_poll_bounds) before the
+	// area-vs-area polls: pairs whose bounds don't meet skip the exact overlap test.
+	AABB poll_aabb;
+	bool poll_aabb_valid = false;
+	LocalVector<physx::PxShape *> poll_shapes;
+	LocalVector<AABB> poll_shape_aabbs;
 	HashMap<AreaOverlapKey, AreaOverlapState, AreaOverlapKeyHasher> pending_areas;
 
 	void _destroy_actor();
@@ -249,6 +255,9 @@ public:
 	// overlap test (PhysX has no trigger-trigger event to drive this from
 	// instead) and diffs against touching_areas to queue enter/exit events.
 	void poll_area_overlap(GodotPhysXArea3D *p_other);
+	void refresh_poll_bounds();
+	bool has_poll_bounds() const { return poll_aabb_valid; }
+	const AABB &get_poll_aabb() const { return poll_aabb; }
 	// Called when another area leaves the space while still touching this one.
 	// Matches body_removed()'s precedent: drops the stale state without
 	// synthesizing an exit event for it.

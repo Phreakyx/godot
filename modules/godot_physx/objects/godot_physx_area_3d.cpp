@@ -403,6 +403,29 @@ void GodotPhysXArea3D::report_body_overlap(GodotPhysXBody3D *p_body, int p_body_
 	st.delta += p_entered ? 1 : -1;
 }
 
+void GodotPhysXArea3D::refresh_poll_bounds() {
+	poll_aabb_valid = false;
+	poll_shapes.clear();
+	poll_shape_aabbs.clear();
+	if (!px_actor) {
+		return;
+	}
+	const PxU32 nb = px_actor->getNbShapes();
+	poll_shapes.resize(nb);
+	poll_shape_aabbs.resize(nb);
+	if (nb == 0) {
+		return;
+	}
+	px_actor->getShapes(poll_shapes.ptr(), nb);
+	for (PxU32 i = 0; i < nb; i++) {
+		const PxBounds3 b = PxShapeExt::getWorldBounds(*poll_shapes[i], *px_actor, 1.01f);
+		const AABB a(to_godot(b.minimum), to_godot(b.maximum - b.minimum));
+		poll_shape_aabbs[i] = a;
+		poll_aabb = poll_aabb_valid ? poll_aabb.merge(a) : a;
+		poll_aabb_valid = true;
+	}
+}
+
 void GodotPhysXArea3D::poll_area_overlap(GodotPhysXArea3D *p_other) {
 	if (!p_other || area_monitor_callback.is_null()) {
 		return;
@@ -418,42 +441,36 @@ void GodotPhysXArea3D::poll_area_overlap(GodotPhysXArea3D *p_other) {
 		return;
 	}
 
-	const PxTransform self_pose = px_actor->getGlobalPose();
-	const PxTransform other_pose = other_actor->getGlobalPose();
-
-	const PxU32 nb_self = px_actor->getNbShapes();
-	const PxU32 nb_other = other_actor->getNbShapes();
-	LocalVector<PxShape *> self_shapes;
-	self_shapes.resize(nb_self);
-	px_actor->getShapes(self_shapes.ptr(), nb_self);
-	LocalVector<PxShape *> other_shapes;
-	other_shapes.resize(nb_other);
-	other_actor->getShapes(other_shapes.ptr(), nb_other);
-
+	// Exact tests only where the world bounds (refreshed once per step by the space) meet: the actor's first, then
+	// each shape pair's. (Testing every shape pair of every monitoring x monitorable area each step was the cost:
+	// 28 rock-wake areas of ~80 shapes each x 111 monitorable areas = 30+ ms a step.)
 	HashSet<AreaOverlapKey, AreaOverlapKeyHasher> touching_now;
-	for (PxU32 i = 0; i < nb_self; i++) {
-		PxShape *ss = self_shapes[i];
-		if (!ss) {
-			continue;
-		}
-		const PxTransform self_shape_pose = self_pose * ss->getLocalPose();
-		const int self_idx = (int)reinterpret_cast<uintptr_t>(ss->userData);
-
-		for (PxU32 j = 0; j < nb_other; j++) {
-			PxShape *os = other_shapes[j];
-			if (!os) {
+	if (poll_aabb_valid && p_other->poll_aabb_valid && poll_aabb.intersects(p_other->poll_aabb)) {
+		const PxTransform self_pose = px_actor->getGlobalPose();
+		const PxTransform other_pose = other_actor->getGlobalPose();
+		const AABB &other_aabb = p_other->poll_aabb;
+		for (uint32_t i = 0; i < poll_shapes.size(); i++) {
+			PxShape *ss = poll_shapes[i];
+			if (!ss || !poll_shape_aabbs[i].intersects(other_aabb)) {
 				continue;
 			}
-			const PxTransform other_shape_pose = other_pose * os->getLocalPose();
-			const bool ov = PxGeometryQuery::overlap(ss->getGeometry(), self_shape_pose, os->getGeometry(), other_shape_pose);
-			if (!ov) {
-				continue;
+			const PxTransform self_shape_pose = self_pose * ss->getLocalPose();
+			const int self_idx = (int)reinterpret_cast<uintptr_t>(ss->userData);
+			for (uint32_t j = 0; j < p_other->poll_shapes.size(); j++) {
+				PxShape *os = p_other->poll_shapes[j];
+				if (!os || !poll_shape_aabbs[i].intersects(p_other->poll_shape_aabbs[j])) {
+					continue;
+				}
+				const PxTransform other_shape_pose = other_pose * os->getLocalPose();
+				if (!PxGeometryQuery::overlap(ss->getGeometry(), self_shape_pose, os->getGeometry(), other_shape_pose)) {
+					continue;
+				}
+				const int other_idx = (int)reinterpret_cast<uintptr_t>(os->userData);
+				AreaOverlapKey key;
+				key.other_area_rid = p_other->get_self();
+				key.shape_pair = ((uint32_t)other_idx << 16) | ((uint32_t)self_idx & 0xFFFF);
+				touching_now.insert(key);
 			}
-			const int other_idx = (int)reinterpret_cast<uintptr_t>(os->userData);
-			AreaOverlapKey key;
-			key.other_area_rid = p_other->get_self();
-			key.shape_pair = ((uint32_t)other_idx << 16) | ((uint32_t)self_idx & 0xFFFF);
-			touching_now.insert(key);
 		}
 	}
 

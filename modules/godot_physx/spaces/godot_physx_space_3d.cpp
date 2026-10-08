@@ -476,12 +476,25 @@ void GodotPhysXSpace3D::unregister_area(GodotPhysXArea3D *p_area) {
 }
 
 void GodotPhysXSpace3D::_detect_area_overlaps() {
-	// Naive O(n^2) over every registered area, run once per (monitoring,
-	// monitorable) pair per step -- real cost, unlike the free trigger-vs-body
-	// event path (see GodotPhysXArea3D's header comment). Fine for the small
-	// number of areas a scene actually wants area-to-area detection on; a
-	// broad-phase pre-filter would be the first lever if this ever shows up on
-	// a profile with many areas.
+	// O(n^2) over every (monitoring, monitorable) pair per step, but only pairs whose world bounds meet get an exact
+	// shape test (it showed up on a profile: a playtest island with 28 monitoring rock-wake areas went from ~35 ms of
+	// polls a step to a fraction of a millisecond). A real broad-phase (a bounds tree) would be the next lever.
+	// Each area's world bounds once per step (the polls compare bounds before any exact test).
+	bool any = false;
+	for (GodotPhysXArea3D *area : areas) {
+		if (area->wants_area_monitoring()) {
+			any = true;
+			break;
+		}
+	}
+	if (!any) {
+		return;
+	}
+	for (GodotPhysXArea3D *area : areas) {
+		if (area->wants_area_monitoring() || area->is_monitorable()) {
+			area->refresh_poll_bounds();
+		}
+	}
 	for (GodotPhysXArea3D *area : areas) {
 		if (!area->wants_area_monitoring()) {
 			continue;
