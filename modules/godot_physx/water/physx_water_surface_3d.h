@@ -139,6 +139,8 @@ public:
 	// from the seabed) leave a foamy sheet at the waterline. 0 = none.
 	void set_shore_foam_band(float p_depth);
 	float get_shore_foam_band() const { return shore_foam_band; }
+	void set_open_sea_beyond(bool p_open);
+	bool get_open_sea_beyond() const { return open_sea_beyond; }
 	// Shore foam moves with the water: each crest pushes it up the beach and
 	// the backwash drags it back out, plus this steady seaward undertow (m/s)
 	// that slides it back into the water over time.
@@ -262,6 +264,10 @@ private:
 	float foam_threshold = 0.7f;
 	float foam_persistence = 2.5f;
 	float shore_foam_band = 0.5f;
+	// Open water past the simulated square (render_extent > domain, no surface_mesh): true = it is open, deep sea
+	// everywhere past the square (full chop, wet, never lifted onto the ground) -- for a sea whose ripple square
+	// follows a focus that may sit over land; false = the square's edge seabed carries on outward (a beach scene).
+	bool open_sea_beyond = false;
 	float shore_undertow = 0.3f;
 	float swash_run_up = 0.3f;
 	float swash_drain_speed = 0.12f;

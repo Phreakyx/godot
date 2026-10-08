@@ -236,7 +236,8 @@ void WaterSolverGPU::_rt_build_buffers() {
 	const int on = ocean_grid_resolution;
 	const int ocells = on * on;
 	ocean_log2n = log2i(on);
-	ocean_time_accum = 0.0;
+	// (The ocean clock survives a rebuild: the spectrum is a pure function of its settings, so a re-centre / resize
+	// with the same sea carries on seamlessly instead of every wave jumping back to t = 0.)
 	a_is_current = true;
 
 	buf_params = rd->uniform_buffer_create(PARAMS_BYTES);
