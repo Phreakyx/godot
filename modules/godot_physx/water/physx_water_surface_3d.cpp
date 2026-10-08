@@ -602,6 +602,7 @@ void PhysXWaterSurface3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_shore_foam_band", "depth"), &PhysXWaterSurface3D::set_shore_foam_band);
 	ClassDB::bind_method(D_METHOD("get_shore_foam_band"), &PhysXWaterSurface3D::get_shore_foam_band);
 	ClassDB::bind_method(D_METHOD("set_open_sea_beyond", "open"), &PhysXWaterSurface3D::set_open_sea_beyond);
+	ClassDB::bind_method(D_METHOD("set_sea_state", "wind_speed", "wind_direction", "wave_amplitude", "fetch"), &PhysXWaterSurface3D::set_sea_state);
 	ClassDB::bind_method(D_METHOD("get_open_sea_beyond"), &PhysXWaterSurface3D::get_open_sea_beyond);
 	ClassDB::bind_method(D_METHOD("set_shore_undertow", "speed"), &PhysXWaterSurface3D::set_shore_undertow);
 	ClassDB::bind_method(D_METHOD("get_shore_undertow"), &PhysXWaterSurface3D::get_shore_undertow);
@@ -738,16 +739,34 @@ void PhysXWaterSurface3D::set_ocean_domain_size(Vector2 p_size) {
 
 void PhysXWaterSurface3D::set_wind_speed(float p_speed) {
 	wind_speed = MAX(p_speed, 0.01f);
-	_rebuild();
+	_reinit_spectrum();
 }
 
 void PhysXWaterSurface3D::set_wind_direction(Vector2 p_dir) {
 	wind_direction = p_dir;
-	_rebuild();
+	_reinit_spectrum();
 }
 
 void PhysXWaterSurface3D::set_wave_amplitude(float p_amp) {
 	wave_amplitude = MAX(p_amp, 0.0f);
+	_reinit_spectrum();
+}
+
+void PhysXWaterSurface3D::set_sea_state(float p_wind_speed, Vector2 p_wind_direction, float p_wave_amplitude, float p_fetch) {
+	wind_speed = MAX(p_wind_speed, 0.01f);
+	wind_direction = p_wind_direction;
+	wave_amplitude = MAX(p_wave_amplitude, 0.0f);
+	fetch = MAX(p_fetch, 0.0f);
+	_reinit_spectrum();
+}
+
+// The sea state changed: a built solver regenerates its spectrum IN PLACE (no rebuild -- the waves keep their phases,
+// ripples / wakes / foam survive: storms can ramp it); not built yet → the usual rebuild.
+void PhysXWaterSurface3D::_reinit_spectrum() {
+	if (solver.is_available() && !Engine::get_singleton()->is_editor_hint()) {
+		solver.reinit_spectrum(wind_speed, wind_direction, wave_amplitude, get_effective_fetch());
+		return;
+	}
 	_rebuild();
 }
 
@@ -815,7 +834,7 @@ void PhysXWaterSurface3D::set_normal_mode(NormalMode p_mode) {
 
 void PhysXWaterSurface3D::set_fetch(float p_fetch) {
 	fetch = MAX(p_fetch, 0.0f);
-	_rebuild();
+	_reinit_spectrum();
 }
 
 float PhysXWaterSurface3D::get_effective_fetch() const {

@@ -586,6 +586,16 @@ void WaterSolverGPU::_rt_build_buffers() {
 
 	// h0 depends only on static settings (wind/domain/amplitude) -- generate
 	// it once here, not every step.
+	_rt_spectrum_init();
+
+	if (_init_caustics_enabled) {
+		_rt_build_caustics_grid();
+	}
+}
+
+// (Re)generate h0 from the _init_* sea state into the existing buffer.
+void WaterSolverGPU::_rt_spectrum_init() {
+	const int on = ocean_grid_resolution;
 	{
 		Vector<uint8_t> ib;
 		ib.resize(OCEAN_INIT_PARAMS_BYTES);
@@ -625,10 +635,20 @@ void WaterSolverGPU::_rt_build_buffers() {
 		// rt_step() runs, and rt_build()/rt_step() are always posted to the
 		// render thread in that order, so ordering is already guaranteed.
 	}
+}
 
-	if (_init_caustics_enabled) {
-		_rt_build_caustics_grid();
+// A new sea state (wind / direction / height / fetch) WITHOUT a rebuild: only h0 is regenerated, in place. The
+// Gaussian draws are seeded by the mode index alone and the ocean clock carries on, so every wave keeps its phase and
+// just grows / calms / turns -- ripples, wakes and the whitecap foam survive (a storm can ramp the sea smoothly).
+void WaterSolverGPU::rt_reinit_spectrum(Ref<WaterSolverGPU> p_self, float p_wind_speed, Vector2 p_wind_direction, float p_wave_amplitude, float p_fetch) {
+	_init_wind_speed = p_wind_speed;
+	_init_wind_direction = p_wind_direction;
+	_init_wave_amplitude = p_wave_amplitude;
+	_init_fetch = p_fetch;
+	if (rd == nullptr || !buf_h0.is_valid() || !buf_ocean_init_params.is_valid() || !uset_spectrum_init.is_valid()) {
+		return; // not built yet: rt_build() uses these
 	}
+	_rt_spectrum_init();
 }
 
 void WaterSolverGPU::_rt_build_caustics_grid() {
@@ -1171,6 +1191,14 @@ void WaterSolver::_dispatch(const Callable &p_call) const {
 	} else {
 		RenderingServer::get_singleton()->call_on_render_thread(p_call);
 	}
+}
+
+void WaterSolver::reinit_spectrum(float p_wind_speed, Vector2 p_wind_direction, float p_wave_amplitude, float p_fetch) {
+	settings.wind_speed = p_wind_speed;
+	settings.wind_direction = p_wind_direction;
+	settings.wave_amplitude = p_wave_amplitude;
+	settings.fetch = p_fetch;
+	_dispatch(callable_mp(gpu.ptr(), &WaterSolverGPU::rt_reinit_spectrum).bind(gpu, p_wind_speed, p_wind_direction, p_wave_amplitude, p_fetch));
 }
 
 void WaterSolver::configure(const Settings &p_settings) {

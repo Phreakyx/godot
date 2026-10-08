@@ -140,6 +140,8 @@ public:
 	void set_shore_foam_band(float p_depth);
 	float get_shore_foam_band() const { return shore_foam_band; }
 	void set_open_sea_beyond(bool p_open);
+	// Wind / direction / height / fetch at once — ONE in-place spectrum update (no rebuild once built).
+	void set_sea_state(float p_wind_speed, Vector2 p_wind_direction, float p_wave_amplitude, float p_fetch);
 	bool get_open_sea_beyond() const { return open_sea_beyond; }
 	// Shore foam moves with the water: each crest pushes it up the beach and
 	// the backwash drags it back out, plus this steady seaward undertow (m/s)
@@ -346,6 +348,7 @@ private:
 	// Footprint triangles of surface_mesh in node-local XZ (degenerates dropped).
 	Vector<Vector2> _collect_footprint() const;
 	void _configure_solver();
+	void _reinit_spectrum();
 	// Casts the seabed rays; fills cell_depth.
 	void _sample_seabed();
 	static PackedByteArray _rasterize_wet_mask(const Vector<Vector2> &p_tris, Vector2 p_center, Vector2 p_domain, int p_n);
