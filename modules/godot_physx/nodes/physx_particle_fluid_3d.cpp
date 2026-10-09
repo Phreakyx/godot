@@ -1174,9 +1174,11 @@ void PhysXParticleFluid3D::_commit_iso_mesh(RID p_mesh, PackedVector3Array &vert
 			if (a.distance_squared_to(b) > max_edge_sq || b.distance_squared_to(c) > max_edge_sq || c.distance_squared_to(a) > max_edge_sq) {
 				continue;
 			}
+			// PhysX's isosurface winds counter-clockwise seen from outside; Godot's front faces are clockwise --
+			// flip each triangle so a back-face-culled material draws the outside (not the inside of the liquid).
 			unstretched.write[u++] = ia;
-			unstretched.write[u++] = ib;
 			unstretched.write[u++] = ic;
+			unstretched.write[u++] = ib;
 			const int ra = find(ia), rb = find(ib), rc = find(ic);
 			parent[rb] = ra;
 			parent[find(ic)] = find(ia);
