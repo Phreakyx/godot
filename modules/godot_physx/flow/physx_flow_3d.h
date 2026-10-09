@@ -83,6 +83,11 @@ private:
 	bool collide_with_bodies = true;
 	uint32_t collision_mask = 1;
 	float collision_range = 10.0f;
+	// A FLOOR: with floor_enabled, gas never goes below floor_height — a wide solid under it (no blocks reserved there).
+	// Colliders can't describe terrain (heightmaps / trimeshes), so a blast's or a fire's gas sank into the ground and
+	// spent the grid's blocks there.
+	bool floor_enabled = false;
+	float floor_height = 0.0f;
 	RID query_shape;
 
 	// Look.
@@ -161,6 +166,10 @@ public:
 	uint32_t get_collision_mask() const { return collision_mask; }
 	void set_collision_range(float p_v) { collision_range = MAX(p_v, 0.0f); }
 	float get_collision_range() const { return collision_range; }
+	void set_floor_enabled(bool p_v) { floor_enabled = p_v; }
+	bool is_floor_enabled() const { return floor_enabled; }
+	void set_floor_height(float p_v) { floor_height = p_v; }
+	float get_floor_height() const { return floor_height; }
 
 	void set_smoke_density(float p_v) { smoke_density = MAX(p_v, 0.0f); }
 	float get_smoke_density() const { return smoke_density; }

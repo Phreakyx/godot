@@ -378,6 +378,18 @@ void PhysXFlow3D::_step(double p_delta) {
 		region = region.has_volume() ? region.merge(gas_bounds.grow(1.0)) : gas_bounds.grow(1.0);
 	}
 	_gather_colliders(region, emitters);
+	if (floor_enabled) {
+		// The FLOOR: one wide solid box whose top is floor_height, under everything this grid can reach. A solid
+		// reserves no blocks and holds no gas, so whatever sinks below the floor is gone (and its blocks with it).
+		constexpr float FLOOR_HALF_W = 4096.0f;
+		constexpr float FLOOR_HALF_T = 64.0f;
+		FlowBackend::Emitter floor_e = make_solid(Transform3D(Basis(), Vector3(draw_center.x, floor_height - FLOOR_HALF_T, draw_center.z)), Vector3());
+		floor_e.shape = FlowBackend::Emitter::SHAPE_BOX;
+		floor_e.half_size[0] = FLOOR_HALF_W;
+		floor_e.half_size[1] = FLOOR_HALF_T;
+		floor_e.half_size[2] = FLOOR_HALF_W;
+		emitters.push_back(floor_e);
+	}
 
 	FlowBackend::Settings settings;
 	settings.cell_size = cell_size;
@@ -570,6 +582,10 @@ void PhysXFlow3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_collision_mask", "mask"), &PhysXFlow3D::set_collision_mask);
 	ClassDB::bind_method(D_METHOD("get_collision_mask"), &PhysXFlow3D::get_collision_mask);
 	ClassDB::bind_method(D_METHOD("set_collision_range", "range"), &PhysXFlow3D::set_collision_range);
+	ClassDB::bind_method(D_METHOD("set_floor_enabled", "enabled"), &PhysXFlow3D::set_floor_enabled);
+	ClassDB::bind_method(D_METHOD("is_floor_enabled"), &PhysXFlow3D::is_floor_enabled);
+	ClassDB::bind_method(D_METHOD("set_floor_height", "height"), &PhysXFlow3D::set_floor_height);
+	ClassDB::bind_method(D_METHOD("get_floor_height"), &PhysXFlow3D::get_floor_height);
 	ClassDB::bind_method(D_METHOD("get_collision_range"), &PhysXFlow3D::get_collision_range);
 	ClassDB::bind_method(D_METHOD("set_smoke_density", "density"), &PhysXFlow3D::set_smoke_density);
 	ClassDB::bind_method(D_METHOD("get_smoke_density"), &PhysXFlow3D::get_smoke_density);
@@ -606,6 +622,8 @@ void PhysXFlow3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "collide_with_bodies"), "set_collide_with_bodies", "is_collide_with_bodies");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "collision_mask", PROPERTY_HINT_LAYERS_3D_PHYSICS), "set_collision_mask", "get_collision_mask");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "collision_range", PROPERTY_HINT_RANGE, "0,100,0.1,or_greater,suffix:m"), "set_collision_range", "get_collision_range");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "floor_enabled"), "set_floor_enabled", "is_floor_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "floor_height", PROPERTY_HINT_NONE, "suffix:m"), "set_floor_height", "get_floor_height");
 	ADD_GROUP("Look", "");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "smoke_density", PROPERTY_HINT_RANGE, "0,20,0.01,or_greater"), "set_smoke_density", "get_smoke_density");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "smoke_color", PROPERTY_HINT_COLOR_NO_ALPHA), "set_smoke_color", "get_smoke_color");

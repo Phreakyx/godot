@@ -49,6 +49,12 @@
 		<member name="collision_range" type="float" setter="set_collision_range" getter="get_collision_range" default="10.0">
 			How far from this flow's emitters (in meters) bodies are looked for. With [member cpu_readback] on, the area the gas has spread to is searched as well.
 		</member>
+		<member name="floor_enabled" type="bool" setter="set_floor_enabled" getter="is_floor_enabled" default="false">
+			When enabled, gas never goes below [member floor_height]: a wide solid lies under it (it reserves no blocks and holds no gas). Colliders can't describe terrain heightmaps or trimeshes, so without a floor gas sinks into the ground and spends the grid's blocks there.
+		</member>
+		<member name="floor_height" type="float" setter="set_floor_height" getter="get_floor_height" default="0.0">
+			The world height of the floor's top (used when [member floor_enabled] is on).
+		</member>
 		<member name="combustion" type="bool" setter="set_combustion" getter="is_combustion" default="true">
 			Fuel burns when hotter than [member ignition_temperature], releasing heat and smoke.
 		</member>
