@@ -882,6 +882,10 @@ void PhysXParticleFluid3D::_emit_step(double p_delta) {
 		w[i] = origin + j * emission_radius + world_vel * (0.004f * (float)i);
 	}
 	server->particle_fluid_emit(fluid, positions, world_vel);
+	// What it emitted lives on after `emitting` goes false (a one-shot spill): keep rendering + re-meshing it. Without
+	// this the render path (gated on spawned || emitting) froze the liquid mid-air the moment a burst ended -- the
+	// MPM emit sets spawned the same way.
+	spawned = true;
 }
 
 void PhysXParticleFluid3D::_mpm_emit_step(double p_delta) {
