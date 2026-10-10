@@ -63,7 +63,9 @@ GodotPhysXBody3D::~GodotPhysXBody3D() {
 	}
 	_destroy_actor();
 	if (px_material) {
-		px_material->release();
+		// (not released here: its handle must not be reused before a GPU scene has synced the removal)
+		GodotPhysXSpace3D::defer_material_release(px_material);
+		px_material = nullptr;
 	}
 	if (direct_state) {
 		memdelete(direct_state);

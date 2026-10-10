@@ -42,6 +42,7 @@ class PxScene;
 class PxDefaultCpuDispatcher;
 class PxPhysics;
 class PxMaterial;
+class PxRigidActor;
 class PxCudaContextManager;
 } //namespace physx
 
@@ -92,6 +93,18 @@ class GodotPhysXSpace3D {
 	HashSet<GodotPhysXBody3D *> area_damped_bodies;
 
 public:
+	// A body's PxMaterial is released here, not on the spot: the release waits for the start of the next step (just
+	// before PxScene::simulate). PhysX hands a released material's handle to the very next createMaterial(), but a GPU
+	// scene learns of the removal only at its next simulate -- a shape made in between maps the reused handle onto the
+	// OLD material's GPU slot, which the sync then drops, so the new body collides with the dead material's friction /
+	// bounce for good (a frictionless body freed-and-made in one frame slid at friction 1). Released right before the
+	// simulate, nothing can be created between the removal and its sync.
+	static void defer_material_release(physx::PxMaterial *p_material);
+	static void flush_material_releases();
+	// The same for an actor about to be released whose shapes hold the last references to their materials (a PhysX
+	// vehicle's chassis / wheel materials): each is kept alive (one reference each) until the next step.
+	static void hold_actor_materials(physx::PxRigidActor *p_actor);
+
 	void set_self(const RID &p_self) { self = p_self; }
 	RID get_self() const { return self; }
 

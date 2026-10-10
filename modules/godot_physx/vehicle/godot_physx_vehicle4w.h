@@ -33,6 +33,7 @@
 #include "../godot_physx_conversions.h"
 #include "../objects/godot_physx_material.h"
 #include "godot_physx_wheel_query_filter.h"
+#include "../spaces/godot_physx_space_3d.h"
 
 #include "core/error/error_macros.h"
 #include "core/math/basis.h"
@@ -453,6 +454,7 @@ public:
 
 	void destroy() {
 		PxVehicleConstraintsDestroy(physxConstraints);
+		GodotPhysXSpace3D::hold_actor_materials(physxActor.rigidBody); // (no material handle reused before a step)
 		PxVehiclePhysXActorDestroy(physxActor);
 	}
 };

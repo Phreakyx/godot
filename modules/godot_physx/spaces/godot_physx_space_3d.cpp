@@ -43,6 +43,7 @@
 #include "core/error/error_macros.h"
 #include "core/math/math_defs.h"
 #include "core/object/object.h"
+#include "core/os/mutex.h"
 
 #include <PxPhysicsAPI.h>
 
@@ -260,6 +261,49 @@ GodotPhysXSpace3D::GodotPhysXSpace3D(PxPhysics *p_physics, PxDefaultCpuDispatche
 	default_material = px_physics->createMaterial(0.5f, 0.5f, 0.0f);
 }
 
+static LocalVector<PxMaterial *> pending_material_releases;
+static BinaryMutex pending_material_mutex;
+
+void GodotPhysXSpace3D::defer_material_release(PxMaterial *p_material) {
+	if (!p_material) {
+		return;
+	}
+	MutexLock lock(pending_material_mutex);
+	pending_material_releases.push_back(p_material);
+}
+
+void GodotPhysXSpace3D::flush_material_releases() {
+	MutexLock lock(pending_material_mutex);
+	for (PxMaterial *m : pending_material_releases) {
+		m->release();
+	}
+	pending_material_releases.clear();
+}
+
+void GodotPhysXSpace3D::hold_actor_materials(PxRigidActor *p_actor) {
+	if (!p_actor) {
+		return;
+	}
+	const PxU32 n = p_actor->getNbShapes();
+	LocalVector<PxShape *> shapes;
+	shapes.resize(n);
+	p_actor->getShapes(shapes.ptr(), n);
+	LocalVector<PxMaterial *> held;
+	for (PxShape *shape : shapes) {
+		const PxU16 nm = shape->getNbMaterials();
+		LocalVector<PxMaterial *> mats;
+		mats.resize(nm);
+		shape->getMaterials(mats.ptr(), nm);
+		for (PxMaterial *m : mats) {
+			if (m && !held.has(m)) {
+				m->acquireReference();
+				held.push_back(m);
+				defer_material_release(m);
+			}
+		}
+	}
+}
+
 GodotPhysXSpace3D::~GodotPhysXSpace3D() {
 	if (direct_state) {
 		memdelete(direct_state);
@@ -344,6 +388,7 @@ void GodotPhysXSpace3D::step(real_t p_step) {
 	_apply_area_overrides();
 	_detect_area_overlaps();
 
+	flush_material_releases(); // (see defer_material_release: removals reach this scene's sync below)
 	px_scene->simulate((PxReal)p_step);
 	px_scene->fetchResults(true); // fills body contact buffers via g_contact_callback
 

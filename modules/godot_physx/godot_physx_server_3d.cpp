@@ -1565,6 +1565,7 @@ void GodotPhysXServer3D::flush_queries() {
 }
 
 void GodotPhysXServer3D::finish() {
+	GodotPhysXSpace3D::flush_material_releases(); // (bodies freed since the last step)
 	if (px_cuda) {
 		px_cuda->release();
 		px_cuda = nullptr;
