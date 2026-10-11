@@ -49,12 +49,6 @@
 		<member name="collision_range" type="float" setter="set_collision_range" getter="get_collision_range" default="10.0">
 			How far from this flow's emitters (in meters) bodies are looked for. With [member cpu_readback] on, the area the gas has spread to is searched as well.
 		</member>
-		<member name="floor_enabled" type="bool" setter="set_floor_enabled" getter="is_floor_enabled" default="false">
-			When enabled, gas never goes below [member floor_height]: a wide solid lies under it (it reserves no blocks and holds no gas). Colliders can't describe terrain heightmaps or trimeshes, so without a floor gas sinks into the ground and spends the grid's blocks there.
-		</member>
-		<member name="floor_height" type="float" setter="set_floor_height" getter="get_floor_height" default="0.0">
-			The world height of the floor's top (used when [member floor_enabled] is on).
-		</member>
 		<member name="combustion" type="bool" setter="set_combustion" getter="is_combustion" default="true">
 			Fuel burns when hotter than [member ignition_temperature], releasing heat and smoke.
 		</member>
@@ -66,6 +60,12 @@
 		</member>
 		<member name="emission_strength" type="float" setter="set_emission_strength" getter="get_emission_strength" default="4.0">
 			How bright the [member heat_ramp] glow is. [code]0[/code] turns glowing off.
+		</member>
+		<member name="floor_enabled" type="bool" setter="set_floor_enabled" getter="is_floor_enabled" default="false">
+			When enabled, gas never goes below [member floor_height]: a wide solid lies under it (it reserves no blocks and holds no gas). Colliders can't describe terrain heightmaps or trimeshes, so without a floor gas sinks into the ground and spends the grid's blocks there.
+		</member>
+		<member name="floor_height" type="float" setter="set_floor_height" getter="get_floor_height" default="0.0">
+			The world height of the floor's top (used when [member floor_enabled] is on).
 		</member>
 		<member name="heat_ramp" type="Gradient" setter="set_heat_ramp" getter="get_heat_ramp">
 			How the gas glows by temperature, from [code]0[/code] to [member temperature_range]: each color is the glow at that temperature, its alpha how much it glows instead of showing the lit smoke. Empty uses a built-in fire ramp (transparent when cool, deep orange when warm, yellow-white when hot).
