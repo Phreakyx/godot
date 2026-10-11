@@ -675,6 +675,36 @@ above, the underside from below), and its shaders take their clock from the
 node's `water_time` parameter rather than `TIME`, so an open scene doesn't
 keep the editor redrawing (and competing with Play Scene for the GPU).
 
+**An endless sea that follows the player.** The FFT ocean is periodic and
+fixed to the world (it's sampled at world X/Z, by the shader and by
+`sample_height()` alike), so it has no edge: it covers the whole world by
+itself. Only the ripple square is bounded — the interactive patch where
+floaters splash — so keep it with the player: call `recenter(position)` when
+the player gets some distance from the node (the ocean storm demo uses 10 m).
+It moves the square without rebuilding the surface: the mesh, the textures and
+the ocean carry on, the waves don't move, and only the square's ripples are
+cleared (a surface with a `surface_mesh` footprint or a measured seabed still
+rebuilds, since its depths depend on where the square is). Together with
+`render_extent` that's an endless ocean out to the horizon. The one limit is
+ordinary floating-point precision far from the world origin — at hundreds of
+kilometres rendering and physics start to jitter, as for any Godot scene; large
+worlds shift their origin or use a double-precision build. Over a coastline,
+turn on `open_sea_beyond` so the sea past a moving square stays open deep water
+instead of carrying the square's edge — its seabed, shore foam and wet sand —
+outward.
+
+A custom water material must sample the ocean textures at world X/Z too
+(`world_xz / ocean_domain_size`, not relative to `grid_center`), or its drawn
+waves slide by the re-centre distance on every `recenter()` while the physics
+stays put.
+
+The sea state can change during play: setting `wind_speed`, `wind_direction`,
+`wave_amplitude` or `fetch` on a running surface (or all four at once with
+`set_sea_state()`) regenerates the wave spectrum in place — every wave keeps its
+phase and grows, calms or turns, and ripples, wakes and foam carry on — so a
+storm can build smoothly, every frame if needed. Changing `ocean_domain_size`
+still rebuilds the surface.
+
 `sample_height(position)` returns the same combined surface height on the CPU,
 for buoyancy scripts. Over dry cells (outside a `surface_mesh` footprint, or
 where the seabed is above the water) it returns `-INF` and `is_wet()` is false,
@@ -721,7 +751,9 @@ so they work with whichever physics engine is selected, Jolt included.
   The water material draws it and `sample_height()` includes it, so other
   floaters ride it. A grid big enough to hold a turning circle (`size`, with
   `cells` for about 0.25 m cells) and a `foam_persistence` of about a lap let
-  the wake close into a ring.
+  the wake close into a ring. `hull_profile` gives the hull's shape seen from
+  above (8 half-beam widths, bow to stern), so a pointed bow's foam hugs its
+  sides; left empty, the hull is treated as a box.
 - **`PhysXWaterSpray3D`** drives ordinary `GPUParticles3D` nodes authored in
   the editor: bow emitters with speed, stern emitters with thrust, one-shot
   slam emitters when the hull drops back onto the water. Emitters are held at
