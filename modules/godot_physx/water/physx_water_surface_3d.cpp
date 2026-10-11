@@ -603,6 +603,7 @@ void PhysXWaterSurface3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_shore_foam_band"), &PhysXWaterSurface3D::get_shore_foam_band);
 	ClassDB::bind_method(D_METHOD("set_open_sea_beyond", "open"), &PhysXWaterSurface3D::set_open_sea_beyond);
 	ClassDB::bind_method(D_METHOD("set_sea_state", "wind_speed", "wind_direction", "wave_amplitude", "fetch"), &PhysXWaterSurface3D::set_sea_state);
+	ClassDB::bind_method(D_METHOD("recenter", "world_position"), &PhysXWaterSurface3D::recenter);
 	ClassDB::bind_method(D_METHOD("get_open_sea_beyond"), &PhysXWaterSurface3D::get_open_sea_beyond);
 	ClassDB::bind_method(D_METHOD("set_shore_undertow", "speed"), &PhysXWaterSurface3D::set_shore_undertow);
 	ClassDB::bind_method(D_METHOD("get_shore_undertow"), &PhysXWaterSurface3D::get_shore_undertow);
@@ -758,6 +759,30 @@ void PhysXWaterSurface3D::set_sea_state(float p_wind_speed, Vector2 p_wind_direc
 	wave_amplitude = MAX(p_wave_amplitude, 0.0f);
 	fetch = MAX(p_fetch, 0.0f);
 	_reinit_spectrum();
+}
+
+// Move the ripple square to `p_world_position` (its XZ; the node's height is kept) WITHOUT a rebuild: the mesh, the FFT
+// ocean and every texture stay bound (a rebuild left the sea undrawn for a frame -- a flash each time a camera-following
+// square re-centred); the ripples are cleared. A footprint / per-cell seabed depends on where the grid is, so those
+// still rebuild.
+void PhysXWaterSurface3D::recenter(Vector3 p_world_position) {
+	Vector3 p = get_global_position();
+	p.x = p_world_position.x;
+	p.z = p_world_position.z;
+	if (!solver.is_available() || Engine::get_singleton()->is_editor_hint() || surface_mesh.is_valid() || seabed_from_floor
+			|| !cell_depth.is_empty()) {
+		set_global_position(p);
+		_rebuild();
+		return;
+	}
+	set_global_position(p);
+	grid_center = Vector2(p.x, p.z);
+	if (water_material.is_valid()) {
+		water_material->set_shader_parameter("grid_center", grid_center);
+	}
+	solver.recenter(grid_center);
+	cached_ripple_height.clear();          // (the old square's heights are not this one's)
+	frames_since_refresh = REFRESH_EVERY_FRAMES;
 }
 
 // The sea state changed: a built solver regenerates its spectrum IN PLACE (no rebuild -- the waves keep their phases,

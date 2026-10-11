@@ -142,6 +142,7 @@ public:
 	void set_open_sea_beyond(bool p_open);
 	// Wind / direction / height / fetch at once — ONE in-place spectrum update (no rebuild once built).
 	void set_sea_state(float p_wind_speed, Vector2 p_wind_direction, float p_wave_amplitude, float p_fetch);
+	void recenter(Vector3 p_world_position);
 	bool get_open_sea_beyond() const { return open_sea_beyond; }
 	// Shore foam moves with the water: each crest pushes it up the beach and
 	// the backwash drags it back out, plus this steady seaward undertow (m/s)

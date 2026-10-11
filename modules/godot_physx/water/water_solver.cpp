@@ -732,6 +732,16 @@ void WaterSolverGPU::_rt_build_caustics_grid() {
 	uset_caustics = rd->uniform_set_create(uniforms, shader_caustics, 0);
 }
 
+void WaterSolverGPU::rt_clear_ripples(Ref<WaterSolverGPU> p_self) {
+	if (rd == nullptr || !shaders_ok || buf_state_a.is_null()) {
+		return;
+	}
+	const uint32_t cells = (uint32_t)(grid_resolution * grid_resolution);
+	rd->buffer_clear(buf_state_a, 0, cells * 4 * sizeof(float));
+	rd->buffer_clear(buf_state_b, 0, cells * 4 * sizeof(float));
+	rd->buffer_clear(buf_height, 0, cells * sizeof(float));
+}
+
 void WaterSolverGPU::rt_build(Ref<WaterSolverGPU> p_self, int p_grid_resolution, Vector2 p_domain_size, int p_ocean_grid_resolution, Vector2 p_ocean_domain_size, float p_wind_speed, Vector2 p_wind_direction, float p_wave_amplitude, float p_gravity, bool p_caustics_enabled, PackedFloat32Array p_cell_depth, float p_depth, float p_shallow_fade_depth, float p_fetch) {
 	if (rd == nullptr || !shaders_ok) {
 		return;
@@ -1199,6 +1209,18 @@ void WaterSolver::reinit_spectrum(float p_wind_speed, Vector2 p_wind_direction, 
 	settings.wave_amplitude = p_wave_amplitude;
 	settings.fetch = p_fetch;
 	_dispatch(callable_mp(gpu.ptr(), &WaterSolverGPU::rt_reinit_spectrum).bind(gpu, p_wind_speed, p_wind_direction, p_wave_amplitude, p_fetch));
+}
+
+void WaterSolver::recenter(Vector2 p_grid_center) {
+	settings.grid_center = p_grid_center;
+	for (SphereSlot &s : sphere_slots) {
+		s = SphereSlot();
+	}
+	pending_impulses.clear();
+	if (gpu.is_null()) {
+		return;
+	}
+	_dispatch(callable_mp(gpu.ptr(), &WaterSolverGPU::rt_clear_ripples).bind(gpu));
 }
 
 void WaterSolver::configure(const Settings &p_settings) {
