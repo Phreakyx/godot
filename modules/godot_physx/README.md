@@ -193,7 +193,16 @@ scons platform=windows target=template_debug   physx_sdk=<path> physx_gpu=yes bl
 
 (`platform=linuxbsd` for Linux.) Both land in `bin/` next to the editor, and
 `SCsub` copies the module's libraries there too. In the export preset, set
-**Custom Template → Release / Debug** to those binaries.
+**Custom Template → Release / Debug** to those binaries. Until you do, the
+export dialog reports that no export template was found: there are no
+official templates for this build, and the custom path is what replaces them.
+
+Alternatively, install them as this version's templates: copy them into the
+editor's export templates folder (**Editor → Manage Export Templates → Open
+Folder**, then the `<version>` folder, e.g. `4.7.3.rc`; create it if missing) named
+`windows_release_x86_64.exe` / `windows_debug_x86_64.exe` (Linux:
+`linux_release.x86_64` / `linux_debug.x86_64`), **with the module's libraries
+next to them**. Presets then need no custom path.
 
 The editor then ships the libraries with the game by itself: when exporting
 for Windows or Linux it copies them from the **folder of the export template**
