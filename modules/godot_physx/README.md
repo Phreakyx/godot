@@ -180,6 +180,40 @@ Nothing is linked: Flow's loader opens `nvflow.dll` and `nvflowext.dll`
 copies both next to the built binary. Without them the Flow
 nodes show a configuration warning and stay inert.
 
+## Exporting a game
+
+Godot's downloadable export templates don't contain this module, so a game
+exports with a template you build yourself, **with the same options as the
+editor** (`physx_gpu`, `blast_sdk`, `flow_sdk`):
+
+```
+scons platform=windows target=template_release physx_sdk=<path> physx_gpu=yes blast_sdk=<path> flow_sdk=<path>
+scons platform=windows target=template_debug   physx_sdk=<path> physx_gpu=yes blast_sdk=<path> flow_sdk=<path>
+```
+
+(`platform=linuxbsd` for Linux.) Both land in `bin/` next to the editor, and
+`SCsub` copies the module's libraries there too. In the export preset, set
+**Custom Template → Release / Debug** to those binaries.
+
+The editor then ships the libraries with the game by itself: when exporting
+for Windows or Linux it copies them from the **folder of the export template**
+the preset uses (the custom template's, or else the editor's templates folder
+for this version) next to the exported executable, along with
+`PHYSX-LICENSE.txt` (the BSD-3-Clause notice the binaries must carry). Because
+they come from the template's folder, a Windows editor exporting with a Linux
+template folder ships the Linux `.so` files. If one is missing there, the
+export warns and says what the game loses:
+
+| Library | Without it |
+| --- | --- |
+| `NvBlast.dll`, `NvBlastGlobals.dll`, `NvBlastExtAuthoring.dll`, `NvBlastExtShaders.dll` (`libNvBlast*.so`) | the game doesn't start (Blast is linked at load time) |
+| `PhysXGpu_64.dll` (`libPhysXGpu_64.so`, ~350 MB) | PhysX runs on the CPU; the game logs which file is missing |
+| `nvflow.dll`, `nvflowext.dll` (`libnvflow*.so`) | the Flow nodes stay inert |
+
+On Linux the binary looks for the `.so` files next to itself (`SCsub` sets an
+`$ORIGIN` rpath). Other platforms (Android, macOS, web) aren't supported by
+the module yet.
+
 ## Selecting the backend
 
 **Project Settings → Physics → 3D → Physics Engine → `PhysX`**, or in
@@ -766,14 +800,6 @@ For deterministic lockstep multiplayer, use the Jolt backend.
   `anchor_path`; for cloth driven by a skeleton (a cape or robe on a
   character), use `PhysXSkinnedCloth3D`, or stock `SoftBody3D` with
   per-vertex pins.
-- **Exports don't copy the module's DLLs yet.** `SCsub` puts them next to the
-  editor binary only, so an exported game needs them copied by hand:
-  `NvBlast*.dll` / `libNvBlast*.so` (`blast_sdk=`; linked at startup, so the
-  game won't start without them), `PhysXGpu_64.dll` / `libPhysXGpu_64.so`
-  (`physx_gpu=yes`; without it PhysX silently falls back to the CPU), and
-  `nvflow.dll` / `nvflowext.dll` / `libnvflow*.so` (`flow_sdk=`; without them
-  the Flow nodes stay inert). The export template must be built with
-  the same options.
 - **NVIDIA Flow** (`PhysXFlow3D`):
   - only box, sphere, capsule and cylinder shapes are solids for the gas;
     convex, concave and height-field shapes aren't yet;

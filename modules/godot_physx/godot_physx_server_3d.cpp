@@ -50,6 +50,8 @@
 
 #include <PxPhysicsAPI.h>
 
+#include <cstring>
+
 using namespace physx;
 
 namespace {
@@ -58,7 +60,15 @@ PxDefaultAllocator px_allocator;
 
 class GodotPxErrorCallback : public PxErrorCallback {
 public:
+	// Set when PhysX reports it couldn't load the GPU module (PhysXGpu_64.dll /
+	// libPhysXGpu_64.so) -- so the CPU-fallback warning can name the real cause
+	// (a library missing next to an exported game) instead of blaming the GPU.
+	bool gpu_module_load_failed = false;
+
 	virtual void reportError(PxErrorCode::Enum p_code, const char *p_message, const char *p_file, int p_line) override {
+		if (p_message && strstr(p_message, "PhysXGpu") && strstr(p_message, "load")) {
+			gpu_module_load_failed = true;
+		}
 		const String msg = vformat("PhysX: %s (%s:%d)", p_message, p_file, p_line);
 		if (p_code & (PxErrorCode::eABORT | PxErrorCode::eINTERNAL_ERROR | PxErrorCode::eINVALID_OPERATION | PxErrorCode::eINVALID_PARAMETER | PxErrorCode::eOUT_OF_MEMORY)) {
 			ERR_PRINT(msg);
@@ -1489,6 +1499,12 @@ void GodotPhysXServer3D::init() {
 		}
 		if (px_cuda) {
 			print_line(vformat("PhysX: CUDA context ready on device '%s' -> GPU dynamics available.", px_cuda->getDeviceName()));
+		} else if (px_error_callback.gpu_module_load_failed) {
+#ifdef WINDOWS_ENABLED
+			WARN_PRINT("PhysX: PhysXGpu_64.dll was not found next to the executable; falling back to CPU simulation. Ship it with the game (see the module README, \"Exporting a game\").");
+#else
+			WARN_PRINT("PhysX: libPhysXGpu_64.so was not found next to the executable; falling back to CPU simulation. Ship it with the game (see the module README, \"Exporting a game\").");
+#endif
 		} else {
 			WARN_PRINT("PhysX: no usable CUDA device; falling back to CPU simulation.");
 		}

@@ -72,6 +72,10 @@
 #ifdef TOOLS_ENABLED
 #include "editor/physx_cloth_paint_plugin.h"
 #include "editor/physx_editor_plugin.h"
+#include "editor/physx_export_plugin.h"
+
+#include "editor/editor_node.h"
+#include "editor/export/editor_export.h"
 #include "editor/plugins/editor_plugin.h"
 #endif
 
@@ -86,6 +90,14 @@ static PhysicsServer3D *create_physx_physics_server() {
 
 	return memnew(PhysicsServer3DWrapMT(physics_server, run_on_separate_thread));
 }
+
+#ifdef TOOLS_ENABLED
+static void _physx_editor_init() {
+	Ref<PhysXExportPlugin> export_plugin;
+	export_plugin.instantiate();
+	EditorExport::get_singleton()->add_export_plugin(export_plugin);
+}
+#endif
 
 void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SERVERS) {
@@ -136,6 +148,7 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
 		EditorPlugins::add_by_type<PhysXEditorPlugin>();
 		EditorPlugins::add_by_type<PhysXClothPaintPlugin>();
+		EditorNode::add_init_callback(_physx_editor_init);
 	}
 #endif
 }
