@@ -325,7 +325,7 @@ private:
 	// of drawing with freed textures.
 	void _detach_textures();
 
-	bool caustics_enabled = true;
+	bool caustics_enabled = false; // off by default: a draw pass every frame, only worth it over a visible floor
 	Vector3 caustics_sun_direction = Vector3(-0.35f, -1.0f, -0.25f);
 	float caustics_reference_depth = 2.5f;
 

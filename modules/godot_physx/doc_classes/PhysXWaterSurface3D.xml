@@ -119,8 +119,8 @@
 		</method>
 	</methods>
 	<members>
-		<member name="caustics_enabled" type="bool" setter="set_caustics_enabled" getter="get_caustics_enabled" default="true">
-			Enables the light-space caustics draw pass and its render target. When disabled, the extra GPU buffers and draw are skipped. See [method get_caustics_texture].
+		<member name="caustics_enabled" type="bool" setter="set_caustics_enabled" getter="get_caustics_enabled" default="false">
+			Enables the light-space caustics draw pass and its render target. When disabled, the extra GPU buffers and draw are skipped. See [method get_caustics_texture]. Off by default: the pass draws every frame, and caustics only show over a floor seen through fairly shallow water (a pool, a beach, a lake shore), so turn it on where you have one.
 		</member>
 		<member name="caustics_reference_depth" type="float" setter="set_caustics_reference_depth" getter="get_caustics_reference_depth" default="2.5">
 			Approximate distance the refracted light travels below the surface before it is mapped into the caustics texture. Larger values spread the pattern farther sideways for oblique light.

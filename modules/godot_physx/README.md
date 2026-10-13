@@ -712,8 +712,9 @@ so floaters on dry land don't float. Call `submit_sphere()` once per physics tic
 body so it actually pushes the water (`ripple_amplitude` scales the wake), or
 `submit_impulse()` for one-off splashes.
 
-`caustics_enabled` renders a light-space caustic map with a direct
-`RenderingDevice` draw pass along `caustics_sun_direction`. Any material — the
+`caustics_enabled` (off by default -- the pass draws every frame, so turn it on
+where a floor shows through shallow water) renders a light-space caustic map
+with a direct `RenderingDevice` draw pass along `caustics_sun_direction`. Any material — the
 floor, walls, submerged props — can sample it by projecting its world position
 with `get_caustics_texture()`, `get_caustics_origin()`,
 `get_caustics_light_right()` / `_up()` and `get_caustics_half_extent()`, so the
