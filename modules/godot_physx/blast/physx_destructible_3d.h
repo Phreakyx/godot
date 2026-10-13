@@ -285,6 +285,22 @@ public:
 	void set_kill_y(float p_y) { kill_y = p_y; }
 	float get_kill_y() const { return kill_y; }
 
+	// Debris clean-up, all off by default. A moving piece is removed
+	// piece_lifetime seconds after it broke off (0 = never), shrinking to
+	// nothing over the last piece_shrink_time of them instead of popping out.
+	// freeze_when_asleep makes the moving pieces kinematic once PhysX has put
+	// all of them to sleep: they stay, solid, but never move or wake again. Static pieces (a chipped
+	// wall's anchored remainder) never age.
+	void set_piece_lifetime(float p_seconds) { piece_lifetime = MAX(p_seconds, 0.0f); }
+	float get_piece_lifetime() const { return piece_lifetime; }
+	void set_piece_shrink_time(float p_seconds) { piece_shrink_time = MAX(p_seconds, 0.0f); }
+	float get_piece_shrink_time() const { return piece_shrink_time; }
+	void set_freeze_when_asleep(bool p_freeze) { freeze_when_asleep = p_freeze; }
+	bool get_freeze_when_asleep() const { return freeze_when_asleep; }
+
+	// True once a hit has broken anything off (stays true).
+	bool is_fractured() const { return fractured; }
+
 	// p_world_position: world-space damage origin (converted to this node's
 	// local space internally, since chunk geometry is authored local-space).
 	// Returns how many new rigid-body pieces this call produced. Each new
@@ -374,6 +390,10 @@ private:
 	float impact_damage_scale = 1.0f;
 	float impact_radius = 5.0f;
 	float kill_y = -1000.0f;
+	float piece_lifetime = 0.0f;
+	float piece_shrink_time = 0.0f;
+	bool freeze_when_asleep = false;
+	double piece_clock = 0.0; // seconds of physics since the node started processing; pieces' birth times use it
 
 	void *asset_mem = nullptr;
 	void *family_mem = nullptr;
@@ -447,7 +467,26 @@ private:
 		// chunk, so a car ramming a wall sent its far edges flying with it.
 		Vector3 last_linear_velocity;
 		Vector3 last_angular_velocity;
+		// piece_clock when it spawned (piece_lifetime), and the middle of its
+		// chunks in the body's frame -- the body's origin is the whole
+		// object's, so a piece shrinks about this point instead.
+		double born = 0.0;
+		Vector3 center_local;
+		bool frozen = false; // freeze_when_asleep made it kinematic
+		// In its piece_shrink_time: kinematic with no collision (nothing bumps
+		// into a piece that's on its way out), shrinking toward shrink_pivot,
+		// the ground under its middle (past the other pieces), so a piece
+		// sinks into the ground instead of hovering -- also one that was
+		// resting on another piece.
+		bool shrinking = false;
+		Vector3 shrink_pivot;
 	};
+	// Frees pieces[p_index] and retires its Blast actor (so a later hit can't
+	// split it and bring its chunks back): kill_y and piece_lifetime.
+	void _retire_piece(uint32_t p_index);
+	// The height of whatever is straight below p_from (this node's own pieces
+	// ignored), or p_fallback when there's nothing within 50 m.
+	real_t _ground_below(const Vector3 &p_from, real_t p_fallback) const;
 	LocalVector<ChunkVisual> pieces;
 	// The index in `pieces` of p_actor's piece, or -1.
 	int _piece_of_actor(const NvBlastActor *p_actor) const;

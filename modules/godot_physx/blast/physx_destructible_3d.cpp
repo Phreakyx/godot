@@ -35,6 +35,7 @@
 #include "core/math/triangle_mesh.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_set.h"
+#include "scene/resources/3d/world_3d.h"
 #include "servers/physics_3d/physics_server_3d.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -172,6 +173,19 @@ void PhysXDestructible3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "impact_damage_scale", PROPERTY_HINT_RANGE, "0,10,0.01"), "set_impact_damage_scale", "get_impact_damage_scale");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "impact_radius", PROPERTY_HINT_RANGE, "0.1,50,0.1"), "set_impact_radius", "get_impact_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "kill_y", PROPERTY_HINT_RANGE, "-10000,100,1,or_less,or_greater"), "set_kill_y", "get_kill_y");
+	ClassDB::bind_method(D_METHOD("set_piece_lifetime", "seconds"), &PhysXDestructible3D::set_piece_lifetime);
+	ClassDB::bind_method(D_METHOD("get_piece_lifetime"), &PhysXDestructible3D::get_piece_lifetime);
+	ClassDB::bind_method(D_METHOD("set_piece_shrink_time", "seconds"), &PhysXDestructible3D::set_piece_shrink_time);
+	ClassDB::bind_method(D_METHOD("get_piece_shrink_time"), &PhysXDestructible3D::get_piece_shrink_time);
+	ClassDB::bind_method(D_METHOD("set_freeze_when_asleep", "freeze"), &PhysXDestructible3D::set_freeze_when_asleep);
+	ClassDB::bind_method(D_METHOD("get_freeze_when_asleep"), &PhysXDestructible3D::get_freeze_when_asleep);
+	ClassDB::bind_method(D_METHOD("is_fractured"), &PhysXDestructible3D::is_fractured);
+	ADD_GROUP("Debris", "");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "piece_lifetime", PROPERTY_HINT_RANGE, "0,120,0.1,or_greater,suffix:s"), "set_piece_lifetime", "get_piece_lifetime");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "piece_shrink_time", PROPERTY_HINT_RANGE, "0,10,0.01,or_greater,suffix:s"), "set_piece_shrink_time", "get_piece_shrink_time");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "freeze_when_asleep"), "set_freeze_when_asleep", "get_freeze_when_asleep");
+	ADD_GROUP("", "");
+	ADD_SIGNAL(MethodInfo("fractured", PropertyInfo(Variant::INT, "new_pieces")));
 
 	BIND_ENUM_CONSTANT(GI_MODE_DISABLED);
 	BIND_ENUM_CONSTANT(GI_MODE_STATIC);
@@ -258,7 +272,7 @@ void PhysXDestructible3D::set_collision_layer(uint32_t p_layer) {
 	collision_layer = p_layer;
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	for (const ChunkVisual &piece : pieces) {
-		if (piece.body.is_valid()) {
+		if (piece.body.is_valid() && !piece.shrinking) {
 			ps->body_set_collision_layer(piece.body, collision_layer);
 		}
 	}
@@ -268,7 +282,7 @@ void PhysXDestructible3D::set_collision_mask(uint32_t p_mask) {
 	collision_mask = p_mask;
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	for (const ChunkVisual &piece : pieces) {
-		if (piece.body.is_valid()) {
+		if (piece.body.is_valid() && !piece.shrinking) {
 			ps->body_set_collision_mask(piece.body, collision_mask);
 		}
 	}
@@ -494,6 +508,7 @@ void PhysXDestructible3D::_notification(int p_what) {
 			}
 		} break;
 		case NOTIFICATION_INTERNAL_PHYSICS_PROCESS: {
+			piece_clock += get_physics_process_delta_time();
 			if (fractured) {
 				_sync_transforms();
 			} else if (dynamic && pieces.size() == 1) {
@@ -1032,6 +1047,11 @@ int PhysXDestructible3D::_spawn_piece(const LocalVector<uint32_t> &p_chunk_indic
 	piece.chunk_indices = chunk_indices_storage;
 	piece.actor = p_actor;
 	piece.last_linear_velocity = p_linear_velocity;
+	piece.born = piece_clock;
+	for (uint32_t ci : chunk_indices_storage) {
+		piece.center_local += _chunk_centroid_local(ci);
+	}
+	piece.center_local /= (real_t)chunk_indices_storage.size();
 	pieces.push_back(piece);
 	return (int)pieces.size() - 1;
 }
@@ -1059,6 +1079,40 @@ void PhysXDestructible3D::_free_piece(uint32_t p_index) {
 	rs->free_rid(piece.instance);
 	rs->free_rid(piece.mesh);
 	pieces.remove_at_unordered(p_index);
+}
+
+real_t PhysXDestructible3D::_ground_below(const Vector3 &p_from, real_t p_fallback) const {
+	// Straight down from the piece's middle, past this object's own pieces
+	// (a piece resting on another one that is shrinking away too would
+	// otherwise be left hovering at its old height).
+	if (!is_inside_tree() || get_world_3d().is_null()) {
+		return p_fallback;
+	}
+	PhysicsDirectSpaceState3D *space = get_world_3d()->get_direct_space_state();
+	if (space == nullptr) {
+		return p_fallback;
+	}
+	PhysicsDirectSpaceState3D::RayParameters ray;
+	ray.from = p_from;
+	ray.to = p_from - Vector3(0, 50, 0);
+	ray.collision_mask = collision_mask;
+	for (const ChunkVisual &other : pieces) {
+		if (other.body.is_valid()) {
+			ray.exclude.insert(other.body);
+		}
+	}
+	PhysicsDirectSpaceState3D::RayResult hit;
+	return space->intersect_ray(ray, hit) ? hit.position.y : p_fallback;
+}
+
+void PhysXDestructible3D::_retire_piece(uint32_t p_index) {
+	ERR_FAIL_UNSIGNED_INDEX(p_index, pieces.size());
+	NvBlastActor *actor = pieces[p_index].actor;
+	_free_piece(p_index);
+	if (actor != nullptr) {
+		live_actors.erase(actor);
+		NvBlastActorDeactivate(actor, blast_log);
+	}
 }
 
 Vector3 PhysXDestructible3D::_chunk_centroid_local(uint32_t p_chunk_index) const {
@@ -1093,6 +1147,34 @@ void PhysXDestructible3D::_free_all_pieces() {
 void PhysXDestructible3D::_sync_transforms() {
 	PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 	RenderingServer *rs = RenderingServer::get_singleton();
+	if (freeze_when_asleep) {
+		// Freeze the debris all at once, once every moving piece is asleep:
+		// freezing them one by one as each fell asleep disturbed the pieces
+		// still touching it, and the pile settled all over again.
+		bool any_moving = false;
+		bool all_asleep = true;
+		for (const ChunkVisual &piece : pieces) {
+			if (piece.frozen || piece.shrinking || !piece.body.is_valid() || ps->body_get_mode(piece.body) != PhysicsServer3D::BODY_MODE_RIGID) {
+				continue;
+			}
+			any_moving = true;
+			PhysicsDirectBodyState3D *state = ps->body_get_direct_state(piece.body);
+			if (state == nullptr || !state->is_sleeping()) {
+				all_asleep = false;
+				break;
+			}
+		}
+		if (any_moving && all_asleep) {
+			for (ChunkVisual &piece : pieces) {
+				if (!piece.frozen && !piece.shrinking && piece.body.is_valid() && ps->body_get_mode(piece.body) == PhysicsServer3D::BODY_MODE_RIGID) {
+					// Kinematic, not static: PhysX flips that in place on the
+					// same actor; static rebuilds it.
+					ps->body_set_mode(piece.body, PhysicsServer3D::BODY_MODE_KINEMATIC);
+					piece.frozen = true;
+				}
+			}
+		}
+	}
 	// Backwards so remove_at_unordered() (swaps in the last element) doesn't
 	// skip the piece it just moved into the current slot.
 	for (int64_t i = (int64_t)pieces.size() - 1; i >= 0; i--) {
@@ -1110,18 +1192,52 @@ void PhysXDestructible3D::_sync_transforms() {
 			// simulating and consuming memory forever. Its Blast actor goes
 			// with it: left live, a later hit could still split it and
 			// re-spawn chunks that fell out of the world.
-			NvBlastActor *actor = piece.actor;
-			_free_piece((uint32_t)i);
-			if (actor != nullptr) {
-				live_actors.erase(actor);
-				NvBlastActorDeactivate(actor, blast_log);
-			}
+			_retire_piece((uint32_t)i);
 			continue;
+		}
+		const bool moving = !piece.frozen && ps->body_get_mode(piece.body) == PhysicsServer3D::BODY_MODE_RIGID;
+		// Only debris ages -- a chipped wall's static remainder stays put
+		// (a frozen or shrinking piece did move, so it still ages).
+		real_t shrink = 1.0;
+		if (piece_lifetime > 0.0f && (moving || piece.frozen || piece.shrinking)) {
+			const double age = piece_clock - piece.born;
+			if (age >= piece_lifetime) {
+				_retire_piece((uint32_t)i);
+				continue;
+			}
+			const double left = piece_lifetime - age;
+			if (piece_shrink_time > 0.0f && left < piece_shrink_time) {
+				shrink = (real_t)(left / piece_shrink_time);
+			}
 		}
 		// t.basis is a pure rotation (see spawn_scale's own note) -- every
 		// piece was authored from the same intact mesh at the same original
 		// scale, so the same spawn_scale applies to all of them here too.
 		t.basis = t.basis.scaled_local(spawn_scale);
+		if (shrink < 1.0) {
+			if (!piece.shrinking) {
+				// On its way out: stop it simulating and colliding (it would
+				// otherwise still block players at full size while it looks
+				// smaller), and pin the point it shrinks toward -- the bottom of
+				// its geometry under its middle, where it touches the ground.
+				ps->body_set_mode(piece.body, PhysicsServer3D::BODY_MODE_KINEMATIC); // in place, see the freeze above
+				ps->body_set_collision_layer(piece.body, 0);
+				ps->body_set_collision_mask(piece.body, 0);
+				real_t bottom = Math::INF;
+				for (uint32_t ci : piece.chunk_indices) {
+					const PackedVector3Array &points = chunk_points[ci];
+					for (int k = 0; k < points.size(); k++) {
+						bottom = MIN(bottom, t.xform(points[k]).y);
+					}
+				}
+				const Vector3 middle = t.xform(piece.center_local);
+				pieces[i].shrink_pivot = Vector3(middle.x, _ground_below(middle, bottom), middle.z);
+				pieces[i].shrinking = true;
+			}
+			// In world space about the pivot (the body no longer moves).
+			const Vector3 p = pieces[i].shrink_pivot;
+			t = Transform3D(Basis().scaled(Vector3(shrink, shrink, shrink)), p - p * shrink) * t;
+		}
 		rs->instance_set_transform(piece.instance, t);
 	}
 	// Impact fracture for fractured nodes: the intact single-piece path in
@@ -1346,6 +1462,12 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 			NvBlastActorDeactivate(actor, blast_log);
 			continue;
 		}
+		if (actor_piece >= 0 && pieces[actor_piece].shrinking) {
+			// On its way out (piece_shrink_time): not breakable any more, or a
+			// fading piece would burst into fresh full-size debris.
+			live_actors.push_back(actor);
+			continue;
+		}
 		Transform3D damage_from_asset = get_global_transform(); // a render-only editor piece
 		if (actor_piece >= 0 && pieces[actor_piece].body.is_valid()) {
 			const Transform3D t = ps->body_get_state(pieces[actor_piece].body, PhysicsServer3D::BODY_STATE_TRANSFORM);
@@ -1416,6 +1538,11 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 				pred_linear = pieces[actor_piece].last_linear_velocity;
 				pred_angular = pieces[actor_piece].last_angular_velocity;
 				pred_mode = ps->body_get_mode(body);
+				if (pred_mode == PhysicsServer3D::BODY_MODE_KINEMATIC) {
+					// Frozen (freeze_when_asleep) debris that breaks again: its
+					// children are loose debris, not frozen in mid-air.
+					pred_mode = PhysicsServer3D::BODY_MODE_RIGID;
+				}
 			}
 		}
 		// The split released this actor: its piece goes now, before the
@@ -1438,6 +1565,9 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 	if (!fractured && spawned > 0) {
 		fractured = true;
 		set_physics_process_internal(true);
+	}
+	if (spawned > 0) {
+		emit_signal(SNAME("fractured"), spawned);
 	}
 
 	return spawned;
