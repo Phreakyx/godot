@@ -223,6 +223,8 @@ public:
 	// The same, leaving out one wake (a boat's buoyancy reading the water
 	// under it shouldn't sink into its own wake's dip).
 	float sample_height_excluding_wake(Vector3 p_world_pos, ObjectID p_wake) const;
+	// Script-side: the wake as a node (null leaves nothing out).
+	float _sample_height_excluding_wake_bind(Vector3 p_world_pos, Object *p_wake) const;
 	// Moving wake grids (PhysXWaterWake3D): up to MAX_WAKES are drawn and
 	// sampled. register_wake() returns a slot (-1 when full).
 	static constexpr int MAX_WAKES = 4;

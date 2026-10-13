@@ -641,6 +641,7 @@ void PhysXWaterSurface3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_caustics_tile_size"), &PhysXWaterSurface3D::get_caustics_tile_size);
 
 	ClassDB::bind_method(D_METHOD("sample_height", "world_pos"), &PhysXWaterSurface3D::sample_height);
+	ClassDB::bind_method(D_METHOD("sample_height_excluding_wake", "world_pos", "wake"), &PhysXWaterSurface3D::_sample_height_excluding_wake_bind);
 	ClassDB::bind_method(D_METHOD("is_wet", "world_pos"), &PhysXWaterSurface3D::is_wet);
 	ClassDB::bind_method(D_METHOD("submit_sphere", "owner", "world_pos", "radius", "strength"), &PhysXWaterSurface3D::submit_sphere, DEFVAL(1.0f));
 	ClassDB::bind_method(D_METHOD("clear_sphere", "owner"), &PhysXWaterSurface3D::clear_sphere);
@@ -1362,6 +1363,10 @@ void PhysXWaterSurface3D::set_wake_slot(int p_slot, const Ref<Texture2D> &p_heig
 		water_material->set_shader_parameter("wake_height_" + i, p_height);
 	}
 	water_material->set_shader_parameter("wake_rect_" + i, p_rect);
+}
+
+float PhysXWaterSurface3D::_sample_height_excluding_wake_bind(Vector3 p_world_pos, Object *p_wake) const {
+	return sample_height_excluding_wake(p_world_pos, p_wake != nullptr ? p_wake->get_instance_id() : ObjectID());
 }
 
 float PhysXWaterSurface3D::sample_height_excluding_wake(Vector3 p_world_pos, ObjectID p_wake) const {
