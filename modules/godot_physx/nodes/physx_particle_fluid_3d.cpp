@@ -978,6 +978,26 @@ PackedVector3Array PhysXParticleFluid3D::get_particle_positions() const {
 }
 
 float PhysXParticleFluid3D::get_submersion(const AABB &p_world_aabb) const {
+	if (mpm != nullptr) {
+		// The MPM solver never fills the server's (PBD) fluid object, so count its own particles.
+		const real_t box_vol = p_world_aabb.get_volume();
+		if (!spawned || box_vol <= 0.0) {
+			return 0.0f;
+		}
+		// The render buffer the solver already reads back (asynchronously) every step: no GPU wait, a frame or two
+		// behind. 12 floats per particle (identity basis + origin); the origin is at 3, 7, 11.
+		const PackedFloat32Array mm = mpm->get_multimesh_buffer();
+		const int count = MIN(mpm->get_particle_count(), mm.size() / 12);
+		const float *f = mm.ptr();
+		uint32_t inside = 0;
+		for (int i = 0; i < count; i++) {
+			const float *o = f + i * 12;
+			if (p_world_aabb.has_point(Vector3(o[3], o[7], o[11]))) {
+				inside++;
+			}
+		}
+		return CLAMP((real_t)inside * mpm->get_particle_volume() / box_vol, (real_t)0.0, (real_t)1.0);
+	}
 	GodotPhysXServer3D *server = GodotPhysXServer3D::get_singleton();
 	if (!server || fluid.is_null()) {
 		return 0.0f;

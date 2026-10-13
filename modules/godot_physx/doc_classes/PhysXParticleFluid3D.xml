@@ -48,6 +48,7 @@
 			<param index="0" name="world_aabb" type="AABB" />
 			<description>
 				Returns the fraction (0 to 1) of the given world-space box currently filled with fluid, estimated from the number of particles inside it. A cheap probe for script-side buoyancy: PhysX PBD collides rigid bodies with the fluid but does not float or sink them by density, so apply your own buoyant force based on this value.
+				Works with both solvers. On the MPM solver it counts the particle positions the solver already reads back for drawing (so it doesn't wait for the GPU; they're a frame or two behind). A settled MPM pool is slightly denser than when it was seeded, so a box inside it reads full and one across its surface reads a little over its submerged share. Boxes much smaller than about twice the particle spacing give lumpy readings.
 			</description>
 		</method>
 		<method name="spawn">

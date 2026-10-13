@@ -259,11 +259,16 @@ public:
 	int get_capacity() const { return capacity; } // buffer / MultiMesh size
 	double get_last_step_msec() const;
 
-	// 12 floats / particle: MultiMesh TRANSFORM_3D rows, from the last reaped
-	// step. Empty until the first readback lands.
+	// 12 floats / particle: MultiMesh TRANSFORM_3D rows (origin at 3, 7, 11), from
+	// the last reaped step. Empty until the first readback lands.
 	PackedFloat32Array get_multimesh_buffer() const;
 	// Blocking: forces a render sync. Test / query helper only.
 	PackedVector3Array get_positions() const;
+	// The volume of fluid one particle stands for at rest (particles are seeded, and given mass, at dx / 2 spacing).
+	float get_particle_volume() const {
+		const float s = dx * 0.5f;
+		return s * s * s;
+	}
 
 	// GPU-marched isosurface geometry from the last reaped step run with
 	// p_want_surface = true. Non-indexed triangle soup, world space; returns the
