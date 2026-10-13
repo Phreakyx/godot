@@ -36,6 +36,7 @@ def configure(env):
 
 def get_doc_classes():
     return [
+        "PhysX",
         "PhysXParticleFluid3D",
         "PhysXGranular3D",
         "PhysXCloth3D",

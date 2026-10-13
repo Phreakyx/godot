@@ -296,6 +296,7 @@ public:
 	bool cloth_is_ready(RID p_cloth) const;
 	int cloth_get_mesh(RID p_cloth, PackedVector3Array &r_positions, PackedInt32Array &r_indices, uint32_t &r_version) const;
 	bool has_gpu() const { return px_cuda != nullptr; }
+	String get_gpu_device_name() const; // the CUDA device GPU dynamics runs on, or empty without one
 
 	/* SOFT BODY */
 	// Backs the stock SoftBody3D node with the module's CPU XPBD solver.

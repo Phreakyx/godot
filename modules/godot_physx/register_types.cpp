@@ -32,6 +32,7 @@
 
 #include "godot_physx_project_settings.h"
 #include "godot_physx_server_3d.h"
+#include "physx_info.h"
 #ifdef GODOT_PHYSX_BLAST
 #include "blast/godot_physx_blast_probe.h"
 #include "blast/physx_blast_asset.h"
@@ -106,6 +107,7 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	}
 
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		GDREGISTER_ABSTRACT_CLASS(PhysX);
 		GDREGISTER_CLASS(PhysXParticleFluid3D);
 		GDREGISTER_CLASS(PhysXGranular3D);
 		GDREGISTER_CLASS(PhysXCloth3D);

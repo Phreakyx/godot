@@ -1474,6 +1474,15 @@ void GodotPhysXServer3D::free_rid(RID p_rid) {
 	}
 }
 
+String GodotPhysXServer3D::get_gpu_device_name() const {
+#ifdef GODOT_PHYSX_GPU
+	if (px_cuda) {
+		return String(px_cuda->getDeviceName());
+	}
+#endif
+	return String();
+}
+
 void GodotPhysXServer3D::set_active(bool p_active) {
 	active = p_active;
 }
