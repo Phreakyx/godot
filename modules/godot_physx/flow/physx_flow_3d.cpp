@@ -341,7 +341,13 @@ void PhysXFlow3D::_gather_colliders(const AABB &p_region, LocalVector<FlowBacken
 		}
 		const Transform3D body_xform = ps->body_get_state(body, PhysicsServer3D::BODY_STATE_TRANSFORM);
 		const Transform3D xform = body_xform * ps->body_get_shape_transform(body, index);
-		const Vector3 velocity = ps->body_get_state(body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY);
+		// The body's velocity where this shape is, spin included: a shape on a
+		// spinning or swinging body (a rotor, a door, a walker on a turntable)
+		// moves although the body's centre may not.
+		Vector3 velocity = ps->body_get_state(body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY);
+		if (PhysicsDirectBodyState3D *state = ps->body_get_direct_state(body)) {
+			velocity = state->get_velocity_at_local_position(xform.origin - body_xform.origin);
+		}
 		const Variant shape_data = ps->shape_get_data(shape);
 		switch (ps->shape_get_type(shape)) {
 			case PhysicsServer3D::SHAPE_BOX: {
