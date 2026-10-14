@@ -33,6 +33,7 @@
 #include "flow_scatter_rd.h"
 
 #include "core/os/mutex.h"
+#include "core/templates/paged_array.h"
 
 #include "core/templates/local_vector.h"
 #include "scene/3d/node_3d.h"
@@ -145,6 +146,7 @@ private:
 	float scattering_anisotropy = 0.4f;
 	int scattering_shadow_steps = 8;
 	float scattering_shadow_reach = 4.0f;
+	bool scattering_shadows = true;
 	// Every OmniLight3D / SpotLight3D in the scene, looked up every so often;
 	// the ones lighting the gas this step, for the render thread.
 	LocalVector<ObjectID> scatter_light_ids;
@@ -152,6 +154,7 @@ private:
 	Mutex scatter_mutex;
 	LocalVector<FlowScatterRD::Light> scatter_lights;
 	void _gather_scatter_lights();
+	void _fill_scatter_shadows(LocalVector<FlowScatterRD::Light> &r_lights, const PagedArray<RID> *p_instances, const RID &p_shadow_atlas) const;
 
 	void _start();
 	void _stop();
@@ -223,6 +226,8 @@ public:
 	int get_scattering_shadow_steps() const { return scattering_shadow_steps; }
 	void set_scattering_shadow_reach(float p_v) { scattering_shadow_reach = MAX(p_v, 0.05f); }
 	float get_scattering_shadow_reach() const { return scattering_shadow_reach; }
+	void set_scattering_shadows(bool p_v) { scattering_shadows = p_v; }
+	bool is_scattering_shadows() const { return scattering_shadows; }
 
 	void set_cpu_readback(bool p_v);
 	bool is_cpu_readback() const { return cpu_readback; }
@@ -235,7 +240,9 @@ public:
 
 	// From PhysXFlowRenderEffect, on the render thread.
 	Vector3 get_draw_center() const { return draw_center; }
-	void render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_rd, const float p_view[16], const float p_projection[16], const Size2i &p_size, const RID &p_depth, const RID &p_color, const Projection &p_inv_view_projection, const Vector3 &p_camera);
+	// p_lights / p_shadow_atlas: the frame's light instances and shadow atlas
+	// (RenderDataRD), for the scattering pass's shadows.
+	void render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_rd, const float p_view[16], const float p_projection[16], const Size2i &p_size, const RID &p_depth, const RID &p_color, const Projection &p_inv_view_projection, const Vector3 &p_camera, const PagedArray<RID> *p_lights, const RID &p_shadow_atlas);
 
 	PackedStringArray get_configuration_warnings() const override;
 

@@ -92,6 +92,10 @@
 		<member name="scattering_shadow_steps" type="int" setter="set_scattering_shadow_steps" getter="get_scattering_shadow_steps" default="8">
 			With [member light_scattering], the steps of the march toward each light that lets the gas shade itself (a light inside thick smoke glows near it and dims further in). [code]0[/code] skips it: cheaper, but light then reaches every point as if through clear air.
 		</member>
+		<member name="scattering_shadows" type="bool" setter="set_scattering_shadows" getter="is_scattering_shadows" default="true">
+			With [member light_scattering], scene objects block a light's glow in the gas: each point reads the light's own shadow (the one Godot already renders for meshes, so only for lights with [member Light3D.shadow_enabled]), the way Godot's volumetric fog does. Pillars in front of a light cast dark shafts through the gas. One shadow lookup per light per step; turn it off to save it.
+			To light the gas from inside an object (a lamp in a glowing block), keep the object from shadowing its own light: put it on a render layer of its own and leave that layer out of the light's [member Light3D.shadow_caster_mask].
+		</member>
 		<member name="scattering_strength" type="float" setter="set_scattering_strength" getter="get_scattering_strength" default="1.0">
 			With [member light_scattering], a multiplier on the light the gas scatters. The glow is colored by [member smoke_color].
 		</member>

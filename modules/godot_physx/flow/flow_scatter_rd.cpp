@@ -31,6 +31,7 @@
 
 #include "flow_scatter_rd.h"
 
+#include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_device_binds.h"
 
@@ -56,10 +57,16 @@ struct Light {
 	vec4 color_decay;
 	vec4 direction_cutoff;
 	vec4 spot;
+	mat4 shadow_matrix;
+	vec4 atlas_rect;
+	vec4 shadow; // x: opacity, y: bias, zw: omni flip offset
 };
 layout(set = 0, binding = 4, std430) restrict readonly buffer Lights {
 	Light lights[];
 };
+
+// Godot's shadow atlas (omni: dual paraboloid; spot: projected).
+layout(set = 0, binding = 6) uniform sampler2D shadow_atlas;
 
 layout(set = 0, binding = 5, std140) uniform Params {
 	mat4 inv_view_projection; // clip -> world meters
@@ -70,7 +77,7 @@ layout(set = 0, binding = 5, std140) uniform Params {
 	vec4 world_min; // Flow units
 	vec4 world_max;
 	vec4 albedo; // rgb; w: strength
-	vec4 misc; // x: sigma per meter per unit smoke, y: anisotropy, z: shadow reach (m)
+	vec4 misc; // x: sigma per meter per unit smoke, y: anisotropy, z: shadow reach (m), w: 1 = sample light shadows
 	ivec4 size;
 } p;
 
@@ -141,6 +148,43 @@ bool intersect_box(vec3 ro, vec3 rd_inv, vec3 bmin, vec3 bmax, out float t0, out
 	t0 = max(max(lo.x, lo.y), lo.z);
 	t1 = min(min(hi.x, hi.y), hi.z);
 	return t1 > max(t0, 0.0);
+}
+
+// Soft edge of a shadow in the gas, as Godot's volumetric fog (INV_FOG_FADE).
+const float SHADOW_FADE = 10.0;
+
+// How much of a light reaches pos_m (meters) past scene objects: its shadow, read
+// from Godot's shadow atlas like volumetric_fog_process.glsl does.
+float light_shadow(Light L, vec3 pos_m) {
+	float opacity = L.shadow.x;
+	if (opacity <= 0.001) {
+		return 1.0;
+	}
+	float inv_range = 1.0 / L.position_range.w;
+	if (L.direction_cutoff.w < -1.5) {
+		// Omni: dual paraboloid.
+		vec4 uv_rect = L.atlas_rect;
+		vec3 local = (L.shadow_matrix * vec4(pos_m, 1.0)).xyz;
+		float shadow_len = length(local);
+		vec3 dir = shadow_len > 0.0 ? local / shadow_len : vec3(0.0, 0.0, 1.0);
+		if (dir.z >= 0.0) {
+			uv_rect.xy += L.shadow.zw;
+		}
+		dir.z = 1.0 + abs(dir.z);
+		vec3 pos = vec3(dir.xy / dir.z, shadow_len - L.shadow.y);
+		pos.z = 1.0 - pos.z * inv_range;
+		pos.xy = uv_rect.xy + (pos.xy * 0.5 + 0.5) * uv_rect.zw;
+		float depth = textureLod(shadow_atlas, pos.xy, 0.0).r;
+		return mix(1.0 - opacity, 1.0, exp(min(0.0, pos.z - depth) / inv_range * SHADOW_FADE));
+	}
+	// Spot: projected.
+	vec4 splane = L.shadow_matrix * vec4(pos_m, 1.0);
+	splane.z -= L.shadow.y;
+	float w = abs(splane.w) > 1e-6 ? splane.w : (splane.w >= 0.0 ? 1e-6 : -1e-6);
+	splane /= w;
+	vec2 uv = splane.xy * L.atlas_rect.zw + L.atlas_rect.xy;
+	float depth = textureLod(shadow_atlas, uv, 0.0).r;
+	return mix(1.0 - opacity, 1.0, exp(min(0.0, splane.z - depth) / inv_range * SHADOW_FADE));
 }
 
 float ign(vec2 px) {
@@ -241,6 +285,13 @@ void main() {
 				if (atten <= 0.0) {
 					continue;
 				}
+				if (p.misc.w > 0.5) {
+					// Scene objects between the light and the point.
+					atten *= light_shadow(L, pos_m);
+					if (atten <= 0.0) {
+						continue;
+					}
+				}
 				// Gas between the point and the light.
 				float light_t = 1.0;
 				if (shadow_steps > 0) {
@@ -309,13 +360,17 @@ bool FlowScatterRD::_ensure(RenderingDevice *p_rd) {
 	linear_sampler = p_rd->sampler_create(linear);
 	RD::SamplerState point;
 	point_sampler = p_rd->sampler_create(point);
+	RD::SamplerState shadow_state;
+	shadow_state.mag_filter = RD::SAMPLER_FILTER_LINEAR;
+	shadow_state.min_filter = RD::SAMPLER_FILTER_LINEAR;
+	shadow_sampler = p_rd->sampler_create(shadow_state);
 	params_buffer = p_rd->uniform_buffer_create(PARAMS_WORDS * 4);
 	lights_buffer = p_rd->storage_buffer_create(MAX_LIGHTS * sizeof(Light));
 	failed = false;
 	return true;
 }
 
-void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource &p_source, const Params &p_params, const Light *p_lights, int p_light_count, const RID &p_depth, const RID &p_color, const Size2i &p_size) {
+void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource &p_source, const Params &p_params, const Light *p_lights, int p_light_count, const RID &p_depth, const RID &p_color, const RID &p_shadow_atlas, const Size2i &p_size) {
 	if (!p_source.valid || p_light_count <= 0 || p_size.x <= 0 || p_size.y <= 0 || !_ensure(p_rd)) {
 		return;
 	}
@@ -360,7 +415,7 @@ void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource 
 	f[w++] = p_params.sigma;
 	f[w++] = CLAMP(p_params.anisotropy, -0.95f, 0.95f);
 	f[w++] = MAX(p_params.shadow_reach, 0.01f);
-	w++;
+	f[w++] = (p_params.shadows && p_shadow_atlas.is_valid()) ? 1.0f : 0.0f;
 	iw[w++] = p_size.x;
 	iw[w++] = p_size.y;
 	w += 2;
@@ -375,6 +430,9 @@ void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource 
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, p_color));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, lights_buffer));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 5, params_buffer));
+	// Something must be bound even when the frame has no shadow atlas.
+	const RID atlas = p_shadow_atlas.is_valid() ? p_shadow_atlas : RendererRD::TextureStorage::get_singleton()->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_DEPTH);
+	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 6, Vector<RID>({ shadow_sampler, atlas })));
 	const RID set = p_rd->uniform_set_create(uniforms, shader, 0);
 	ERR_FAIL_COND(!set.is_valid());
 	const RD::ComputeListID list = p_rd->compute_list_begin();
@@ -389,7 +447,7 @@ void FlowScatterRD::free(RenderingDevice *p_rd) {
 	if (p_rd == nullptr) {
 		return;
 	}
-	for (RID *r : { &pipeline, &shader, &linear_sampler, &point_sampler, &params_buffer, &lights_buffer }) {
+	for (RID *r : { &pipeline, &shader, &linear_sampler, &point_sampler, &shadow_sampler, &params_buffer, &lights_buffer }) {
 		if (r->is_valid()) {
 			p_rd->free_rid(*r);
 			*r = RID();

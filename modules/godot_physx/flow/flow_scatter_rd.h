@@ -54,12 +54,18 @@ class FlowScatterRD {
 public:
 	static constexpr int MAX_LIGHTS = 16;
 
-	// std430, 64 bytes.
+	// std430, 160 bytes.
 	struct Light {
 		float position_range[4] = {}; // meters; w: range
 		float color_decay[4] = {}; // linear rgb * energy; w: attenuation exponent
 		float direction_cutoff[4] = {}; // spot: direction it points, w: cos(spot angle); omni: w = -2
 		float spot[4] = {}; // x: spot attenuation exponent
+		// Its shadow in Godot's shadow atlas, as Godot's own volumetric fog reads
+		// it (see LightStorage::update_light_buffers), but from world space:
+		// omni: world -> light local; spot: world -> atlas projection.
+		float shadow_matrix[16] = {};
+		float atlas_rect[4] = {};
+		float shadow[4] = {}; // x: opacity (0: no shadow), y: bias, zw: omni dual-paraboloid flip offset
 	};
 
 	struct Params {
@@ -73,6 +79,7 @@ public:
 		int shadow_steps = 8; // toward each light; 0: no self-shadow
 		float shadow_reach = 4.0f; // meters
 		int max_steps = 256;
+		bool shadows = true; // sample the lights' shadows (scene objects block their glow)
 	};
 
 private:
@@ -80,6 +87,7 @@ private:
 	RID pipeline;
 	RID linear_sampler;
 	RID point_sampler;
+	RID shadow_sampler;
 	RID params_buffer;
 	RID lights_buffer;
 	bool failed = false;
@@ -89,6 +97,8 @@ private:
 public:
 	// After Flow composited into p_color (rgba16f, storage); p_depth is the
 	// scene depth it was drawn against.
-	void run(RenderingDevice *p_rd, const FlowBackend::ScatterSource &p_source, const Params &p_params, const Light *p_lights, int p_light_count, const RID &p_depth, const RID &p_color, const Size2i &p_size);
+	// p_shadow_atlas: the frame's shadow atlas (RID() if there is none; lights
+	// then glow unshadowed).
+	void run(RenderingDevice *p_rd, const FlowBackend::ScatterSource &p_source, const Params &p_params, const Light *p_lights, int p_light_count, const RID &p_depth, const RID &p_color, const RID &p_shadow_atlas, const Size2i &p_size);
 	void free(RenderingDevice *p_rd);
 };

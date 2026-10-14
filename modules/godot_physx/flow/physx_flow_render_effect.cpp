@@ -37,6 +37,7 @@
 #include "core/object/class_db.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/resources/3d/world_3d.h"
+#include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
 #include "servers/rendering/rendering_device.h"
@@ -332,6 +333,8 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 	// For the light scattering pass: clip space (as the depth buffer has it)
 	// straight back to world meters.
 	const Projection inv_view_projection = (scene->get_cam_projection() * Projection(scene->get_cam_transform().affine_inverse())).inverse();
+	// The frame's lights and shadow atlas, for the scattering pass's shadows.
+	const RenderDataRD *render_data_rd = dynamic_cast<const RenderDataRD *>(p_render_data);
 
 	// Each flow composites over what's drawn so far, so far ones go first.
 	const Vector3 eye = scene->get_cam_transform().origin;
@@ -348,6 +351,6 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 		}
 	}
 	for (PhysXFlow3D *flow : sorted) {
-		flow->render_rd(this, rd, view_f, projection_f, size, depth, color, inv_view_projection, eye);
+		flow->render_rd(this, rd, view_f, projection_f, size, depth, color, inv_view_projection, eye, render_data_rd != nullptr ? render_data_rd->lights : nullptr, render_data_rd != nullptr ? render_data_rd->shadow_atlas : RID());
 	}
 }
