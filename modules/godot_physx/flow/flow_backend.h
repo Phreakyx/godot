@@ -111,13 +111,30 @@ void release_library();
 // pipelines (cached in Godot's shader cache folder afterwards).
 // p_max_blocks: the sparse block budget; Flow allocates for all of it up front.
 Grid *grid_create_rd(RenderingDevice *p_rd, uint32_t p_max_blocks);
+// What the light scattering pass (flow_scatter_rd) needs to read the gas Flow
+// just drew: the density atlas (rgba: temperature, -, sun light, smoke) and its
+// sparse table, both RenderingDevice RID ids valid until grid_render_rd_finish,
+// and the table's level parameters (Flow's NvFlowSparseLevelParams, 40 words).
+// Lengths in Flow units (UNITS_PER_METER per meter).
+struct ScatterSource {
+	bool valid = false;
+	uint64_t density_rid = 0;
+	uint64_t table_rid = 0;
+	uint32_t level[40] = {};
+	float block_size_world[3] = {};
+	int layer_and_level = 0;
+	float world_min[3] = {};
+	float world_max[3] = {};
+};
+
 // Draws a grid on RenderingDevice into Godot's frame with Flow's own ray
 // marcher: depth / color are Godot's scene textures (RenderingDevice RID
 // ids, width x height), view / projection are row-vector 4x4 matrices from
 // Flow's world (its units) to Godot's clip space. Returns the RID id of the
 // texture holding the scene color with the gas composited in (to copy back
 // before the next Flow call), or 0.
-uint64_t grid_render_rd(Grid *p_grid, const float p_view[16], const float p_projection[16], uint32_t p_width, uint32_t p_height, uint64_t p_depth_rid, uint32_t p_depth_width, uint32_t p_depth_height, uint64_t p_color_rid);
+// With r_scatter, also fills in what the scattering pass reads.
+uint64_t grid_render_rd(Grid *p_grid, const float p_view[16], const float p_projection[16], uint32_t p_width, uint32_t p_height, uint64_t p_depth_rid, uint32_t p_depth_width, uint32_t p_depth_height, uint64_t p_color_rid, ScatterSource *r_scatter = nullptr);
 // Ends the render's Flow frame; call after the result has been copied.
 void grid_render_rd_finish(Grid *p_grid);
 

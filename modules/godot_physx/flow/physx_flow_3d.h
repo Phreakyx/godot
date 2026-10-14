@@ -30,6 +30,10 @@
 
 #pragma once
 
+#include "flow_scatter_rd.h"
+
+#include "core/os/mutex.h"
+
 #include "core/templates/local_vector.h"
 #include "scene/3d/node_3d.h"
 #include "scene/resources/gradient.h"
@@ -119,6 +123,10 @@ private:
 	uint64_t stat_render_calls = 0;
 	uint64_t stat_render_outputs = 0;
 	int64_t stat_readback_bytes = 0;
+	// Light scattering: lights picked last step, passes run, frames Flow had no volume to hand over.
+	int stat_scatter_lights = 0;
+	uint64_t stat_scatter_passes = 0;
+	uint64_t stat_scatter_no_source = 0;
 
 	// Where the gas is, roughly (its emitters' middle), for drawing flows
 	// back to front. Written by _step, read on the render thread.
@@ -127,6 +135,23 @@ private:
 	// The first visible DirectionalLight3D, looked up every so often.
 	ObjectID light_id;
 	int light_search_countdown = 0;
+
+	// Light scattering: point / spot lights glowing in the gas (a pass of its
+	// own after Flow's, see FlowScatterRD). Off by default: it marches every
+	// pixel the gas covers once more, with a short march toward each light.
+	bool light_scattering = false;
+	int scattering_max_lights = 4;
+	float scattering_strength = 1.0f;
+	float scattering_anisotropy = 0.4f;
+	int scattering_shadow_steps = 8;
+	float scattering_shadow_reach = 4.0f;
+	// Every OmniLight3D / SpotLight3D in the scene, looked up every so often;
+	// the ones lighting the gas this step, for the render thread.
+	LocalVector<ObjectID> scatter_light_ids;
+	int scatter_search_countdown = 0;
+	Mutex scatter_mutex;
+	LocalVector<FlowScatterRD::Light> scatter_lights;
+	void _gather_scatter_lights();
 
 	void _start();
 	void _stop();
@@ -186,6 +211,19 @@ public:
 	void set_shadow_steps(int p_v) { shadow_steps = CLAMP(p_v, 0, 128); }
 	int get_shadow_steps() const { return shadow_steps; }
 
+	void set_light_scattering(bool p_v) { light_scattering = p_v; }
+	bool is_light_scattering() const { return light_scattering; }
+	void set_scattering_max_lights(int p_v) { scattering_max_lights = CLAMP(p_v, 1, FlowScatterRD::MAX_LIGHTS); }
+	int get_scattering_max_lights() const { return scattering_max_lights; }
+	void set_scattering_strength(float p_v) { scattering_strength = MAX(p_v, 0.0f); }
+	float get_scattering_strength() const { return scattering_strength; }
+	void set_scattering_anisotropy(float p_v) { scattering_anisotropy = CLAMP(p_v, -0.95f, 0.95f); }
+	float get_scattering_anisotropy() const { return scattering_anisotropy; }
+	void set_scattering_shadow_steps(int p_v) { scattering_shadow_steps = CLAMP(p_v, 0, 64); }
+	int get_scattering_shadow_steps() const { return scattering_shadow_steps; }
+	void set_scattering_shadow_reach(float p_v) { scattering_shadow_reach = MAX(p_v, 0.05f); }
+	float get_scattering_shadow_reach() const { return scattering_shadow_reach; }
+
 	void set_cpu_readback(bool p_v);
 	bool is_cpu_readback() const { return cpu_readback; }
 	// Smoke at a world position, from the last CPU readback (needs
@@ -197,7 +235,7 @@ public:
 
 	// From PhysXFlowRenderEffect, on the render thread.
 	Vector3 get_draw_center() const { return draw_center; }
-	void render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_rd, const float p_view[16], const float p_projection[16], const Size2i &p_size, const RID &p_depth, const RID &p_color);
+	void render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_rd, const float p_view[16], const float p_projection[16], const Size2i &p_size, const RID &p_depth, const RID &p_color, const Projection &p_inv_view_projection, const Vector3 &p_camera);
 
 	PackedStringArray get_configuration_warnings() const override;
 

@@ -16,7 +16,7 @@
 		<method name="get_stats" qualifiers="const">
 			<return type="Dictionary" />
 			<description>
-				Diagnostics: [code]running[/code], [code]error[/code], [code]start_ms[/code] (grid creation), [code]step_ms[/code], [code]render_calls[/code], [code]render_outputs[/code], [code]readback_bytes[/code], [code]bounds[/code] (the gas, with [member cpu_readback]), [code]active_blocks[/code] (sparse blocks in use, of [member max_blocks]), and Flow's pipeline / pass / resource counts.
+				Diagnostics: [code]running[/code], [code]error[/code], [code]start_ms[/code] (grid creation), [code]step_ms[/code], [code]render_calls[/code], [code]render_outputs[/code], [code]readback_bytes[/code], [code]bounds[/code] (the gas, with [member cpu_readback]), [code]active_blocks[/code] (sparse blocks in use, of [member max_blocks]), [code]scatter_lights[/code] / [code]scatter_passes[/code] / [code]scatter_no_source[/code] (see [member light_scattering]: lights picked last step, scattering passes run, frames Flow had no volume to hand over), and Flow's pipeline / pass / resource counts.
 			</description>
 		</method>
 		<method name="is_running" qualifiers="const">
@@ -73,8 +73,27 @@
 		<member name="ignition_temperature" type="float" setter="set_ignition_temperature" getter="get_ignition_temperature" default="0.05">
 			The temperature above which fuel burns (see [member combustion]).
 		</member>
+		<member name="light_scattering" type="bool" setter="set_light_scattering" getter="is_light_scattering" default="false">
+			When enabled, nearby [OmniLight3D] and [SpotLight3D] nodes light the gas: each glows in the smoke in its own color, fading with distance the way it fades on surfaces (its [member Light3D.omni_range] / [member Light3D.spot_range], [member Light3D.omni_attenuation], spot cone), dimmed by the gas between it and each point and by the gas in front of the camera. Flow's own renderer only lights the gas with the scene's first [DirectionalLight3D]; this is an extra pass over the pixels the gas covers, so it's off by default.
+			Up to [member scattering_max_lights] lights are used, the strongest at the gas first. Each light's [member Light3D.light_volumetric_fog_energy] scales its glow, as it does for Godot's volumetric fog: set it to [code]0[/code] to keep a light out of the gas.
+		</member>
 		<member name="max_blocks" type="int" setter="set_max_blocks" getter="get_max_blocks" default="1024">
 			The most sparse blocks the gas may take up -- a GPU memory budget, since Flow reserves memory for all of them when the grid starts (about 0.45 MB a block: the default 1024 is roughly 0.5 GB). A small plume uses a few hundred; [method get_stats] reports [code]active_blocks[/code]. Gas that would need more is cut off, with a warning. Changing it restarts the simulation.
+		</member>
+		<member name="scattering_anisotropy" type="float" setter="set_scattering_anisotropy" getter="get_scattering_anisotropy" default="0.4">
+			With [member light_scattering], how much the gas scatters light forward (toward a camera looking at the light) rather than evenly in every direction: [code]0[/code] glows the same from every side, higher values make a bright halo when looking toward a light, negative values light the gas most when the light is behind the camera.
+		</member>
+		<member name="scattering_max_lights" type="int" setter="set_scattering_max_lights" getter="get_scattering_max_lights" default="4">
+			With [member light_scattering], the most lights that glow in the gas at once (the strongest at it). Each one costs a short march toward it for every step of every pixel the gas covers.
+		</member>
+		<member name="scattering_shadow_reach" type="float" setter="set_scattering_shadow_reach" getter="get_scattering_shadow_reach" default="4.0">
+			With [member light_scattering], how far (in meters) each point looks toward a light for gas that dims it. Beyond that, gas between a point and the light is ignored.
+		</member>
+		<member name="scattering_shadow_steps" type="int" setter="set_scattering_shadow_steps" getter="get_scattering_shadow_steps" default="8">
+			With [member light_scattering], the steps of the march toward each light that lets the gas shade itself (a light inside thick smoke glows near it and dims further in). [code]0[/code] skips it: cheaper, but light then reaches every point as if through clear air.
+		</member>
+		<member name="scattering_strength" type="float" setter="set_scattering_strength" getter="get_scattering_strength" default="1.0">
+			With [member light_scattering], a multiplier on the light the gas scatters. The glow is colored by [member smoke_color].
 		</member>
 		<member name="shadow_steps" type="int" setter="set_shadow_steps" getter="get_shadow_steps" default="48">
 			How far the self-shadowing reaches toward the light, in steps of three quarters of a cell (48 is about 1.8 m at the default [member cell_size]). Too few for the gas's width leaves it lit almost evenly. [code]0[/code] turns self-shadowing off.

@@ -245,6 +245,7 @@ PhysXFlowRenderEffect::~PhysXFlowRenderEffect() {
 		if (copy_shader.is_valid()) {
 			rd->free_rid(copy_shader);
 		}
+		scatter.free(rd);
 	}
 }
 
@@ -328,6 +329,9 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 	float projection_f[16];
 	to_flow(view, view_f);
 	to_flow(projection, projection_f);
+	// For the light scattering pass: clip space (as the depth buffer has it)
+	// straight back to world meters.
+	const Projection inv_view_projection = (scene->get_cam_projection() * Projection(scene->get_cam_transform().affine_inverse())).inverse();
 
 	// Each flow composites over what's drawn so far, so far ones go first.
 	const Vector3 eye = scene->get_cam_transform().origin;
@@ -344,6 +348,6 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 		}
 	}
 	for (PhysXFlow3D *flow : sorted) {
-		flow->render_rd(this, rd, view_f, projection_f, size, depth, color);
+		flow->render_rd(this, rd, view_f, projection_f, size, depth, color, inv_view_projection, eye);
 	}
 }

@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include "flow_scatter_rd.h"
+
 #include "core/templates/hash_map.h"
 #include "core/templates/local_vector.h"
 #include "scene/resources/compositor.h"
@@ -75,6 +77,9 @@ class PhysXFlowRenderEffect : public CompositorEffect {
 	bool copy_failed = false;
 	bool _ensure_copy_pipeline(RenderingDevice *p_rd);
 
+	// PhysXFlow3D.light_scattering's pass (shared by every flow).
+	FlowScatterRD scatter;
+
 	void _render(int p_callback_type, const RenderData *p_render_data);
 
 protected:
@@ -83,6 +88,8 @@ protected:
 public:
 	// Writes p_src over p_dst (both RGBA16F, p_size), on the render thread.
 	void copy_texture(RenderingDevice *p_rd, const RID &p_src, const RID &p_dst, const Size2i &p_size);
+	// Adds point / spot light scattering in a flow's gas onto p_color.
+	FlowScatterRD &get_scatter() { return scatter; }
 
 	static void register_flow(PhysXFlow3D *p_flow);
 	static void unregister_flow(PhysXFlow3D *p_flow);

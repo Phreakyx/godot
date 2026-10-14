@@ -41,6 +41,7 @@
 #include "core/os/os.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/3d/light_3d.h"
+#include "scene/main/window.h"
 #include "scene/main/scene_tree.h"
 #include "scene/main/viewport.h"
 #include "scene/resources/3d/world_3d.h"
@@ -158,15 +159,41 @@ void PhysXFlow3D::_stop() {
 	gas_bounds = AABB();
 }
 
-void PhysXFlow3D::render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_rd, const float p_view[16], const float p_projection[16], const Size2i &p_size, const RID &p_depth, const RID &p_color) {
+void PhysXFlow3D::render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_rd, const float p_view[16], const float p_projection[16], const Size2i &p_size, const RID &p_depth, const RID &p_color, const Projection &p_inv_view_projection, const Vector3 &p_camera) {
 	if (grid == nullptr || p_rd != rd) {
 		return;
 	}
-	const uint64_t out = FlowBackend::grid_render_rd(grid, p_view, p_projection, p_size.x, p_size.y, p_depth.get_id(), p_size.x, p_size.y, p_color.get_id());
+	LocalVector<FlowScatterRD::Light> lights;
+	if (light_scattering) {
+		MutexLock lock(scatter_mutex);
+		lights = scatter_lights;
+	}
+	FlowBackend::ScatterSource source;
+	const uint64_t out = FlowBackend::grid_render_rd(grid, p_view, p_projection, p_size.x, p_size.y, p_depth.get_id(), p_size.x, p_size.y, p_color.get_id(), lights.is_empty() ? nullptr : &source);
 	stat_render_calls++;
 	stat_render_outputs += out != 0 ? 1 : 0;
 	if (out != 0 && out != p_color.get_id()) {
 		p_effect->copy_texture(p_rd, RID::from_uint64(out), p_color, p_size);
+	}
+	if (!lights.is_empty() && !source.valid) {
+		stat_scatter_no_source++;
+	}
+	if (out != 0 && source.valid) {
+		stat_scatter_passes++;
+		// Before the Flow frame ends: its volume and table are this frame's.
+		FlowScatterRD::Params params;
+		params.inv_view_projection = p_inv_view_projection;
+		params.camera_position = p_camera;
+		params.sigma = smoke_density;
+		const Color albedo = smoke_color.srgb_to_linear();
+		params.color[0] = albedo.r;
+		params.color[1] = albedo.g;
+		params.color[2] = albedo.b;
+		params.strength = scattering_strength;
+		params.anisotropy = scattering_anisotropy;
+		params.shadow_steps = scattering_shadow_steps;
+		params.shadow_reach = scattering_shadow_reach;
+		p_effect->get_scatter().run(p_rd, source, params, lights.ptr(), (int)lights.size(), p_depth, p_color, p_size);
 	}
 	FlowBackend::grid_render_rd_finish(grid);
 }
@@ -325,6 +352,87 @@ void PhysXFlow3D::_gather_light(Vector3 &r_direction, Color &r_color, Color &r_a
 	}
 }
 
+void PhysXFlow3D::_gather_scatter_lights() {
+	LocalVector<FlowScatterRD::Light> picked;
+	if (light_scattering) {
+		if (scatter_search_countdown-- <= 0) {
+			scatter_search_countdown = 60;
+			scatter_light_ids.clear();
+			Node *root = get_tree()->get_edited_scene_root();
+			if (root == nullptr) {
+				root = get_tree()->get_current_scene();
+			}
+			if (root == nullptr) {
+				root = get_tree()->get_root(); // a scene built from a script has no current scene
+			}
+			if (root != nullptr) {
+				for (const char *type : { "OmniLight3D", "SpotLight3D" }) {
+					TypedArray<Node> found = root->find_children("*", type, true, false);
+					for (int i = 0; i < found.size(); i++) {
+						scatter_light_ids.push_back(Object::cast_to<Node>(found[i])->get_instance_id());
+					}
+				}
+			}
+		}
+		// The lights that can reach the gas, strongest at it first (energy over
+		// squared distance to where the gas is, roughly).
+		struct Candidate {
+			FlowScatterRD::Light light;
+			float score = 0.0f;
+		};
+		LocalVector<Candidate> candidates;
+		constexpr float GAS_REACH = 20.0f; // how far gas may have spread from draw_center
+		for (const ObjectID &id : scatter_light_ids) {
+			Light3D *l = Object::cast_to<Light3D>(ObjectDB::get_instance(id));
+			if (l == nullptr || !l->is_inside_tree() || !l->is_visible_in_tree()) {
+				continue;
+			}
+			// Light3D.light_volumetric_fog_energy: the same per-light knob Godot's
+			// volumetric fog uses (0 leaves the gas dark).
+			const float energy = l->get_param(Light3D::PARAM_ENERGY) * l->get_param(Light3D::PARAM_VOLUMETRIC_FOG_ENERGY);
+			const float range = l->get_param(Light3D::PARAM_RANGE);
+			const Transform3D xf = l->get_global_transform();
+			const float d = xf.origin.distance_to(draw_center);
+			if (energy <= 0.0f || range <= 0.0f || d > range + GAS_REACH) {
+				continue;
+			}
+			Candidate c;
+			const Color col = l->get_color().srgb_to_linear() * energy;
+			c.light.position_range[0] = xf.origin.x;
+			c.light.position_range[1] = xf.origin.y;
+			c.light.position_range[2] = xf.origin.z;
+			c.light.position_range[3] = range;
+			c.light.color_decay[0] = col.r;
+			c.light.color_decay[1] = col.g;
+			c.light.color_decay[2] = col.b;
+			c.light.color_decay[3] = l->get_param(Light3D::PARAM_ATTENUATION);
+			c.light.direction_cutoff[3] = -2.0f; // omni
+			if (Object::cast_to<SpotLight3D>(l) != nullptr) {
+				// A spot shines along its -Z.
+				const Vector3 dir = -xf.basis.get_column(2).normalized();
+				c.light.direction_cutoff[0] = dir.x;
+				c.light.direction_cutoff[1] = dir.y;
+				c.light.direction_cutoff[2] = dir.z;
+				c.light.direction_cutoff[3] = Math::cos(Math::deg_to_rad(l->get_param(Light3D::PARAM_SPOT_ANGLE)));
+				c.light.spot[0] = l->get_param(Light3D::PARAM_SPOT_ATTENUATION);
+			}
+			c.score = energy / MAX(d * d, 1.0f);
+			candidates.push_back(c);
+		}
+		for (uint32_t i = 1; i < candidates.size(); i++) {
+			for (uint32_t j = i; j > 0 && candidates[j - 1].score < candidates[j].score; j--) {
+				SWAP(candidates[j - 1], candidates[j]);
+			}
+		}
+		for (uint32_t i = 0; i < candidates.size() && (int)i < scattering_max_lights; i++) {
+			picked.push_back(candidates[i].light);
+		}
+	}
+	stat_scatter_lights = (int)picked.size();
+	MutexLock lock(scatter_mutex);
+	scatter_lights = picked;
+}
+
 void PhysXFlow3D::_fill_render_settings(FlowBackend::Settings &r_settings) {
 	// Flow colors by temperature through a colormap and lights it with its
 	// own self-shadowing: the smoke's color under the sun, with the heat
@@ -378,6 +486,7 @@ void PhysXFlow3D::_step(double p_delta) {
 		region = region.has_volume() ? region.merge(gas_bounds.grow(1.0)) : gas_bounds.grow(1.0);
 	}
 	_gather_colliders(region, emitters);
+	_gather_scatter_lights();
 	if (floor_enabled) {
 		// The FLOOR: one wide solid box whose top is floor_height, under everything this grid can reach. A solid
 		// reserves no blocks and holds no gas, so whatever sinks below the floor is gone (and its blocks with it).
@@ -497,6 +606,9 @@ Dictionary PhysXFlow3D::get_stats() const {
 	d["render_outputs"] = stat_render_outputs;
 	d["readback_bytes"] = stat_readback_bytes;
 	d["bounds"] = gas_bounds;
+	d["scatter_lights"] = stat_scatter_lights;
+	d["scatter_passes"] = stat_scatter_passes;
+	d["scatter_no_source"] = stat_scatter_no_source;
 	int pipelines = 0;
 	int failures = 0;
 	int passes = 0;
@@ -601,6 +713,18 @@ void PhysXFlow3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_emission_strength"), &PhysXFlow3D::get_emission_strength);
 	ClassDB::bind_method(D_METHOD("set_shadow_steps", "steps"), &PhysXFlow3D::set_shadow_steps);
 	ClassDB::bind_method(D_METHOD("get_shadow_steps"), &PhysXFlow3D::get_shadow_steps);
+	ClassDB::bind_method(D_METHOD("set_light_scattering", "enabled"), &PhysXFlow3D::set_light_scattering);
+	ClassDB::bind_method(D_METHOD("is_light_scattering"), &PhysXFlow3D::is_light_scattering);
+	ClassDB::bind_method(D_METHOD("set_scattering_max_lights", "count"), &PhysXFlow3D::set_scattering_max_lights);
+	ClassDB::bind_method(D_METHOD("get_scattering_max_lights"), &PhysXFlow3D::get_scattering_max_lights);
+	ClassDB::bind_method(D_METHOD("set_scattering_strength", "strength"), &PhysXFlow3D::set_scattering_strength);
+	ClassDB::bind_method(D_METHOD("get_scattering_strength"), &PhysXFlow3D::get_scattering_strength);
+	ClassDB::bind_method(D_METHOD("set_scattering_anisotropy", "anisotropy"), &PhysXFlow3D::set_scattering_anisotropy);
+	ClassDB::bind_method(D_METHOD("get_scattering_anisotropy"), &PhysXFlow3D::get_scattering_anisotropy);
+	ClassDB::bind_method(D_METHOD("set_scattering_shadow_steps", "steps"), &PhysXFlow3D::set_scattering_shadow_steps);
+	ClassDB::bind_method(D_METHOD("get_scattering_shadow_steps"), &PhysXFlow3D::get_scattering_shadow_steps);
+	ClassDB::bind_method(D_METHOD("set_scattering_shadow_reach", "reach"), &PhysXFlow3D::set_scattering_shadow_reach);
+	ClassDB::bind_method(D_METHOD("get_scattering_shadow_reach"), &PhysXFlow3D::get_scattering_shadow_reach);
 	ClassDB::bind_method(D_METHOD("set_max_blocks", "blocks"), &PhysXFlow3D::set_max_blocks);
 	ClassDB::bind_method(D_METHOD("get_max_blocks"), &PhysXFlow3D::get_max_blocks);
 	ClassDB::bind_method(D_METHOD("set_cpu_readback", "enabled"), &PhysXFlow3D::set_cpu_readback);
@@ -632,6 +756,13 @@ void PhysXFlow3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "temperature_range", PROPERTY_HINT_RANGE, "0.01,20,0.01,or_greater"), "set_temperature_range", "get_temperature_range");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "emission_strength", PROPERTY_HINT_RANGE, "0,50,0.01,or_greater"), "set_emission_strength", "get_emission_strength");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shadow_steps", PROPERTY_HINT_RANGE, "0,128,1"), "set_shadow_steps", "get_shadow_steps");
+	ADD_GROUP("Light Scattering", "");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "light_scattering"), "set_light_scattering", "is_light_scattering");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_max_lights", PROPERTY_HINT_RANGE, vformat("1,%d,1", FlowScatterRD::MAX_LIGHTS)), "set_scattering_max_lights", "get_scattering_max_lights");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_strength", PROPERTY_HINT_RANGE, "0,8,0.01,or_greater"), "set_scattering_strength", "get_scattering_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_anisotropy", PROPERTY_HINT_RANGE, "-0.95,0.95,0.01"), "set_scattering_anisotropy", "get_scattering_anisotropy");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_shadow_steps", PROPERTY_HINT_RANGE, "0,64,1"), "set_scattering_shadow_steps", "get_scattering_shadow_steps");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_shadow_reach", PROPERTY_HINT_RANGE, "0.05,20,0.05,or_greater,suffix:m"), "set_scattering_shadow_reach", "get_scattering_shadow_reach");
 	ADD_GROUP("Queries", "");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "cpu_readback"), "set_cpu_readback", "is_cpu_readback");
 }
