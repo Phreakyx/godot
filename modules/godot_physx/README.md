@@ -831,10 +831,10 @@ For deterministic lockstep multiplayer, use the Jolt backend.
   `Generic6DOFJoint3D` linear/angular spring on each link to pull it back toward
   its rest pose (PhysX 5 removed joint projection, so a spring is the closest
   substitute).
-- **Not yet implemented:** 6DOF angular motors; joint softness / bias /
-  restitution parameters. (6DOF linear and angular springs are supported,
-  mapped onto PhysX joint drives.) Unsupported shapes are treated as having
-  no collision and log a warning once.
+- **Not yet implemented:** joint softness / bias / restitution parameters.
+  (6DOF linear and angular springs and motors are supported, mapped onto PhysX
+  joint drives; a motor's force limit is a force or torque, as in Jolt.)
+  Unsupported shapes are treated as having no collision and log a warning once.
 - **`SeparationRayShape3D`** has no PhysX geometry: it's cast as a ray. In
   `move_and_slide` it lifts a character until its tip sits on what it hits
   (stairs), as on Godot Physics and Jolt. On a rigid body it's applied before

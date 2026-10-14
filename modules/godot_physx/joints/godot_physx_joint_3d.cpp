@@ -264,9 +264,31 @@ void GodotPhysXJoint3D::_apply_params() {
 				}
 			}
 
+			// Angular motors: a velocity drive on the axis (no stiffness; the damping is the velocity gain, the force
+			// limit the motor's torque). Like Jolt, a motor takes the axis over from a spring.
+			PxVec3 ang_vel_target(0.0f);
+			for (int a = 0; a < 3; a++) {
+				const Axis6DOF &ax = axis6[a];
+				if (!ax.ang_motor) {
+					continue;
+				}
+				const PxReal f = ax.ang_motor_force > 0.0 ? (PxReal)ax.ang_motor_force : PX_MAX_F32;
+				j->setDrive(ang_drives[a], PxD6JointDrive(0.0f, 1.0e6f, f));
+				// Not negated like the limits: PhysX's drive velocity is actor0 relative to actor1, so this already
+				// turns body B the way Jolt does (a positive target spins it clockwise about the axis).
+				(&ang_vel_target.x)[a] = (PxReal)ax.ang_motor_target;
+				any_lin_drive = true;
+				if (!(ax.ang_limit && ax.ang_upper > ax.ang_lower)) {
+					j->setMotion(ang_axes[a], PxD6Motion::eFREE);
+				}
+			}
+
+			// Motor limits are a force / torque, as Godot Physics and Jolt read them (PhysX's default is an impulse
+			// per step, which made a linear motor ~60x stronger at 60 Hz).
+			j->setConstraintFlag(PxConstraintFlag::eDRIVE_LIMITS_ARE_FORCES, true);
 			if (any_lin_drive) {
 				j->setDrivePosition(PxTransform(drive_pos, drive_rot), true);
-				j->setDriveVelocity(lin_vel_target, PxVec3(0.0f));
+				j->setDriveVelocity(lin_vel_target, ang_vel_target);
 			}
 		} break;
 
