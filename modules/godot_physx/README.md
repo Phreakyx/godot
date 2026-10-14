@@ -382,6 +382,25 @@ of it is undone when the last flow leaves. The look is per flow:
 `smoke_density`, `smoke_color` / `smoke_ramp`, `heat_ramp`,
 `temperature_range`, `emission_strength`, `shadow_steps`.
 
+**Point and spot lights in the gas.** Flow's renderer only lights gas with the
+directional light. Turn on `light_scattering` and nearby `OmniLight3D` /
+`SpotLight3D` nodes glow in it too, each in its own color and with its own
+range, attenuation and spot cone, dimmed by the gas between it and each point
+(`scattering_shadow_steps`). With `scattering_receive_shadows` (Omni and Spot
+by default), scene objects block that glow using the lights' own shadow maps,
+so pillars in front of a lamp cut dark shafts through fog. A light's
+`light_volumetric_fog_energy` scales its glow, as it does for Godot's
+volumetric fog; set it to 0 to keep a light out of the gas. To light gas from a
+lamp inside an object, put the object on a render layer of its own and leave
+that layer out of the light's `shadow_caster_mask`. It's an extra pass over the
+pixels the gas covers, worked out at `scattering_resolution` (Quarter by
+default: the glow is soft, and that reads the same as full) and scaled up
+depth-aware — about 0.7 ms at 1080p with one shadowed light over a screen of
+ground fog in the demo (`demo/editor/flow/light_scattering.tscn`, which also
+shows the frame and Flow timings). The directional light still shades the gas
+only through the gas itself; its scene shadows, GI and area lights don't reach
+the gas yet.
+
 Things worth knowing:
 - `max_blocks` is a GPU memory budget: Flow reserves textures for all of it
   when the grid starts (about 0.45 MB a block; the default 1024 is about
@@ -389,6 +408,18 @@ Things worth knowing:
   `active_blocks`, and gas that needs more is cut off with a warning.
 - Nozzle-like emitters need a high `couple_rate` (~100-250): the default 2
   only nudges the gas toward the emitter's velocity.
+- An emitter keeps every block inside its bounds active, every step, so its
+  volume, not its shape, sets the cost: a thin box over the floor for ground
+  fog is cheap, a sphere wide enough to cover the same floor is just as tall
+  and keeps about three times the blocks. A low `couple_rate` (~0.1-0.3) on a
+  wide emitter lets the gas drift and streak instead of being held in place.
+- Heightmap and trimesh terrain isn't a solid for the gas: `floor_enabled`
+  keeps it above `floor_height`. Cold gas (`temperature` below 0, with
+  `buoyancy`) slumps and spreads along a floor like dry-ice fog.
+- A solid moves the gas with its own velocity where it is, spin included, so
+  a rotor, a door or a walker on a turntable stirs it. A body's collision
+  shapes must be its direct children (a `CollisionShape3D` under a plain
+  `Node3D` isn't part of the body).
 - Burning fuel adds a lot of heat, so a fuel jet rises fast at the default
   `buoyancy`; lower it for flame throwers. Negative `divergence` keeps a jet
   tight.
