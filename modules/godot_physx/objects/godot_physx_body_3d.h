@@ -342,11 +342,17 @@ public:
 	void add_joint(GodotPhysXJoint3D *p_joint) {
 		joints.insert(p_joint);
 		_apply_solver_iterations();
+		update_motor_driven();
 	}
 	void remove_joint(GodotPhysXJoint3D *p_joint) {
 		joints.erase(p_joint);
 		_apply_solver_iterations();
+		update_motor_driven();
 	}
+	// A body a joint motor turns stays awake: PhysX drives don't wake a sleeping body, and a slow motor (a low force
+	// limit on a heavy body) let it fall asleep before it got going, where Jolt keeps turning it.
+	void update_motor_driven();
+	void keep_awake();
 
 	GodotPhysXBody3D();
 	~GodotPhysXBody3D();

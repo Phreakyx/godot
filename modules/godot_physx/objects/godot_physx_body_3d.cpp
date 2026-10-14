@@ -358,6 +358,29 @@ void GodotPhysXBody3D::set_space(GodotPhysXSpace3D *p_space) {
 			space->set_body_constant_forces(this, true);
 		}
 		_build_actor();
+		update_motor_driven();
+	}
+}
+
+void GodotPhysXBody3D::update_motor_driven() {
+	if (!space) {
+		return;
+	}
+	bool driven = false;
+	for (const GodotPhysXJoint3D *j : joints) {
+		if (j->has_running_motor()) {
+			driven = true;
+			break;
+		}
+	}
+	space->set_body_motor_driven(this, driven);
+}
+
+void GodotPhysXBody3D::keep_awake() {
+	// Every step, not only once asleep: as the wake counter runs down PhysX damps a slow body toward rest.
+	PxRigidDynamic *dyn = px_actor ? px_actor->is<PxRigidDynamic>() : nullptr;
+	if (dyn && dyn->getScene() && !(dyn->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC)) {
+		dyn->wakeUp();
 	}
 }
 

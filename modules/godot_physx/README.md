@@ -833,7 +833,8 @@ For deterministic lockstep multiplayer, use the Jolt backend.
   substitute).
 - **Not yet implemented:** joint softness / bias / restitution parameters.
   (6DOF linear and angular springs and motors are supported, mapped onto PhysX
-  joint drives; a motor's force limit is a force or torque, as in Jolt.)
+  joint drives; a motor's force limit is a force or torque, as in Jolt, and a
+  running motor keeps its bodies awake.)
   Unsupported shapes are treated as having no collision and log a warning once.
 - **`SeparationRayShape3D`** has no PhysX geometry: it's cast as a ray. In
   `move_and_slide` it lifts a character until its tip sits on what it hits

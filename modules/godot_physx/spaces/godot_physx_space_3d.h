@@ -85,6 +85,7 @@ class GodotPhysXSpace3D {
 	HashSet<GodotPhysXBody3D *> constant_force_bodies; // bodies with a nonzero constant force/torque
 	HashSet<GodotPhysXBody3D *> separation_ray_bodies; // dynamic bodies with a SeparationRayShape3D
 	HashSet<GodotPhysXBody3D *> gravity_scaled_bodies; // rigid bodies whose gravity_scale is neither 0 nor 1
+	HashSet<GodotPhysXBody3D *> motor_driven_bodies; // turned by a running joint motor: kept awake
 	// physics/3d/default_linear_damp / default_angular_damp, which the scene
 	// tree sends to the space RID (the space's default area), and the bodies
 	// an Area3D currently overrides that area-level damping for.
@@ -137,6 +138,7 @@ public:
 		constant_force_bodies.erase(p_body);
 		separation_ray_bodies.erase(p_body);
 		gravity_scaled_bodies.erase(p_body);
+		motor_driven_bodies.erase(p_body);
 		area_damped_bodies.erase(p_body);
 	}
 
@@ -149,6 +151,14 @@ public:
 			separation_ray_bodies.insert(p_body);
 		} else {
 			separation_ray_bodies.erase(p_body);
+		}
+	}
+
+	void set_body_motor_driven(GodotPhysXBody3D *p_body, bool p_enabled) {
+		if (p_enabled) {
+			motor_driven_bodies.insert(p_body);
+		} else {
+			motor_driven_bodies.erase(p_body);
 		}
 	}
 

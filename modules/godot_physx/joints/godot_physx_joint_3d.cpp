@@ -71,6 +71,20 @@ void GodotPhysXJoint3D::clear() {
 	type = JointType::JOINT_TYPE_MAX;
 }
 
+bool GodotPhysXJoint3D::has_running_motor() const {
+	if (type == JointType::JOINT_TYPE_HINGE) {
+		return hinge_motor && hinge_motor_velocity != 0.0;
+	}
+	if (type == JointType::JOINT_TYPE_6DOF) {
+		for (const Axis6DOF &ax : axis6) {
+			if ((ax.lin_motor && ax.lin_motor_target != 0.0) || (ax.ang_motor && ax.ang_motor_target != 0.0)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 void GodotPhysXJoint3D::body_removed(GodotPhysXBody3D *p_body) {
 	if (body_a == p_body || body_b == p_body) {
 		_destroy();
@@ -131,6 +145,12 @@ PxJoint *GodotPhysXJoint3D::_create() const {
 }
 
 void GodotPhysXJoint3D::_apply_params() {
+	if (body_a) {
+		body_a->update_motor_driven();
+	}
+	if (body_b) {
+		body_b->update_motor_driven();
+	}
 	if (!px_joint) {
 		return;
 	}
@@ -188,6 +208,11 @@ void GodotPhysXJoint3D::_apply_params() {
 
 		case JointType::JOINT_TYPE_6DOF: {
 			PxD6Joint *j = static_cast<PxD6Joint *>(px_joint);
+			// Start from no drives: a spring or motor switched off at runtime must stop acting (a left-over
+			// velocity drive braked the axis instead of letting it turn freely).
+			for (int d = PxD6Drive::eX; d <= PxD6Drive::eSWING2; d++) {
+				j->setDrive((PxD6Drive::Enum)d, PxD6JointDrive());
+			}
 			const PxD6Axis::Enum lin_axes[3] = { PxD6Axis::eX, PxD6Axis::eY, PxD6Axis::eZ };
 			const PxD6Axis::Enum ang_axes[3] = { PxD6Axis::eTWIST, PxD6Axis::eSWING1, PxD6Axis::eSWING2 };
 			for (int a = 0; a < 3; a++) {
@@ -286,10 +311,9 @@ void GodotPhysXJoint3D::_apply_params() {
 			// Motor limits are a force / torque, as Godot Physics and Jolt read them (PhysX's default is an impulse
 			// per step, which made a linear motor ~60x stronger at 60 Hz).
 			j->setConstraintFlag(PxConstraintFlag::eDRIVE_LIMITS_ARE_FORCES, true);
-			if (any_lin_drive) {
-				j->setDrivePosition(PxTransform(drive_pos, drive_rot), true);
-				j->setDriveVelocity(lin_vel_target, ang_vel_target);
-			}
+			// Always set (zero without drives): it also wakes the bodies, so a change made while they sleep acts.
+			j->setDrivePosition(PxTransform(drive_pos, drive_rot), true);
+			j->setDriveVelocity(lin_vel_target, ang_vel_target, true);
 		} break;
 
 		default:
@@ -571,10 +595,30 @@ void GodotPhysXJoint3D::set_6dof_param(Vector3::Axis p_axis, PhysicsServer3D::G6
 		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_EQUILIBRIUM_POINT:
 			ax.ang_spring_eq = p_value;
 			break;
-		default:
-			// Bullet-era softness / restitution / ERP / damping -- unsupported here, as in Jolt.
-			WARN_PRINT_ONCE("PhysX: this Generic6DOF joint parameter is not supported and will be ignored.");
-			break;
+		default: {
+			// Bullet-era softness / restitution / ERP / damping -- unsupported here, as in Jolt; a warning only when
+			// set away from Godot's default (the node sends every parameter when it builds the joint).
+			real_t def = 0.0;
+			switch (p_param) {
+				case PhysicsServer3D::G6DOF_JOINT_LINEAR_LIMIT_SOFTNESS:
+					def = 0.7;
+					break;
+				case PhysicsServer3D::G6DOF_JOINT_LINEAR_RESTITUTION:
+				case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LIMIT_SOFTNESS:
+				case PhysicsServer3D::G6DOF_JOINT_ANGULAR_ERP:
+					def = 0.5;
+					break;
+				case PhysicsServer3D::G6DOF_JOINT_LINEAR_DAMPING:
+				case PhysicsServer3D::G6DOF_JOINT_ANGULAR_DAMPING:
+					def = 1.0;
+					break;
+				default:
+					break;
+			}
+			if (!Math::is_equal_approx(p_value, def)) {
+				WARN_PRINT_ONCE("PhysX: this Generic6DOF joint parameter is not supported and will be ignored.");
+			}
+		} break;
 	}
 	_apply_params();
 }

@@ -385,6 +385,9 @@ void GodotPhysXSpace3D::step(real_t p_step) {
 		body->apply_constant_forces();
 	}
 	_apply_separation_rays(p_step);
+	for (GodotPhysXBody3D *body : motor_driven_bodies) {
+		body->keep_awake();
+	}
 
 	_apply_area_overrides();
 	_detect_area_overlaps();
