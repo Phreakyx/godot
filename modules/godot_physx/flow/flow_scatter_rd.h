@@ -81,7 +81,7 @@ public:
 		float shadow_reach = 4.0f; // meters
 		int max_steps = 256;
 		bool shadows = true; // sample the lights' shadows (scene objects block their glow)
-		int resolution_divisor = 2; // 1: every pixel; 2: half resolution each way; 4: quarter
+		int resolution_divisor = 4; // 1: every pixel; 2: half resolution each way; 4: quarter
 	};
 
 private:

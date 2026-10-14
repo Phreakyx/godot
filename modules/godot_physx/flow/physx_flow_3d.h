@@ -155,7 +155,7 @@ public:
 	};
 
 private:
-	ScatteringResolution scattering_resolution = SCATTERING_RESOLUTION_HALF;
+	ScatteringResolution scattering_resolution = SCATTERING_RESOLUTION_QUARTER;
 	// Every OmniLight3D / SpotLight3D in the scene, looked up every so often;
 	// the ones lighting the gas this step, for the render thread.
 	LocalVector<ObjectID> scatter_light_ids;

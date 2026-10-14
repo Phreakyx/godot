@@ -86,8 +86,8 @@
 		<member name="scattering_max_lights" type="int" setter="set_scattering_max_lights" getter="get_scattering_max_lights" default="4">
 			With [member light_scattering], the most lights that glow in the gas at once (the strongest at it). Each one costs a short march toward it for every step of every pixel the gas covers.
 		</member>
-		<member name="scattering_resolution" type="int" setter="set_scattering_resolution" getter="get_scattering_resolution" enum="PhysXFlow3D.ScatteringResolution" default="1">
-			With [member light_scattering], the resolution the glow is worked out at. Scattered light is soft, so [constant SCATTERING_RESOLUTION_HALF] (the default) looks practically the same as full and costs about a third as much; the result is scaled up depth-aware, so the glow doesn't bleed onto the edges of objects in front of the gas. [constant SCATTERING_RESOLUTION_QUARTER] costs less again, at the price of slightly softer shadow edges in the glow.
+		<member name="scattering_resolution" type="int" setter="set_scattering_resolution" getter="get_scattering_resolution" enum="PhysXFlow3D.ScatteringResolution" default="2">
+			With [member light_scattering], the resolution the glow is worked out at. Scattered light and its shadows in a gas are soft, so [constant SCATTERING_RESOLUTION_QUARTER] (the default) reads the same as full at about a sixth of the cost; the result is scaled up depth-aware, so the glow doesn't bleed onto the edges of objects in front of the gas. [constant SCATTERING_RESOLUTION_HALF] or [constant SCATTERING_RESOLUTION_FULL] sharpen the edges of the shadows in the glow, for close-ups.
 		</member>
 		<member name="scattering_shadow_reach" type="float" setter="set_scattering_shadow_reach" getter="get_scattering_shadow_reach" default="4.0">
 			With [member light_scattering], how far (in meters) each point looks toward a light for gas that dims it. Beyond that, gas between a point and the light is ignored.
