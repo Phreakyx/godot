@@ -395,6 +395,9 @@ void PhysXFlow3D::_gather_light(Vector3 &r_direction, Color &r_color, Color &r_a
 		if (root == nullptr) {
 			root = get_tree()->get_current_scene();
 		}
+		if (root == nullptr) {
+			root = get_tree()->get_root(); // a scene built from a script has no current scene
+		}
 		if (root != nullptr) {
 			TypedArray<Node> lights = root->find_children("*", "DirectionalLight3D", true, false);
 			for (int i = 0; i < lights.size(); i++) {
