@@ -258,6 +258,7 @@ void PhysXFlow3D::render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_
 		params.shadow_steps = scattering_shadow_steps;
 		params.shadow_reach = scattering_shadow_reach;
 		params.shadows = scattering_shadows;
+		params.resolution_divisor = scattering_resolution == SCATTERING_RESOLUTION_FULL ? 1 : (scattering_resolution == SCATTERING_RESOLUTION_HALF ? 2 : 4);
 		RID atlas;
 		if (scattering_shadows && p_shadow_atlas.is_valid() && RendererRD::LightStorage::get_singleton()->owns_shadow_atlas(p_shadow_atlas)) {
 			atlas = RendererRD::LightStorage::get_singleton()->shadow_atlas_get_texture(p_shadow_atlas);
@@ -795,6 +796,8 @@ void PhysXFlow3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_scattering_anisotropy"), &PhysXFlow3D::get_scattering_anisotropy);
 	ClassDB::bind_method(D_METHOD("set_scattering_shadow_steps", "steps"), &PhysXFlow3D::set_scattering_shadow_steps);
 	ClassDB::bind_method(D_METHOD("get_scattering_shadow_steps"), &PhysXFlow3D::get_scattering_shadow_steps);
+	ClassDB::bind_method(D_METHOD("set_scattering_resolution", "resolution"), &PhysXFlow3D::set_scattering_resolution);
+	ClassDB::bind_method(D_METHOD("get_scattering_resolution"), &PhysXFlow3D::get_scattering_resolution);
 	ClassDB::bind_method(D_METHOD("set_scattering_shadows", "enabled"), &PhysXFlow3D::set_scattering_shadows);
 	ClassDB::bind_method(D_METHOD("is_scattering_shadows"), &PhysXFlow3D::is_scattering_shadows);
 	ClassDB::bind_method(D_METHOD("set_scattering_shadow_reach", "reach"), &PhysXFlow3D::set_scattering_shadow_reach);
@@ -837,7 +840,11 @@ void PhysXFlow3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_anisotropy", PROPERTY_HINT_RANGE, "-0.95,0.95,0.01"), "set_scattering_anisotropy", "get_scattering_anisotropy");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_shadow_steps", PROPERTY_HINT_RANGE, "0,64,1"), "set_scattering_shadow_steps", "get_scattering_shadow_steps");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "scattering_shadows"), "set_scattering_shadows", "is_scattering_shadows");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_resolution", PROPERTY_HINT_ENUM, "Full,Half,Quarter"), "set_scattering_resolution", "get_scattering_resolution");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_shadow_reach", PROPERTY_HINT_RANGE, "0.05,20,0.05,or_greater,suffix:m"), "set_scattering_shadow_reach", "get_scattering_shadow_reach");
+	BIND_ENUM_CONSTANT(SCATTERING_RESOLUTION_FULL);
+	BIND_ENUM_CONSTANT(SCATTERING_RESOLUTION_HALF);
+	BIND_ENUM_CONSTANT(SCATTERING_RESOLUTION_QUARTER);
 	ADD_GROUP("Queries", "");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "cpu_readback"), "set_cpu_readback", "is_cpu_readback");
 }

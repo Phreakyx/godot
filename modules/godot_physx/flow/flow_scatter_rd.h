@@ -35,6 +35,7 @@
 
 #include "core/math/projection.h"
 #include "core/math/vector2i.h"
+#include "core/templates/rid.h"
 #include "core/math/vector3.h"
 #include "core/templates/rid.h"
 
@@ -80,11 +81,17 @@ public:
 		float shadow_reach = 4.0f; // meters
 		int max_steps = 256;
 		bool shadows = true; // sample the lights' shadows (scene objects block their glow)
+		int resolution_divisor = 2; // 1: every pixel; 2: half resolution each way; 4: quarter
 	};
 
 private:
 	RID shader;
 	RID pipeline;
+	RID upsample_shader;
+	RID upsample_pipeline;
+	// The scattered light at the scattering resolution (rgb) + scene distance (a).
+	RID scatter_texture;
+	Size2i scatter_size;
 	RID linear_sampler;
 	RID point_sampler;
 	RID shadow_sampler;

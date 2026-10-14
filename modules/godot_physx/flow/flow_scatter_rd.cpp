@@ -37,11 +37,39 @@
 
 namespace {
 
+// Shared by both passes (binding 5 in each).
+#define PARAMS_BLOCK R"(
+layout(set = 0, binding = 5, std140) uniform Params {
+	mat4 inv_view_projection; // clip -> world meters
+	vec4 camera; // xyz meters; w: units per meter
+	uvec4 level[10]; // NvFlowSparseLevelParams
+	vec4 block_size; // Flow units; w: step scale (cells)
+	ivec4 counts; // x: layerAndLevel, y: lights, z: shadow steps, w: max steps
+	vec4 world_min; // Flow units
+	vec4 world_max;
+	vec4 albedo; // rgb; w: strength
+	vec4 misc; // x: sigma per meter per unit smoke, y: anisotropy, z: shadow reach (m), w: 1 = sample light shadows
+	ivec4 size; // xy: the frame; zw: the scattering texture (the frame / res.x)
+	ivec4 res; // x: frame pixels per scattering texel, each way
+} p;
+
+// The world distance (meters) to what a frame pixel shows (reverse Z: 0 is the far plane).
+float scene_distance(ivec2 frame_px, float depth) {
+	if (depth <= 1e-7) {
+		return 1e6;
+	}
+	vec2 uv = (vec2(frame_px) + 0.5) / vec2(p.size.xy);
+	vec4 h = p.inv_view_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+	return length(h.xyz / h.w - p.camera.xyz);
+}
+)"
+
 const char *SCATTER_SHADER = R"(
 #[compute]
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+)" PARAMS_BLOCK R"(
 
 // Flow's density atlas (r: temperature, b: sun light, a: smoke) and its
 // sparse table; see NvFlowShader.hlsli for the lookups ported below.
@@ -50,7 +78,9 @@ layout(set = 0, binding = 1, std430) restrict readonly buffer Table {
 	uint table_data[];
 };
 layout(set = 0, binding = 2) uniform sampler2D depth_tex;
-layout(set = 0, binding = 3, rgba16f) uniform restrict image2D color_img;
+// The scattered light (rgb) and the scene distance its texel stands for (a,
+// meters), at the scattering resolution; the upsample pass adds it to the frame.
+layout(set = 0, binding = 3, rgba16f) uniform restrict writeonly image2D scatter_img;
 
 struct Light {
 	vec4 position_range;
@@ -67,19 +97,6 @@ layout(set = 0, binding = 4, std430) restrict readonly buffer Lights {
 
 // Godot's shadow atlas (omni: dual paraboloid; spot: projected).
 layout(set = 0, binding = 6) uniform sampler2D shadow_atlas;
-
-layout(set = 0, binding = 5, std140) uniform Params {
-	mat4 inv_view_projection; // clip -> world meters
-	vec4 camera; // xyz meters; w: units per meter
-	uvec4 level[10]; // NvFlowSparseLevelParams
-	vec4 block_size; // Flow units; w: step scale (cells)
-	ivec4 counts; // x: layerAndLevel, y: lights, z: shadow steps, w: max steps
-	vec4 world_min; // Flow units
-	vec4 world_max;
-	vec4 albedo; // rgb; w: strength
-	vec4 misc; // x: sigma per meter per unit smoke, y: anisotropy, z: shadow reach (m), w: 1 = sample light shadows
-	ivec4 size;
-} p;
 
 #define BLOCK_DIM_BITS (p.level[1].xyz)
 #define TABLE_DIM_LESS_ONE (p.level[2].xyz)
@@ -191,14 +208,9 @@ float ign(vec2 px) {
 	return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
 }
 
-void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (px.x >= p.size.x || px.y >= p.size.y) {
-		return;
-	}
+vec3 march(ivec2 px, ivec2 frame_px, float depth) {
 	float upm = p.camera.w;
-	vec2 uv = (vec2(px) + 0.5) / vec2(p.size.xy);
-	float depth = texelFetch(depth_tex, px, 0).r;
+	vec2 uv = (vec2(frame_px) + 0.5) / vec2(p.size.xy);
 
 	// The view ray, in Flow units, out to the scene (reverse Z: 0 is the far plane).
 	vec4 near_h = p.inv_view_projection * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
@@ -208,7 +220,7 @@ void main() {
 	vec3 dir = hit - near_h.xyz / near_h.w * upm;
 	float dir_len = length(dir);
 	if (dir_len <= 0.0) {
-		return;
+		return vec3(0.0);
 	}
 	dir /= dir_len;
 	float scene_t = depth > 1e-7 ? length(hit - cam) : 1e20;
@@ -217,12 +229,12 @@ void main() {
 	float t0;
 	float t1;
 	if (!intersect_box(cam, rd_inv, p.world_min.xyz, p.world_max.xyz, t0, t1)) {
-		return;
+		return vec3(0.0);
 	}
 	t0 = max(t0, 0.0);
 	t1 = min(t1, scene_t);
 	if (t1 <= t0) {
-		return;
+		return vec3(0.0);
 	}
 
 	vec3 block = p.block_size.xyz;
@@ -318,16 +330,92 @@ void main() {
 		}
 		t += step_len;
 	}
-	if (all(equal(sum, vec3(0.0)))) {
+	return sum * p.albedo.rgb * p.albedo.w;
+}
+
+void main() {
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	if (px.x >= p.size.z || px.y >= p.size.w) {
+		return;
+	}
+	// The frame pixel this texel stands for: the middle of its res x res footprint.
+	int r = p.res.x;
+	ivec2 frame_px = min(px * r + r / 2, p.size.xy - 1);
+	float depth = texelFetch(depth_tex, frame_px, 0).r;
+	imageStore(scatter_img, px, vec4(march(px, frame_px, depth), scene_distance(frame_px, depth)));
+}
+)";
+
+// Adds the scattered light to the frame. At a reduced scattering resolution
+// each frame pixel blends its four nearest texels, but trusts a texel less the
+// further its scene distance is from the pixel's own -- so the glow behind a
+// pillar doesn't bleed onto the pillar's edge.
+const char *UPSAMPLE_SHADER = R"(
+#[compute]
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+)" PARAMS_BLOCK R"(
+layout(set = 0, binding = 2) uniform sampler2D depth_tex;
+layout(set = 0, binding = 3, rgba16f) uniform restrict readonly image2D scatter_img;
+layout(set = 0, binding = 4, rgba16f) uniform restrict image2D color_img;
+
+void main() {
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	if (px.x >= p.size.x || px.y >= p.size.y) {
+		return;
+	}
+	int r = p.res.x;
+	vec3 light;
+	if (r <= 1) {
+		light = imageLoad(scatter_img, px).rgb;
+	} else {
+		float d = scene_distance(px, texelFetch(depth_tex, px, 0).r);
+		vec2 f = (vec2(px) + 0.5) / float(r) - 0.5;
+		ivec2 base = ivec2(floor(f));
+		vec2 w = f - vec2(base);
+		ivec2 hi = p.size.zw - 1;
+		vec3 sum = vec3(0.0);
+		float total = 0.0;
+		vec3 nearest = vec3(0.0);
+		float nearest_gap = 1e30;
+		for (int j = 0; j < 2; j++) {
+			for (int i = 0; i < 2; i++) {
+				vec4 t = imageLoad(scatter_img, clamp(base + ivec2(i, j), ivec2(0), hi));
+				float bilinear = (i == 0 ? 1.0 - w.x : w.x) * (j == 0 ? 1.0 - w.y : w.y);
+				float gap = abs(t.a - d) / max(d, 0.01);
+				float weight = bilinear / (0.02 + gap * 20.0);
+				sum += t.rgb * weight;
+				total += weight;
+				if (gap < nearest_gap) {
+					nearest_gap = gap;
+					nearest = t.rgb;
+				}
+			}
+		}
+		light = total > 1e-4 ? sum / total : nearest;
+	}
+	if (all(equal(light, vec3(0.0)))) {
 		return;
 	}
 	vec4 c = imageLoad(color_img, px);
-	c.rgb += sum * p.albedo.rgb * p.albedo.w;
+	c.rgb += light;
 	imageStore(color_img, px, c);
 }
 )";
 
-constexpr uint32_t PARAMS_WORDS = 16 + 4 + 40 + 4 * 7;
+constexpr uint32_t PARAMS_WORDS = 16 + 4 + 40 + 4 * 8;
+
+RID compile(RenderingDevice *p_rd, const char *p_source, const char *p_name) {
+	Ref<RDShaderFile> file;
+	file.instantiate();
+	ERR_FAIL_COND_V_MSG(file->parse_versions_from_text(p_source) != OK, RID(), vformat("PhysXFlow3D: light scattering %s shader failed to compile.", p_name));
+	Ref<RDShaderSPIRV> spirv = file->get_spirv();
+	ERR_FAIL_COND_V(spirv.is_null(), RID());
+	const String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
+	ERR_FAIL_COND_V_MSG(!err.is_empty(), RID(), vformat("PhysXFlow3D: light scattering %s shader: %s", p_name, err));
+	return p_rd->shader_create_from_spirv(file->get_spirv_stages());
+}
 
 } // namespace
 
@@ -339,17 +427,14 @@ bool FlowScatterRD::_ensure(RenderingDevice *p_rd) {
 		return false;
 	}
 	failed = true;
-	Ref<RDShaderFile> file;
-	file.instantiate();
-	ERR_FAIL_COND_V_MSG(file->parse_versions_from_text(SCATTER_SHADER) != OK, false, "PhysXFlow3D: light scattering shader failed to compile.");
-	Ref<RDShaderSPIRV> spirv = file->get_spirv();
-	ERR_FAIL_COND_V(spirv.is_null(), false);
-	const String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
-	ERR_FAIL_COND_V_MSG(!err.is_empty(), false, "PhysXFlow3D: light scattering shader: " + err);
-	shader = p_rd->shader_create_from_spirv(file->get_spirv_stages());
+	shader = compile(p_rd, SCATTER_SHADER, "scattering");
 	ERR_FAIL_COND_V(!shader.is_valid(), false);
 	pipeline = p_rd->compute_pipeline_create(shader);
 	ERR_FAIL_COND_V(!pipeline.is_valid(), false);
+	upsample_shader = compile(p_rd, UPSAMPLE_SHADER, "upsample");
+	ERR_FAIL_COND_V(!upsample_shader.is_valid(), false);
+	upsample_pipeline = p_rd->compute_pipeline_create(upsample_shader);
+	ERR_FAIL_COND_V(!upsample_pipeline.is_valid(), false);
 
 	RD::SamplerState linear;
 	linear.mag_filter = RD::SAMPLER_FILTER_LINEAR;
@@ -375,6 +460,21 @@ void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource 
 		return;
 	}
 	const int count = MIN(p_light_count, MAX_LIGHTS);
+	const int res = MAX(p_params.resolution_divisor, 1);
+	const Size2i low((p_size.x + res - 1) / res, (p_size.y + res - 1) / res);
+	if (!scatter_texture.is_valid() || scatter_size != low) {
+		if (scatter_texture.is_valid()) {
+			p_rd->free_rid(scatter_texture);
+		}
+		RD::TextureFormat tf;
+		tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+		tf.width = low.x;
+		tf.height = low.y;
+		tf.usage_bits = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
+		scatter_texture = p_rd->texture_create(tf, RD::TextureView());
+		ERR_FAIL_COND(!scatter_texture.is_valid());
+		scatter_size = low;
+	}
 
 	uint32_t words[PARAMS_WORDS] = {};
 	float *f = reinterpret_cast<float *>(words);
@@ -418,7 +518,10 @@ void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource 
 	f[w++] = (p_params.shadows && p_shadow_atlas.is_valid()) ? 1.0f : 0.0f;
 	iw[w++] = p_size.x;
 	iw[w++] = p_size.y;
-	w += 2;
+	iw[w++] = low.x;
+	iw[w++] = low.y;
+	iw[w++] = res;
+	w += 3;
 	ERR_FAIL_COND(w != PARAMS_WORDS);
 	p_rd->buffer_update(params_buffer, 0, sizeof(words), words);
 	p_rd->buffer_update(lights_buffer, 0, count * sizeof(Light), p_lights);
@@ -427,7 +530,7 @@ void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource 
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, RID::from_uint64(p_source.density_rid) })));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 1, RID::from_uint64(p_source.table_rid)));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, Vector<RID>({ point_sampler, p_depth })));
-	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, p_color));
+	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, scatter_texture));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 4, lights_buffer));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 5, params_buffer));
 	// Something must be bound even when the frame has no shadow atlas.
@@ -435,19 +538,32 @@ void FlowScatterRD::run(RenderingDevice *p_rd, const FlowBackend::ScatterSource 
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 6, Vector<RID>({ shadow_sampler, atlas })));
 	const RID set = p_rd->uniform_set_create(uniforms, shader, 0);
 	ERR_FAIL_COND(!set.is_valid());
-	const RD::ComputeListID list = p_rd->compute_list_begin();
+	LocalVector<RD::Uniform> up;
+	up.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, Vector<RID>({ point_sampler, p_depth })));
+	up.push_back(RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, scatter_texture));
+	up.push_back(RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, p_color));
+	up.push_back(RD::Uniform(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 5, params_buffer));
+	const RID up_set = p_rd->uniform_set_create(up, upsample_shader, 0);
+	ERR_FAIL_COND(!up_set.is_valid());
+	RD::ComputeListID list = p_rd->compute_list_begin();
 	p_rd->compute_list_bind_compute_pipeline(list, pipeline);
 	p_rd->compute_list_bind_uniform_set(list, set, 0);
+	p_rd->compute_list_dispatch(list, (low.x + 7) / 8, (low.y + 7) / 8, 1);
+	p_rd->compute_list_end();
+	list = p_rd->compute_list_begin();
+	p_rd->compute_list_bind_compute_pipeline(list, upsample_pipeline);
+	p_rd->compute_list_bind_uniform_set(list, up_set, 0);
 	p_rd->compute_list_dispatch(list, (p_size.x + 7) / 8, (p_size.y + 7) / 8, 1);
 	p_rd->compute_list_end();
 	p_rd->free_rid(set);
+	p_rd->free_rid(up_set);
 }
 
 void FlowScatterRD::free(RenderingDevice *p_rd) {
 	if (p_rd == nullptr) {
 		return;
 	}
-	for (RID *r : { &pipeline, &shader, &linear_sampler, &point_sampler, &shadow_sampler, &params_buffer, &lights_buffer }) {
+	for (RID *r : { &pipeline, &shader, &upsample_pipeline, &upsample_shader, &scatter_texture, &linear_sampler, &point_sampler, &shadow_sampler, &params_buffer, &lights_buffer }) {
 		if (r->is_valid()) {
 			p_rd->free_rid(*r);
 			*r = RID();

@@ -144,9 +144,18 @@ private:
 	int scattering_max_lights = 4;
 	float scattering_strength = 1.0f;
 	float scattering_anisotropy = 0.4f;
-	int scattering_shadow_steps = 8;
+	int scattering_shadow_steps = 4;
 	float scattering_shadow_reach = 4.0f;
 	bool scattering_shadows = true;
+public:
+	enum ScatteringResolution {
+		SCATTERING_RESOLUTION_FULL,
+		SCATTERING_RESOLUTION_HALF,
+		SCATTERING_RESOLUTION_QUARTER,
+	};
+
+private:
+	ScatteringResolution scattering_resolution = SCATTERING_RESOLUTION_HALF;
 	// Every OmniLight3D / SpotLight3D in the scene, looked up every so often;
 	// the ones lighting the gas this step, for the render thread.
 	LocalVector<ObjectID> scatter_light_ids;
@@ -228,6 +237,8 @@ public:
 	float get_scattering_shadow_reach() const { return scattering_shadow_reach; }
 	void set_scattering_shadows(bool p_v) { scattering_shadows = p_v; }
 	bool is_scattering_shadows() const { return scattering_shadows; }
+	void set_scattering_resolution(ScatteringResolution p_v) { scattering_resolution = p_v; }
+	ScatteringResolution get_scattering_resolution() const { return scattering_resolution; }
 
 	void set_cpu_readback(bool p_v);
 	bool is_cpu_readback() const { return cpu_readback; }
@@ -249,3 +260,5 @@ public:
 	PhysXFlow3D();
 	~PhysXFlow3D();
 };
+
+VARIANT_ENUM_CAST(PhysXFlow3D::ScatteringResolution);
