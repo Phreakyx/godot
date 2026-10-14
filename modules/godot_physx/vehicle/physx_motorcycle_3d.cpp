@@ -192,8 +192,11 @@ bool PhysXMotorcycle3D::_build() {
 
 	impl->scene = scene;
 	impl->built = true;
+	_store_tire_grip_base();
 	return true;
 }
+
+PHYSX_VEHICLE_CONTROL_DEFINE(PhysXMotorcycle3D, 2)
 
 void PhysXMotorcycle3D::_destroy() {
 	if (impl->built) {
@@ -230,7 +233,9 @@ void PhysXMotorcycle3D::_notification(int p_what) {
 			Vehicle2W &v = impl->vehicle;
 			v.commandState.throttle = (PxReal)throttle;
 			v.commandState.brakes[0] = (PxReal)brake;
-			v.commandState.nbBrakes = 1;
+			// The second brake response is the rear wheel's only (configure_vehicle2w).
+			v.commandState.brakes[1] = (PxReal)handbrake;
+			v.commandState.nbBrakes = 2;
 			v.commandState.steer = (PxReal)steer;
 			v.transmissionCommandState.gear = reverse ? PxVehicleDirectDriveTransmissionCommandState::eREVERSE : PxVehicleDirectDriveTransmissionCommandState::eFORWARD;
 			v.step((PxReal)get_physics_process_delta_time(), impl->simulationContext);
@@ -246,15 +251,6 @@ void PhysXMotorcycle3D::_notification(int p_what) {
 	}
 }
 
-void PhysXMotorcycle3D::apply_torque_impulse(const Vector3 &p_impulse) {
-	if (!impl->built) {
-		return;
-	}
-	PxRigidDynamic *dynamic_body = impl->vehicle.physxActor.rigidBody->is<PxRigidDynamic>();
-	ERR_FAIL_NULL(dynamic_body);
-	dynamic_body->addTorque(to_px(p_impulse), PxForceMode::eIMPULSE);
-}
-
 void PhysXMotorcycle3D::apply_force_at_local_position(const Vector3 &p_force, const Vector3 &p_local_position) {
 	if (!impl->built) {
 		return;
@@ -268,24 +264,6 @@ void PhysXMotorcycle3D::apply_force_at_local_position(const Vector3 &p_force, co
 	// eIMPULSE) since this is meant to be applied continuously across ticks
 	// (e.g. a small ongoing rear-wheel slide force), not a one-shot kick.
 	PxRigidBodyExt::addForceAtLocalPos(*dynamic_body, to_px(p_force), to_px(p_local_position), PxForceMode::eFORCE);
-}
-
-void PhysXMotorcycle3D::set_angular_velocity(const Vector3 &p_angular_velocity) {
-	if (!impl->built) {
-		return;
-	}
-	PxRigidDynamic *dynamic_body = impl->vehicle.physxActor.rigidBody->is<PxRigidDynamic>();
-	ERR_FAIL_NULL(dynamic_body);
-	dynamic_body->setAngularVelocity(to_px(p_angular_velocity));
-}
-
-Vector3 PhysXMotorcycle3D::get_angular_velocity() const {
-	if (!impl->built) {
-		return Vector3();
-	}
-	PxRigidDynamic *dynamic_body = impl->vehicle.physxActor.rigidBody->is<PxRigidDynamic>();
-	ERR_FAIL_NULL_V(dynamic_body, Vector3());
-	return to_godot(dynamic_body->getAngularVelocity());
 }
 
 Vector3 PhysXMotorcycle3D::get_up() const {
@@ -316,10 +294,11 @@ real_t PhysXMotorcycle3D::get_roll_angle() const {
 }
 
 Vector3 PhysXMotorcycle3D::get_linear_velocity() const {
-	if (!impl->built) {
-		return Vector3();
-	}
-	return to_godot(impl->vehicle.rigidBodyState.linearVelocity);
+	// The chassis actor's own velocity, not the vehicle state's copy (that one is
+	// refreshed only when the vehicle steps, so a velocity just set or an impulse
+	// just applied would read back a step late).
+	physx::PxRigidDynamic *b = _control_body();
+	return b != nullptr ? to_godot(b->getLinearVelocity()) : Vector3();
 }
 
 real_t PhysXMotorcycle3D::get_forward_speed() const {
@@ -634,6 +613,9 @@ void PhysXMotorcycle3D::_bind_methods() {
 	ADD_GROUP("Controls", "");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "throttle", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_throttle", "get_throttle");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "brake", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_brake", "get_brake");
+	ClassDB::bind_method(D_METHOD("set_handbrake", "value"), &PhysXMotorcycle3D::set_handbrake);
+	ClassDB::bind_method(D_METHOD("get_handbrake"), &PhysXMotorcycle3D::get_handbrake);
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "handbrake", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_handbrake", "get_handbrake");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "steer", PROPERTY_HINT_RANGE, "-1,1,0.01"), "set_steer", "get_steer");
 	ClassDB::bind_method(D_METHOD("set_reverse", "value"), &PhysXMotorcycle3D::set_reverse);
 	ClassDB::bind_method(D_METHOD("is_reverse"), &PhysXMotorcycle3D::is_reverse);
@@ -661,10 +643,9 @@ void PhysXMotorcycle3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_wheel_camber_angle", "wheel"), &PhysXMotorcycle3D::get_wheel_camber_angle);
 	ClassDB::bind_method(D_METHOD("get_actor_position"), &PhysXMotorcycle3D::get_actor_position);
 
-	ClassDB::bind_method(D_METHOD("apply_torque_impulse", "impulse"), &PhysXMotorcycle3D::apply_torque_impulse);
 	ClassDB::bind_method(D_METHOD("apply_force_at_local_position", "force", "local_position"), &PhysXMotorcycle3D::apply_force_at_local_position);
-	ClassDB::bind_method(D_METHOD("set_angular_velocity", "angular_velocity"), &PhysXMotorcycle3D::set_angular_velocity);
-	ClassDB::bind_method(D_METHOD("get_angular_velocity"), &PhysXMotorcycle3D::get_angular_velocity);
+	ADD_GROUP("", "");
+	PHYSX_VEHICLE_CONTROL_BIND(PhysXMotorcycle3D)
 	ClassDB::bind_method(D_METHOD("get_up"), &PhysXMotorcycle3D::get_up);
 	ClassDB::bind_method(D_METHOD("get_forward"), &PhysXMotorcycle3D::get_forward);
 	ClassDB::bind_method(D_METHOD("get_roll_angle"), &PhysXMotorcycle3D::get_roll_angle);

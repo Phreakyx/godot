@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include "godot_physx_vehicle_control.h"
+
 #include "core/math/vector3.h"
 #include "core/templates/local_vector.h"
 #include "scene/3d/node_3d.h"
@@ -126,7 +128,7 @@ public:
 	Ref<PhysicsMaterial> get_physics_material_override() const { return physics_material_override; }
 
 	Vector3 get_linear_velocity() const;
-	Vector3 get_angular_velocity() const;
+	PHYSX_VEHICLE_CONTROL_DECLARE()
 	real_t get_forward_speed() const;
 	Vector3 get_up() const;
 	Vector3 get_forward() const;

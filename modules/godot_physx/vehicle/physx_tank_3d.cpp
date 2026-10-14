@@ -170,8 +170,11 @@ bool PhysXTank3D::_build() {
 
 	impl->scene = scene;
 	impl->built = true;
+	_store_tire_grip_base();
 	return true;
 }
+
+PHYSX_VEHICLE_CONTROL_DEFINE(PhysXTank3D, impl->vehicle.numWheels)
 
 void PhysXTank3D::_destroy() {
 	if (impl->built) {
@@ -237,19 +240,11 @@ void PhysXTank3D::_notification(int p_what) {
 }
 
 Vector3 PhysXTank3D::get_linear_velocity() const {
-	if (!impl->built) {
-		return Vector3();
-	}
-	return to_godot(impl->vehicle.rigidBodyState.linearVelocity);
-}
-
-Vector3 PhysXTank3D::get_angular_velocity() const {
-	if (!impl->built) {
-		return Vector3();
-	}
-	PxRigidDynamic *dynamic_body = impl->vehicle.physxActor.rigidBody->is<PxRigidDynamic>();
-	ERR_FAIL_NULL_V(dynamic_body, Vector3());
-	return to_godot(dynamic_body->getAngularVelocity());
+	// The chassis actor's own velocity, not the vehicle state's copy (that one is
+	// refreshed only when the vehicle steps, so a velocity just set or an impulse
+	// just applied would read back a step late).
+	physx::PxRigidDynamic *b = _control_body();
+	return b != nullptr ? to_godot(b->getLinearVelocity()) : Vector3();
 }
 
 real_t PhysXTank3D::get_forward_speed() const {
@@ -492,6 +487,8 @@ void PhysXTank3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "left_ratio", PROPERTY_HINT_RANGE, "-1,1,0.01"), "set_left_ratio", "get_left_ratio");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "right_ratio", PROPERTY_HINT_RANGE, "-1,1,0.01"), "set_right_ratio", "get_right_ratio");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "brake", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_brake", "get_brake");
+	ADD_GROUP("", "");
+	PHYSX_VEHICLE_CONTROL_BIND(PhysXTank3D)
 
 	ClassDB::bind_method(D_METHOD("set_collision_layer", "layer"), &PhysXTank3D::set_collision_layer);
 	ClassDB::bind_method(D_METHOD("get_collision_layer"), &PhysXTank3D::get_collision_layer);
@@ -504,7 +501,6 @@ void PhysXTank3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "physics_material_override", PROPERTY_HINT_RESOURCE_TYPE, PhysicsMaterial::get_class_static()), "set_physics_material_override", "get_physics_material_override");
 
 	ClassDB::bind_method(D_METHOD("get_linear_velocity"), &PhysXTank3D::get_linear_velocity);
-	ClassDB::bind_method(D_METHOD("get_angular_velocity"), &PhysXTank3D::get_angular_velocity);
 	ClassDB::bind_method(D_METHOD("get_forward_speed"), &PhysXTank3D::get_forward_speed);
 	ClassDB::bind_method(D_METHOD("get_up"), &PhysXTank3D::get_up);
 	ClassDB::bind_method(D_METHOD("get_forward"), &PhysXTank3D::get_forward);

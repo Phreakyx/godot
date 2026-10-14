@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include "godot_physx_vehicle_control.h"
+
 #include "core/math/vector3.h"
 #include "core/templates/local_vector.h"
 #include "scene/3d/node_3d.h"
@@ -114,6 +116,9 @@ public:
 	real_t get_throttle() const { return throttle; }
 	void set_brake(real_t p_v) { brake = p_v; }
 	real_t get_brake() const { return brake; }
+	// The rear wheel(s) only, on top of brake: a parking brake, or a slide.
+	void set_handbrake(real_t p_v) { handbrake = p_v; }
+	real_t get_handbrake() const { return handbrake; }
 	void set_steer(real_t p_v) { steer = p_v; }
 	real_t get_steer() const { return steer; }
 	// Direct-drive has no gearbox, just a fixed forward/neutral/reverse
@@ -135,6 +140,7 @@ public:
 	Ref<PhysicsMaterial> get_physics_material_override() const { return physics_material_override; }
 
 	Vector3 get_linear_velocity() const;
+	PHYSX_VEHICLE_CONTROL_DECLARE()
 	real_t get_forward_speed() const;
 	// World-space forward: the chassis's local +Z, as VehicleBody3D (Vector3.MODEL_FRONT).
 	Vector3 get_forward() const;
@@ -167,6 +173,7 @@ private:
 
 	real_t throttle = 0.0f;
 	real_t brake = 0.0f;
+	real_t handbrake = 0.0f;
 	real_t steer = 0.0f;
 	bool reverse = false;
 	uint32_t collision_layer = 1;

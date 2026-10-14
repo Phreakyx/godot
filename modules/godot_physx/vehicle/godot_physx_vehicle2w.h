@@ -85,7 +85,7 @@ public:
 	PxVehicleFrame frame;
 	PxVehicleScale scale;
 	PxVehicleSuspensionStateCalculationParams suspensionStateCalculationParams;
-	PxVehicleBrakeCommandResponseParams brakeResponseParams[1];
+	PxVehicleBrakeCommandResponseParams brakeResponseParams[2]; // [0] both wheels (brake), [1] rear only (handbrake)
 	PxVehicleSteerCommandResponseParams steerResponseParams;
 	PxVehicleSuspensionParams suspensionParams[2];
 	PxVehicleSuspensionComplianceParams suspensionComplianceParams[2];
@@ -385,7 +385,7 @@ public:
 			PxVehicleArrayData<PxReal> &outThrottleResponseStates,
 			PxVehicleArrayData<PxReal> &outSteerResponseStates) override {
 		outAxleDescription = &axleDescription;
-		outBrakeResponseParams.setDataAndCount(brakeResponseParams, 1);
+		outBrakeResponseParams.setDataAndCount(brakeResponseParams, 2);
 		outThrottleResponseParams = &directDriveThrottleResponseParams;
 		outSteerResponseParams = &steerResponseParams;
 		outAckermannParams.setEmpty(); // no wheel pair to Ackermann-correct
@@ -556,6 +556,9 @@ inline bool configure_vehicle2w(Vehicle2W &v, const Vehicle2WConfig &cfg, PxPhys
 	v.brakeResponseParams[0].maxResponse = (PxReal)cfg.max_brake_torque;
 	v.brakeResponseParams[0].wheelResponseMultipliers[Vehicle2W::WHEEL_FRONT] = 1.0f;
 	v.brakeResponseParams[0].wheelResponseMultipliers[Vehicle2W::WHEEL_REAR] = 1.0f;
+	v.brakeResponseParams[1].maxResponse = (PxReal)cfg.max_brake_torque;
+	v.brakeResponseParams[1].wheelResponseMultipliers[Vehicle2W::WHEEL_FRONT] = 0.0f;
+	v.brakeResponseParams[1].wheelResponseMultipliers[Vehicle2W::WHEEL_REAR] = 1.0f;
 
 	v.steerResponseParams.maxResponse = (PxReal)cfg.max_steer_angle;
 	v.steerResponseParams.wheelResponseMultipliers[Vehicle2W::WHEEL_FRONT] = 1.0f;

@@ -12,6 +12,50 @@
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="apply_central_force">
+			<return type="void" />
+			<param index="0" name="force" type="Vector3" />
+			<description>
+				Applies a world-space force at the chassis's center of mass for this physics step (call it every step to keep pushing), as [method RigidBody3D.apply_central_force]. For autopilot steering and docking assists, wind, gravity wells.
+			</description>
+		</method>
+		<method name="apply_central_impulse">
+			<return type="void" />
+			<param index="0" name="impulse" type="Vector3" />
+			<description>
+				Applies a one-off world-space impulse at the center of mass, as [method RigidBody3D.apply_central_impulse]: the velocity changes by [param impulse] / [member mass] at once.
+			</description>
+		</method>
+		<method name="apply_force">
+			<return type="void" />
+			<param index="0" name="force" type="Vector3" />
+			<param index="1" name="position" type="Vector3" default="Vector3(0, 0, 0)" />
+			<description>
+				Applies a world-space force at [param position] for this physics step, as [method RigidBody3D.apply_force]: [param position] is an offset from the tank's origin, in world axes. Off the center of mass it also turns the tank.
+			</description>
+		</method>
+		<method name="apply_impulse">
+			<return type="void" />
+			<param index="0" name="impulse" type="Vector3" />
+			<param index="1" name="position" type="Vector3" default="Vector3(0, 0, 0)" />
+			<description>
+				Applies a one-off world-space impulse at [param position] (an offset from the tank's origin, in world axes), as [method RigidBody3D.apply_impulse].
+			</description>
+		</method>
+		<method name="apply_torque">
+			<return type="void" />
+			<param index="0" name="torque" type="Vector3" />
+			<description>
+				Applies a world-space torque for this physics step, as [method RigidBody3D.apply_torque].
+			</description>
+		</method>
+		<method name="apply_torque_impulse">
+			<return type="void" />
+			<param index="0" name="impulse" type="Vector3" />
+			<description>
+				Applies a one-off world-space angular impulse, as [method RigidBody3D.apply_torque_impulse].
+			</description>
+		</method>
 		<method name="get_actor_position" qualifiers="const">
 			<return type="Vector3" />
 			<description>
@@ -21,7 +65,7 @@
 		<method name="get_angular_velocity" qualifiers="const">
 			<return type="Vector3" />
 			<description>
-				Current world-space angular velocity of the hull.
+				The chassis's world-space angular velocity, in radians per second.
 			</description>
 		</method>
 		<method name="get_forward" qualifiers="const">
@@ -39,7 +83,7 @@
 		<method name="get_linear_velocity" qualifiers="const">
 			<return type="Vector3" />
 			<description>
-				Current world-space linear velocity of the hull.
+				The chassis's world-space linear velocity. It reads the chassis itself, so a velocity just set with [method set_linear_velocity] or changed by an impulse reads back at once.
 			</description>
 		</method>
 		<method name="get_up" qualifiers="const">
@@ -66,6 +110,28 @@
 			<return type="bool" />
 			<description>
 				Returns whether the underlying PhysX vehicle actor is currently sleeping.
+			</description>
+		</method>
+		<method name="set_angular_velocity">
+			<return type="void" />
+			<param index="0" name="velocity" type="Vector3" />
+			<description>
+				Sets the chassis's world-space angular velocity (radians per second) directly.
+			</description>
+		</method>
+		<method name="set_linear_velocity">
+			<return type="void" />
+			<param index="0" name="velocity" type="Vector3" />
+			<description>
+				Sets the chassis's world-space linear velocity directly. [method get_linear_velocity] reads it back at once.
+			</description>
+		</method>
+		<method name="teleport">
+			<return type="void" />
+			<param index="0" name="transform" type="Transform3D" />
+			<param index="1" name="keep_velocity" type="bool" default="false" />
+			<description>
+				Moves the tank to [param transform] at once, without rebuilding it (the same chassis, wheels and settings carry on). Unless [param keep_velocity] is [code]true[/code], it arrives at rest, its wheels no longer spinning. Moving the node itself doesn't move a tank that is simulating: its transform follows the chassis.
 			</description>
 		</method>
 	</methods>
@@ -108,6 +174,9 @@
 		</member>
 		<member name="right_ratio" type="float" setter="set_right_ratio" getter="get_right_ratio" default="0.0">
 			Drive input for the right track, [code]-1[/code] to [code]1[/code]. Same convention as [member left_ratio], applied to the right track's own wheels. Setting [member left_ratio] and [member right_ratio] to opposite signs pivots the vehicle in place.
+		</member>
+		<member name="tire_grip" type="float" setter="set_tire_grip" getter="get_tire_grip" default="1.0">
+			A live multiplier on every tire's grip: below [code]1[/code] for ice, mud or wet roads, above for sticky tires. It takes effect at once, without rebuilding the vehicle (the wheels' own [code]tire_*[/code] properties rebuild it), so it can follow the ground the vehicle is on every frame.
 		</member>
 	</members>
 	<constants>

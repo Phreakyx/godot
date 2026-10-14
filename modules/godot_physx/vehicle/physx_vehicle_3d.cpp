@@ -187,8 +187,11 @@ bool PhysXVehicle3D::_build() {
 
 	impl->scene = scene;
 	impl->built = true;
+	_store_tire_grip_base();
 	return true;
 }
+
+PHYSX_VEHICLE_CONTROL_DEFINE(PhysXVehicle3D, 4)
 
 void PhysXVehicle3D::_destroy() {
 	if (impl->built) {
@@ -235,7 +238,9 @@ void PhysXVehicle3D::_notification(int p_what) {
 			Vehicle4W &v = impl->vehicle;
 			v.commandState.throttle = (PxReal)throttle;
 			v.commandState.brakes[0] = (PxReal)brake;
-			v.commandState.nbBrakes = 1;
+			// The second brake response is the rear wheels' only (configure_vehicle4w).
+			v.commandState.brakes[1] = (PxReal)handbrake;
+			v.commandState.nbBrakes = 2;
 			v.commandState.steer = (PxReal)steer;
 			v.transmissionCommandState.gear = reverse ? PxVehicleDirectDriveTransmissionCommandState::eREVERSE : PxVehicleDirectDriveTransmissionCommandState::eFORWARD;
 			v.step((PxReal)get_physics_process_delta_time(), impl->simulationContext);
@@ -281,10 +286,11 @@ void PhysXVehicle3D::_notification(int p_what) {
 }
 
 Vector3 PhysXVehicle3D::get_linear_velocity() const {
-	if (!impl->built) {
-		return Vector3();
-	}
-	return to_godot(impl->vehicle.rigidBodyState.linearVelocity);
+	// The chassis actor's own velocity, not the vehicle state's copy (that one is
+	// refreshed only when the vehicle steps, so a velocity just set or an impulse
+	// just applied would read back a step late).
+	physx::PxRigidDynamic *b = _control_body();
+	return b != nullptr ? to_godot(b->getLinearVelocity()) : Vector3();
 }
 
 Vector3 PhysXVehicle3D::get_forward() const {
@@ -540,6 +546,9 @@ void PhysXVehicle3D::_bind_methods() {
 	ADD_GROUP("Controls", "");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "throttle", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_throttle", "get_throttle");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "brake", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_brake", "get_brake");
+	ClassDB::bind_method(D_METHOD("set_handbrake", "value"), &PhysXVehicle3D::set_handbrake);
+	ClassDB::bind_method(D_METHOD("get_handbrake"), &PhysXVehicle3D::get_handbrake);
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "handbrake", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_handbrake", "get_handbrake");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "steer", PROPERTY_HINT_RANGE, "-1,1,0.01"), "set_steer", "get_steer");
 	ClassDB::bind_method(D_METHOD("set_reverse", "value"), &PhysXVehicle3D::set_reverse);
 	ClassDB::bind_method(D_METHOD("is_reverse"), &PhysXVehicle3D::is_reverse);
@@ -561,4 +570,7 @@ void PhysXVehicle3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_wheel_jounce", "wheel"), &PhysXVehicle3D::get_wheel_jounce);
 	ClassDB::bind_method(D_METHOD("get_wheel_separation", "wheel"), &PhysXVehicle3D::get_wheel_separation);
 	ClassDB::bind_method(D_METHOD("get_actor_position"), &PhysXVehicle3D::get_actor_position);
+
+	ADD_GROUP("", "");
+	PHYSX_VEHICLE_CONTROL_BIND(PhysXVehicle3D)
 }
