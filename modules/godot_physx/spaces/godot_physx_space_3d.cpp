@@ -184,7 +184,8 @@ public:
 			// (PhysX does not report trigger-trigger pairs).
 			GodotPhysXArea3D *area = static_cast<GodotPhysXArea3D *>(tp.triggerActor->userData);
 			GodotPhysXBody3D *body = static_cast<GodotPhysXBody3D *>(tp.otherActor->userData);
-			if (!area || !body) {
+			// Not vehicles yet: an area would also apply its gravity and damping to the stand-in body.
+			if (!area || !body || body->is_vehicle_proxy()) {
 				continue;
 			}
 			const bool entered = tp.status & PxPairFlag::eNOTIFY_TOUCH_FOUND;
@@ -412,6 +413,9 @@ void GodotPhysXSpace3D::step(real_t p_step) {
 			continue;
 		}
 		body->pull_transform_from_px();
+		if (body->is_vehicle_proxy()) {
+			continue; // a vehicle's identity: its pose and velocity kept current, nothing to call back
+		}
 		now_awake.insert(body);
 		sync_bodies.push_back(body);
 	}

@@ -40,6 +40,7 @@
 
 namespace physx {
 class PxRigidActor;
+class PxRigidDynamic;
 class PxMaterial;
 class PxShape;
 struct PxFilterData;
@@ -85,6 +86,8 @@ private:
 	PhysicsServer3D::BodyMode mode = PhysicsServer3D::BODY_MODE_RIGID;
 	GodotPhysXSpace3D *space = nullptr;
 	physx::PxRigidActor *px_actor = nullptr;
+	// set_vehicle_actor(): the PhysX vehicle chassis this body stands for (it has no actor of its own then).
+	physx::PxRigidDynamic *vehicle_actor = nullptr;
 
 	LocalVector<ShapeRef> shapes;
 	// The PhysX shape built for each entry of `shapes` (nullptr: disabled, invalid, a separation ray, or a mesh a
@@ -187,6 +190,8 @@ private:
 	physx::PxFilterData _filter_data() const;
 	void _gravity_scale_changed();
 	void _apply_filter_data();
+	// The actor whose state this body reports: its own, or the vehicle chassis it stands for.
+	physx::PxRigidActor *_state_actor() const;
 	void _collision_exceptions_changed();
 	void _apply_damping();
 	void _apply_axis_lock();
@@ -210,6 +215,13 @@ public:
 	GodotPhysXSpace3D *get_space() const { return space; }
 
 	void set_space(GodotPhysXSpace3D *p_space);
+
+	// A PhysX vehicle (PhysXVehicle3D, PhysXTank3D, PhysXMotorcycle3D) is a node with its own chassis actor, not a
+	// server body. Each keeps a body with no shapes, space or actor of its own as its identity. Bound here, the
+	// chassis actor's userData points at it, so scene queries, motion tests, contacts and collision exceptions see
+	// the vehicle as this body: its RID, layer and mask, the node's instance ID, the chassis's pose and velocity.
+	void set_vehicle_actor(physx::PxRigidDynamic *p_actor);
+	bool is_vehicle_proxy() const { return vehicle_actor != nullptr; }
 
 	void set_mode(PhysicsServer3D::BodyMode p_mode);
 	PhysicsServer3D::BodyMode get_mode() const { return mode; }

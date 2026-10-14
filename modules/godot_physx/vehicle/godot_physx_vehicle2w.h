@@ -673,11 +673,10 @@ inline bool configure_vehicle2w(Vehicle2W &v, const Vehicle2WConfig &cfg, PxPhys
 	PxCookingParams cookingParams(physics.getTolerancesScale());
 
 	{
-		// Same eSIMULATION_SHAPE-only, non-scene-query chassis convention as
-		// configure_vehicle4w() -- see that function's own comment on why
-		// eSCENE_QUERY_SHAPE would break the wheels' own road-geometry raycasts.
+		// A simulation and scene-query chassis, as configure_vehicle4w()'s
+		// (see its comment: the wheel filter skips the bike's own actor).
 		const PxFilterData chassisFilterData((PxU32)cfg.collision_layer, (PxU32)cfg.collision_mask, 0, 0);
-		const PxShapeFlags chassisShapeFlags(PxShapeFlag::eSIMULATION_SHAPE | PxShapeFlag::eVISUALIZATION);
+		const PxShapeFlags chassisShapeFlags(PxShapeFlag::eSIMULATION_SHAPE | PxShapeFlag::eSCENE_QUERY_SHAPE | PxShapeFlag::eVISUALIZATION);
 		const PxVehiclePhysXRigidActorParams actorParams(v.rigidBodyParams, nullptr);
 		const PxBoxGeometry boxGeom(v.physxActorBoxShapeHalfExtents);
 		const PxVehiclePhysXRigidActorShapeParams actorShapeParams(boxGeom, v.physxActorBoxShapeLocalPose, *chassis_material, chassisShapeFlags, chassisFilterData, chassisFilterData);
@@ -698,6 +697,7 @@ inline bool configure_vehicle2w(Vehicle2W &v, const Vehicle2WConfig &cfg, PxPhys
 		ERR_PRINT("PhysX motorcycle: PxVehiclePhysXActorCreate failed.");
 		return false;
 	}
+	v.wheelQueryFilter.self_actor = v.physxActor.rigidBody;
 
 	PxVehicleConstraintsCreate(v.axleDescription, physics, *v.physxActor.rigidBody, v.physxConstraints);
 

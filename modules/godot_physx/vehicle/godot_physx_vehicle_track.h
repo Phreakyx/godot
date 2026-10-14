@@ -747,12 +747,10 @@ inline bool configure_vehicle_track(VehicleTrack &v, const VehicleTrackConfig &c
 	PxCookingParams cookingParams(physics.getTolerancesScale());
 
 	{
-		// Same eSIMULATION_SHAPE-only, non-scene-query chassis convention as
-		// configure_vehicle2w()/configure_vehicle4w() -- see either
-		// function's own comment on why eSCENE_QUERY_SHAPE would break the
-		// wheels' own road-geometry raycasts.
+		// A simulation and scene-query hull, as configure_vehicle4w()'s
+		// chassis (see its comment: the wheel filter skips the tank's own actor).
 		const PxFilterData chassisFilterData((PxU32)cfg.collision_layer, (PxU32)cfg.collision_mask, 0, 0);
-		const PxShapeFlags chassisShapeFlags(PxShapeFlag::eSIMULATION_SHAPE | PxShapeFlag::eVISUALIZATION);
+		const PxShapeFlags chassisShapeFlags(PxShapeFlag::eSIMULATION_SHAPE | PxShapeFlag::eSCENE_QUERY_SHAPE | PxShapeFlag::eVISUALIZATION);
 		const PxVehiclePhysXRigidActorParams actorParams(v.rigidBodyParams, nullptr);
 		const PxBoxGeometry boxGeom(v.physxActorBoxShapeHalfExtents);
 		const PxVehiclePhysXRigidActorShapeParams actorShapeParams(boxGeom, v.physxActorBoxShapeLocalPose, *chassis_material, chassisShapeFlags, chassisFilterData, chassisFilterData);
@@ -773,6 +771,7 @@ inline bool configure_vehicle_track(VehicleTrack &v, const VehicleTrackConfig &c
 		ERR_PRINT("PhysX tank: PxVehiclePhysXActorCreate failed.");
 		return false;
 	}
+	v.wheelQueryFilter.self_actor = v.physxActor.rigidBody;
 
 	PxVehicleConstraintsCreate(v.axleDescription, physics, *v.physxActor.rigidBody, v.physxConstraints);
 

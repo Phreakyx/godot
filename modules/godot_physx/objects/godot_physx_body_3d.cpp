@@ -46,6 +46,7 @@ using namespace physx;
 GodotPhysXBody3D::GodotPhysXBody3D() {}
 
 GodotPhysXBody3D::~GodotPhysXBody3D() {
+	set_vehicle_actor(nullptr);
 	// Copy: joint->body_removed() mutates our `joints` set.
 	LocalVector<GodotPhysXJoint3D *> js;
 	for (GodotPhysXJoint3D *j : joints) {
@@ -745,15 +746,16 @@ PxFilterData GodotPhysXBody3D::_filter_data() const {
 }
 
 void GodotPhysXBody3D::_apply_filter_data() {
-	if (!px_actor) {
+	PxRigidActor *actor = _state_actor();
+	if (!actor) {
 		return;
 	}
 	const PxFilterData fd = _filter_data();
 
-	const PxU32 nb = px_actor->getNbShapes();
+	const PxU32 nb = actor->getNbShapes();
 	LocalVector<PxShape *> all;
 	all.resize(nb);
-	px_actor->getShapes(all.ptr(), nb);
+	actor->getShapes(all.ptr(), nb);
 	for (PxU32 i = 0; i < nb; i++) {
 		all[i]->setSimulationFilterData(fd);
 		all[i]->setQueryFilterData(fd);
@@ -890,8 +892,9 @@ void GodotPhysXBody3D::remove_collision_exception(RID p_body) {
 void GodotPhysXBody3D::_collision_exceptions_changed() {
 	_apply_filter_data();
 	// Pairs already touching keep their old filter result until re-filtered.
-	if (px_actor && px_actor->getScene()) {
-		px_actor->getScene()->resetFiltering(*px_actor);
+	PxRigidActor *actor = _state_actor();
+	if (actor && actor->getScene()) {
+		actor->getScene()->resetFiltering(*actor);
 	}
 }
 
@@ -916,8 +919,8 @@ void GodotPhysXBody3D::add_contact(const Contact &p_contact) {
 }
 
 Vector3 GodotPhysXBody3D::get_linear_velocity() const {
-	if (px_actor) {
-		if (PxRigidDynamic *dyn = px_actor->is<PxRigidDynamic>()) {
+	if (PxRigidActor *actor = _state_actor()) {
+		if (PxRigidDynamic *dyn = actor->is<PxRigidDynamic>()) {
 			return to_godot(dyn->getLinearVelocity());
 		}
 	}
@@ -925,8 +928,8 @@ Vector3 GodotPhysXBody3D::get_linear_velocity() const {
 }
 
 Vector3 GodotPhysXBody3D::get_angular_velocity() const {
-	if (px_actor) {
-		if (PxRigidDynamic *dyn = px_actor->is<PxRigidDynamic>()) {
+	if (PxRigidActor *actor = _state_actor()) {
+		if (PxRigidDynamic *dyn = actor->is<PxRigidDynamic>()) {
 			return to_godot(dyn->getAngularVelocity());
 		}
 	}
@@ -1230,12 +1233,29 @@ Vector3 GodotPhysXBody3D::get_velocity_at_position(const Vector3 &p_position) co
 	return get_linear_velocity() + get_angular_velocity().cross(p_position - com);
 }
 
+PxRigidActor *GodotPhysXBody3D::_state_actor() const {
+	return px_actor ? px_actor : vehicle_actor;
+}
+
+void GodotPhysXBody3D::set_vehicle_actor(PxRigidDynamic *p_actor) {
+	if (vehicle_actor && vehicle_actor->userData == this) {
+		vehicle_actor->userData = nullptr;
+	}
+	vehicle_actor = p_actor;
+	if (vehicle_actor) {
+		vehicle_actor->userData = this;
+		_apply_filter_data();
+		pull_transform_from_px();
+	}
+}
+
 void GodotPhysXBody3D::pull_transform_from_px() {
-	if (!px_actor) {
+	PxRigidActor *actor = _state_actor();
+	if (!actor) {
 		return;
 	}
-	body_transform = to_godot(px_actor->getGlobalPose());
-	if (PxRigidDynamic *dyn = px_actor->is<PxRigidDynamic>()) {
+	body_transform = to_godot(actor->getGlobalPose());
+	if (PxRigidDynamic *dyn = actor->is<PxRigidDynamic>()) {
 		linear_velocity = to_godot(dyn->getLinearVelocity());
 		angular_velocity = to_godot(dyn->getAngularVelocity());
 		sleeping = dyn->isSleeping();

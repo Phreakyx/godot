@@ -652,6 +652,22 @@ material — how it grips or slides when the body itself touches something, on
 its roof after a flip or along a wall (default friction 0.5); tire grip is the
 wheels' own.
 
+Scripts can push and place a vehicle as they would a `RigidBody3D` (an
+autopilot, a ferry ramp, a respawn): `apply_force()` / `apply_impulse()` /
+`apply_torque()` and their central variants, `set_linear_velocity()` /
+`set_angular_velocity()`, and `teleport(transform)`, which moves the vehicle
+without rebuilding it. `tire_grip` scales every tire's grip live, for ice or
+mud, and the car and motorcycle have a rear-wheel `handbrake`.
+
+To the rest of the physics world a vehicle looks like a body. Raycasts, shape
+queries and `CharacterBody3D` motion hit its chassis and report the vehicle node
+as the collider, with `get_rid()` as its RID: put that in a query's `exclude` to
+see past the vehicle, and a character can stand on a moving car's roof.
+`add_collision_exception_with()` stops a vehicle colliding with a body or another
+vehicle, chassis and wheels both; from the body's side,
+`PhysicsServer3D.body_add_collision_exception(body.get_rid(), vehicle.get_rid())`
+does the same. `Area3D` doesn't detect vehicles yet.
+
 ## Water — `PhysXWaterSurface3D`
 
 An animated water surface with two GPU compute layers summed into one displaced

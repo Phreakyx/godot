@@ -12,6 +12,13 @@
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="add_collision_exception_with">
+			<return type="void" />
+			<param index="0" name="body" type="Node" />
+			<description>
+				Stops the tank and [param body] (a [PhysicsBody3D] or another PhysX vehicle) colliding: they pass through each other, its wheels included, as with [method PhysicsBody3D.add_collision_exception_with]. Either side having the exception is enough, so a [RigidBody3D] or [CharacterBody3D] needs nothing of its own.
+			</description>
+		</method>
 		<method name="apply_central_force">
 			<return type="void" />
 			<param index="0" name="force" type="Vector3" />
@@ -68,6 +75,12 @@
 				The chassis's world-space angular velocity, in radians per second.
 			</description>
 		</method>
+		<method name="get_collision_exceptions" qualifiers="const">
+			<return type="Node[]" />
+			<description>
+				The bodies and vehicles this tank has collision exceptions with.
+			</description>
+		</method>
 		<method name="get_forward" qualifiers="const">
 			<return type="Vector3" />
 			<description>
@@ -84,6 +97,12 @@
 			<return type="Vector3" />
 			<description>
 				The chassis's world-space linear velocity. It reads the chassis itself, so a velocity just set with [method set_linear_velocity] or changed by an impulse reads back at once.
+			</description>
+		</method>
+		<method name="get_rid" qualifiers="const">
+			<return type="RID" />
+			<description>
+				The tank's identity in the physics server: a raycast or shape query that hits it, or a [CharacterBody3D] that bumps into it, reports this RID as the collider's (and the tank node as the collider). Put it in a query's [code]exclude[/code] list to see past the tank, or pass it to [method PhysicsServer3D.body_add_collision_exception] to make a body ignore it. It stands for the tank only: setting its state through [PhysicsServer3D] doesn't move the tank.
 			</description>
 		</method>
 		<method name="get_up" qualifiers="const">
@@ -110,6 +129,13 @@
 			<return type="bool" />
 			<description>
 				Returns whether the underlying PhysX vehicle actor is currently sleeping.
+			</description>
+		</method>
+		<method name="remove_collision_exception_with">
+			<return type="void" />
+			<param index="0" name="body" type="Node" />
+			<description>
+				Removes an exception added with [method add_collision_exception_with].
 			</description>
 		</method>
 		<method name="set_angular_velocity">

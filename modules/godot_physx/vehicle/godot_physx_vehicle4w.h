@@ -797,28 +797,19 @@ inline bool configure_vehicle4w(Vehicle4W &v, const Vehicle4WConfig &cfg, PxPhys
 		// own PxShapeFlags(0)) so the car's body can actually be hit by other
 		// rigid bodies in the scene, using Godot's own layer/mask convention
 		// (word0=layer, word1=mask -- see godot_physx_filter_shader).
-		// Deliberately NOT eSCENE_QUERY_SHAPE: the road-geometry raycast each
-		// wheel casts starts near its own suspension attachment point, which
-		// sits inside this box's own vertical extent -- with the box a valid
-		// query target, every wheel's raycast hit its own car's chassis
-		// instead of the ground (jounce pinned at 0, zero tire load, the
-		// actor's real PxRigidDynamic origin settling flush on the ground
-		// instead of the wheels ever bearing the car's weight -- a real
-		// regression caught by comparing rigidBodyState.pose, which is
-		// CoM-relative, against a raw getGlobalPose() read). Simulation
-		// contacts (blocking other bodies) and scene queries (raycasts
-		// hitting it) are independent PhysX flags; only the former is
-		// wanted here. Trade-off: this also means an ordinary Godot-side
-		// raycast query (e.g. a gameplay "aim" raycast) can't hit this car's
-		// body either -- acceptable for the immediate ask (the car should
-		// physically block/be blocked by other objects), revisit if
-		// raycast-pickability is ever needed too.
+		// Also a scene-query shape, so Godot raycasts, shape queries and
+		// CharacterBody3D motion hit the car (they see it as the node's
+		// stand-in body, see GodotPhysXBody3D::set_vehicle_actor). The road-
+		// geometry raycast each wheel casts starts inside this box, so the
+		// wheel filter skips the car's own actor (self_actor below): without
+		// that every wheel hit its own chassis instead of the ground (jounce
+		// pinned at 0, zero tire load, the car settling flush on the ground).
 		// Wheels stay at flags(0): their ground contact is entirely the
 		// road-geometry raycast + suspension, not real shape collision, and
 		// making them real simulation shapes too would double-apply ground
 		// reaction forces on top of that.
 		const PxFilterData chassisFilterData((PxU32)cfg.collision_layer, (PxU32)cfg.collision_mask, 0, 0);
-		const PxShapeFlags chassisShapeFlags(PxShapeFlag::eSIMULATION_SHAPE | PxShapeFlag::eVISUALIZATION);
+		const PxShapeFlags chassisShapeFlags(PxShapeFlag::eSIMULATION_SHAPE | PxShapeFlag::eSCENE_QUERY_SHAPE | PxShapeFlag::eVISUALIZATION);
 		const PxVehiclePhysXRigidActorParams actorParams(v.rigidBodyParams, nullptr);
 		const PxBoxGeometry boxGeom(v.physxActorBoxShapeHalfExtents);
 		const PxVehiclePhysXRigidActorShapeParams actorShapeParams(boxGeom, v.physxActorBoxShapeLocalPose, *chassis_material, chassisShapeFlags, chassisFilterData, chassisFilterData);
@@ -839,6 +830,7 @@ inline bool configure_vehicle4w(Vehicle4W &v, const Vehicle4WConfig &cfg, PxPhys
 		ERR_PRINT("PhysX vehicle: PxVehiclePhysXActorCreate failed.");
 		return false;
 	}
+	v.wheelQueryFilter.self_actor = v.physxActor.rigidBody;
 
 	PxVehicleConstraintsCreate(v.axleDescription, physics, *v.physxActor.rigidBody, v.physxConstraints);
 

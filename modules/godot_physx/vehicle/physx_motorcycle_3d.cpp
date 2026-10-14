@@ -62,6 +62,7 @@ PhysXMotorcycle3D::PhysXMotorcycle3D() {
 
 PhysXMotorcycle3D::~PhysXMotorcycle3D() {
 	_destroy();
+	_control_free();
 	memdelete(impl);
 }
 
@@ -192,7 +193,7 @@ bool PhysXMotorcycle3D::_build() {
 
 	impl->scene = scene;
 	impl->built = true;
-	_store_tire_grip_base();
+	_control_built();
 	return true;
 }
 
@@ -200,6 +201,7 @@ PHYSX_VEHICLE_CONTROL_DEFINE(PhysXMotorcycle3D, 2)
 
 void PhysXMotorcycle3D::_destroy() {
 	if (impl->built) {
+		_control_unbind();
 		if (impl->scene) {
 			impl->scene->removeActor(*impl->vehicle.physxActor.rigidBody);
 		}
