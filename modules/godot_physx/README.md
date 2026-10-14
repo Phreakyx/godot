@@ -430,35 +430,6 @@ Things worth knowing:
   cache folder; the editor's flows pause while the project runs from the
   editor.
 
-## Smoke and gas — `PhysXGas3D`
-
-A library-free alternative to Flow, for builds without `flow_sdk=`.
-
-A volumetric smoke/gas solver: a persistent velocity + density field on a
-block-sparse grid, advected semi-Lagrangian, driven by `buoyancy` and vorticity
-confinement, and made divergence-free with a Jacobi pressure projection. It runs
-on plain compute shaders (no CUDA), independent of the PhysX GPU path. It is not
-a particle system.
-
-Injection points are `PhysXGasEmitter3D` nodes placed anywhere in the scene and
-listed in `emitters`; each has its own shape (sphere or axis-aligned box),
-`velocity` (rotated by the emitter's orientation), `density`, `divergence` and
-`swirl`. `turbulence_strength` / `turbulence_scale` add divergence-free curl-noise
-detail. Up to 4 `colliders` are voxelized as solids.
-
-It renders through a stock `FogVolume` + `FogMaterial` (the density grid is baked
-into an `ImageTexture3D` each step), so **`Environment.volumetric_fog_enabled`
-must be on** or nothing draws — the node shows a configuration warning when it
-isn't. `fire_look` swaps in an emissive hot-core-to-smoke colour ramp
-(`fire_color_ramp`, `fire_emission_strength`) over the same density field.
-`debug_point_cloud` is a fog-free fallback view.
-
-Scope: the domain's X/Z footprint and floor are fixed where the node was when it
-configured. Moving the node re-configures (and clears) the grid once it has been
-still for 0.2 s, so it can be repositioned while authoring, but it is not meant
-to follow a continuously moving object. The top of the box grows as a plume
-rises, up to 3× `domain_size.y`.
-
 ## Cloth — `PhysXCloth3D`
 
 A cloth patch: a generated grid or a supplied triangle mesh, simulated and drawn
@@ -915,8 +886,8 @@ For deterministic lockstep multiplayer, use the Jolt backend.
 | `spaces/` | the `PxScene` wrapper, direct space/body state, area-override application |
 | `joints/` | all `Joint3D` types |
 | `cloth/` | the CPU (XPBD) cloth solver, and `PhysXSkinnedCloth3D` with its compute-shader solver — no PhysX dependency |
-| `nodes/` | `PhysXParticleFluid3D`, `PhysXGranular3D`, `PhysXGas3D`, `PhysXGasEmitter3D`, `PhysXCloth3D`, `PhysXChunkEmitter3D` |
-| `particles/` | the MPM fluid/granular and gas compute solvers and their GLSL shaders |
+| `nodes/` | `PhysXParticleFluid3D`, `PhysXGranular3D`, `PhysXCloth3D`, `PhysXChunkEmitter3D` |
+| `particles/` | the MPM fluid/granular compute solvers and their GLSL shaders |
 | `vehicle/` | `PhysXVehicle3D`, `PhysXMotorcycle3D`, `PhysXTank3D`, `PhysXVehicleWheel3D` and the `PxVehicle2` glue |
 | `water/` | `PhysXWaterSurface3D` and its ripple / FFT ocean / caustics compute and draw passes; `PhysXBuoyancy3D`, `PhysXBoat3D`, `PhysXWaterWake3D` (and its wake compute pass) and `PhysXWaterSpray3D` |
 | `flow/` | `PhysXFlow3D`, `PhysXFlowEmitter3D`, `PhysXFlowRenderEffect`, and Flow's context on Godot's `RenderingDevice` — optional, gated on `flow_sdk=` (see Building above) |

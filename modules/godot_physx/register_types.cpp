@@ -47,8 +47,6 @@
 #endif
 #include "nodes/physx_chunk_emitter_3d.h"
 #include "nodes/physx_cloth_3d.h"
-#include "nodes/physx_gas_3d.h"
-#include "nodes/physx_gas_emitter_3d.h"
 #include "nodes/physx_granular_3d.h"
 #include "nodes/physx_particle_fluid_3d.h"
 #include "vehicle/godot_physx_motorcycle_probe.h"
@@ -113,8 +111,6 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 		GDREGISTER_CLASS(PhysXCloth3D);
 		GDREGISTER_CLASS(PhysXSkinnedCloth3D);
 		GDREGISTER_CLASS(PhysXChunkEmitter3D);
-		GDREGISTER_CLASS(PhysXGas3D);
-		GDREGISTER_CLASS(PhysXGasEmitter3D);
 		// Runtime-bridge MVP probe, not public API yet -- see water/water_ripple_probe.h.
 		GDREGISTER_CLASS(WaterRippleProbe);
 		GDREGISTER_CLASS(PhysXWaterSurface3D);
