@@ -161,7 +161,7 @@ void PhysXFlow3D::_stop() {
 	gas_bounds = AABB();
 }
 
-void PhysXFlow3D::_fill_scatter_shadows(LocalVector<FlowScatterRD::Light> &r_lights, const PagedArray<RID> *p_instances, const RID &p_shadow_atlas) const {
+void PhysXFlow3D::_fill_scatter_shadows(LocalVector<FlowScatterRD::Light> &r_lights, const PagedArray<RID> *p_instances, const RID &p_shadow_atlas, uint32_t p_flags) const {
 	// Each light's shadow as Godot's renderer filled it for this frame
 	// (LightStorage::update_light_buffers), rebuilt from world space: the
 	// scattering pass works in world meters, not this view's camera space.
@@ -173,6 +173,9 @@ void PhysXFlow3D::_fill_scatter_shadows(LocalVector<FlowScatterRD::Light> &r_lig
 		// Light3D keeps its RenderingServer light to itself: find the frame's
 		// instance of it by where it is and what it is.
 		const bool spot = l.direction_cutoff[3] > -1.5f;
+		if (!(p_flags & (spot ? SCATTERING_SHADOW_SPOT : SCATTERING_SHADOW_OMNI))) {
+			continue; // this kind of light's shadows aren't received
+		}
 		const Vector3 at(l.position_range[0], l.position_range[1], l.position_range[2]);
 		RID instance;
 		RID base;
@@ -229,8 +232,9 @@ void PhysXFlow3D::render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_
 		MutexLock lock(scatter_mutex);
 		lights = scatter_lights;
 	}
-	if (scattering_shadows && !lights.is_empty()) {
-		_fill_scatter_shadows(lights, p_lights, p_shadow_atlas);
+	const uint32_t receive = scattering_receive_shadows;
+	if (receive != 0 && !lights.is_empty()) {
+		_fill_scatter_shadows(lights, p_lights, p_shadow_atlas, receive);
 	}
 	FlowBackend::ScatterSource source;
 	const uint64_t out = FlowBackend::grid_render_rd(grid, p_view, p_projection, p_size.x, p_size.y, p_depth.get_id(), p_size.x, p_size.y, p_color.get_id(), lights.is_empty() ? nullptr : &source);
@@ -257,10 +261,10 @@ void PhysXFlow3D::render_rd(PhysXFlowRenderEffect *p_effect, RenderingDevice *p_
 		params.anisotropy = scattering_anisotropy;
 		params.shadow_steps = scattering_shadow_steps;
 		params.shadow_reach = scattering_shadow_reach;
-		params.shadows = scattering_shadows;
+		params.shadows = receive != 0;
 		params.resolution_divisor = scattering_resolution == SCATTERING_RESOLUTION_FULL ? 1 : (scattering_resolution == SCATTERING_RESOLUTION_HALF ? 2 : 4);
 		RID atlas;
-		if (scattering_shadows && p_shadow_atlas.is_valid() && RendererRD::LightStorage::get_singleton()->owns_shadow_atlas(p_shadow_atlas)) {
+		if (receive != 0 && p_shadow_atlas.is_valid() && RendererRD::LightStorage::get_singleton()->owns_shadow_atlas(p_shadow_atlas)) {
 			atlas = RendererRD::LightStorage::get_singleton()->shadow_atlas_get_texture(p_shadow_atlas);
 		}
 		p_effect->get_scatter().run(p_rd, source, params, lights.ptr(), (int)lights.size(), p_depth, p_color, atlas, p_size);
@@ -798,8 +802,8 @@ void PhysXFlow3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_scattering_shadow_steps"), &PhysXFlow3D::get_scattering_shadow_steps);
 	ClassDB::bind_method(D_METHOD("set_scattering_resolution", "resolution"), &PhysXFlow3D::set_scattering_resolution);
 	ClassDB::bind_method(D_METHOD("get_scattering_resolution"), &PhysXFlow3D::get_scattering_resolution);
-	ClassDB::bind_method(D_METHOD("set_scattering_shadows", "enabled"), &PhysXFlow3D::set_scattering_shadows);
-	ClassDB::bind_method(D_METHOD("is_scattering_shadows"), &PhysXFlow3D::is_scattering_shadows);
+	ClassDB::bind_method(D_METHOD("set_scattering_receive_shadows", "flags"), &PhysXFlow3D::set_scattering_receive_shadows);
+	ClassDB::bind_method(D_METHOD("get_scattering_receive_shadows"), &PhysXFlow3D::get_scattering_receive_shadows);
 	ClassDB::bind_method(D_METHOD("set_scattering_shadow_reach", "reach"), &PhysXFlow3D::set_scattering_shadow_reach);
 	ClassDB::bind_method(D_METHOD("get_scattering_shadow_reach"), &PhysXFlow3D::get_scattering_shadow_reach);
 	ClassDB::bind_method(D_METHOD("set_max_blocks", "blocks"), &PhysXFlow3D::set_max_blocks);
@@ -839,12 +843,14 @@ void PhysXFlow3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_strength", PROPERTY_HINT_RANGE, "0,8,0.01,or_greater"), "set_scattering_strength", "get_scattering_strength");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_anisotropy", PROPERTY_HINT_RANGE, "-0.95,0.95,0.01"), "set_scattering_anisotropy", "get_scattering_anisotropy");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_shadow_steps", PROPERTY_HINT_RANGE, "0,64,1"), "set_scattering_shadow_steps", "get_scattering_shadow_steps");
-	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "scattering_shadows"), "set_scattering_shadows", "is_scattering_shadows");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_receive_shadows", PROPERTY_HINT_FLAGS, "Omni:1,Spot:2"), "set_scattering_receive_shadows", "get_scattering_receive_shadows");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "scattering_resolution", PROPERTY_HINT_ENUM, "Full,Half,Quarter"), "set_scattering_resolution", "get_scattering_resolution");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scattering_shadow_reach", PROPERTY_HINT_RANGE, "0.05,20,0.05,or_greater,suffix:m"), "set_scattering_shadow_reach", "get_scattering_shadow_reach");
 	BIND_ENUM_CONSTANT(SCATTERING_RESOLUTION_FULL);
 	BIND_ENUM_CONSTANT(SCATTERING_RESOLUTION_HALF);
 	BIND_ENUM_CONSTANT(SCATTERING_RESOLUTION_QUARTER);
+	BIND_BITFIELD_FLAG(SCATTERING_SHADOW_OMNI);
+	BIND_BITFIELD_FLAG(SCATTERING_SHADOW_SPOT);
 	ADD_GROUP("Queries", "");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "cpu_readback"), "set_cpu_readback", "is_cpu_readback");
 }

@@ -146,8 +146,14 @@ private:
 	float scattering_anisotropy = 0.4f;
 	int scattering_shadow_steps = 4;
 	float scattering_shadow_reach = 4.0f;
-	bool scattering_shadows = true;
 public:
+	// Which lights' shadows the glow receives (a checkbox list). Directional
+	// will be a third flag (4) when the sun's shadow reaches the gas.
+	enum ScatteringShadowFlags {
+		SCATTERING_SHADOW_OMNI = 1,
+		SCATTERING_SHADOW_SPOT = 2,
+	};
+
 	enum ScatteringResolution {
 		SCATTERING_RESOLUTION_FULL,
 		SCATTERING_RESOLUTION_HALF,
@@ -156,6 +162,7 @@ public:
 
 private:
 	ScatteringResolution scattering_resolution = SCATTERING_RESOLUTION_QUARTER;
+	uint32_t scattering_receive_shadows = SCATTERING_SHADOW_OMNI | SCATTERING_SHADOW_SPOT;
 	// Every OmniLight3D / SpotLight3D in the scene, looked up every so often;
 	// the ones lighting the gas this step, for the render thread.
 	LocalVector<ObjectID> scatter_light_ids;
@@ -163,7 +170,7 @@ private:
 	Mutex scatter_mutex;
 	LocalVector<FlowScatterRD::Light> scatter_lights;
 	void _gather_scatter_lights();
-	void _fill_scatter_shadows(LocalVector<FlowScatterRD::Light> &r_lights, const PagedArray<RID> *p_instances, const RID &p_shadow_atlas) const;
+	void _fill_scatter_shadows(LocalVector<FlowScatterRD::Light> &r_lights, const PagedArray<RID> *p_instances, const RID &p_shadow_atlas, uint32_t p_flags) const;
 
 	void _start();
 	void _stop();
@@ -235,8 +242,8 @@ public:
 	int get_scattering_shadow_steps() const { return scattering_shadow_steps; }
 	void set_scattering_shadow_reach(float p_v) { scattering_shadow_reach = MAX(p_v, 0.05f); }
 	float get_scattering_shadow_reach() const { return scattering_shadow_reach; }
-	void set_scattering_shadows(bool p_v) { scattering_shadows = p_v; }
-	bool is_scattering_shadows() const { return scattering_shadows; }
+	void set_scattering_receive_shadows(uint32_t p_flags) { scattering_receive_shadows = p_flags & (SCATTERING_SHADOW_OMNI | SCATTERING_SHADOW_SPOT); }
+	uint32_t get_scattering_receive_shadows() const { return scattering_receive_shadows; }
 	void set_scattering_resolution(ScatteringResolution p_v) { scattering_resolution = p_v; }
 	ScatteringResolution get_scattering_resolution() const { return scattering_resolution; }
 
@@ -262,3 +269,4 @@ public:
 };
 
 VARIANT_ENUM_CAST(PhysXFlow3D::ScatteringResolution);
+VARIANT_BITFIELD_CAST(PhysXFlow3D::ScatteringShadowFlags);

@@ -86,6 +86,10 @@
 		<member name="scattering_max_lights" type="int" setter="set_scattering_max_lights" getter="get_scattering_max_lights" default="4">
 			With [member light_scattering], the most lights that glow in the gas at once (the strongest at it). Each one costs a short march toward it for every step of every pixel the gas covers.
 		</member>
+		<member name="scattering_receive_shadows" type="int" setter="set_scattering_receive_shadows" getter="get_scattering_receive_shadows" enum="PhysXFlow3D.ScatteringShadowFlags" is_bitfield="true" default="3">
+			With [member light_scattering], which kinds of light have their glow in the gas blocked by scene objects: each point reads the light's own shadow (the one Godot already renders for meshes, so only for lights with [member Light3D.shadow_enabled]), the way Godot's volumetric fog does, so pillars in front of a light cast dark shafts through the gas. One shadow lookup per shadowed light per step; untick a kind to save it. (The [DirectionalLight3D] already shades the gas through the gas itself; its scene shadows aren't read yet.)
+			To light the gas from inside an object (a lamp in a glowing block), keep the object from shadowing its own light: put it on a render layer of its own and leave that layer out of the light's [member Light3D.shadow_caster_mask].
+		</member>
 		<member name="scattering_resolution" type="int" setter="set_scattering_resolution" getter="get_scattering_resolution" enum="PhysXFlow3D.ScatteringResolution" default="2">
 			With [member light_scattering], the resolution the glow is worked out at. Scattered light and its shadows in a gas are soft, so [constant SCATTERING_RESOLUTION_QUARTER] (the default) reads the same as full at about a sixth of the cost; the result is scaled up depth-aware, so the glow doesn't bleed onto the edges of objects in front of the gas. [constant SCATTERING_RESOLUTION_HALF] or [constant SCATTERING_RESOLUTION_FULL] sharpen the edges of the shadows in the glow, for close-ups.
 		</member>
@@ -94,10 +98,6 @@
 		</member>
 		<member name="scattering_shadow_steps" type="int" setter="set_scattering_shadow_steps" getter="get_scattering_shadow_steps" default="4">
 			With [member light_scattering], the steps of the march toward each light that lets the gas shade itself (a light inside thick smoke glows near it and dims further in). [code]0[/code] skips it: cheaper, but light then reaches every point as if through clear air.
-		</member>
-		<member name="scattering_shadows" type="bool" setter="set_scattering_shadows" getter="is_scattering_shadows" default="true">
-			With [member light_scattering], scene objects block a light's glow in the gas: each point reads the light's own shadow (the one Godot already renders for meshes, so only for lights with [member Light3D.shadow_enabled]), the way Godot's volumetric fog does. Pillars in front of a light cast dark shafts through the gas. One shadow lookup per light per step; turn it off to save it.
-			To light the gas from inside an object (a lamp in a glowing block), keep the object from shadowing its own light: put it on a render layer of its own and leave that layer out of the light's [member Light3D.shadow_caster_mask].
 		</member>
 		<member name="scattering_strength" type="float" setter="set_scattering_strength" getter="get_scattering_strength" default="1.0">
 			With [member light_scattering], a multiplier on the light the gas scatters. The glow is colored by [member smoke_color].
@@ -133,6 +133,12 @@
 		</constant>
 		<constant name="SCATTERING_RESOLUTION_QUARTER" value="2" enum="ScatteringResolution">
 			A quarter of the resolution each way, scaled up depth-aware.
+		</constant>
+		<constant name="SCATTERING_SHADOW_OMNI" value="1" enum="ScatteringShadowFlags" is_bitfield="true">
+			[OmniLight3D] shadows block their glow in the gas.
+		</constant>
+		<constant name="SCATTERING_SHADOW_SPOT" value="2" enum="ScatteringShadowFlags" is_bitfield="true">
+			[SpotLight3D] shadows block their glow in the gas.
 		</constant>
 	</constants>
 </class>
