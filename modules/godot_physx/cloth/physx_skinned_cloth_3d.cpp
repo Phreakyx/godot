@@ -31,6 +31,8 @@
 #include "physx_skinned_cloth_3d.h"
 
 #include "core/config/engine.h"
+#include "core/os/os.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_map.h"
 #include "scene/3d/mesh_instance_3d.h"
@@ -38,6 +40,7 @@
 #include "scene/3d/physics/physical_bone_3d.h"
 #include "scene/3d/physics/physical_bone_simulator_3d.h"
 #include "scene/3d/skeleton_3d.h"
+#include "scene/scene_string_names.h"
 #include "scene/resources/3d/capsule_shape_3d.h"
 #include "scene/resources/3d/skin.h"
 #include "scene/resources/3d/sphere_shape_3d.h"
@@ -226,7 +229,19 @@ void PhysXSkinnedCloth3D::_notification(int p_what) {
 				_try_build();
 			}
 			if (built && simulating) {
-				_step(get_process_delta_time());
+				// Normally the step runs in skeleton_updated (the final pose, after IK / spring bones). A frame in
+				// which the skeleton didn't update (a still pose) steps here on the last capture, so the cloth
+				// still settles; with no capture yet, the pose as it reads now (no modifiers) starts it off.
+				const uint64_t frame = Engine::get_singleton()->get_process_frames();
+				if (frame > last_step_frame + 1 || !has_capture) {
+					if (!has_capture) {
+						Skeleton3D *skeleton = ObjectDB::get_instance<Skeleton3D>(skeleton_id);
+						if (skeleton != nullptr) {
+							_capture_pose(skeleton);
+						}
+					}
+					_step(get_process_delta_time());
+				}
 			}
 		} break;
 		case NOTIFICATION_EXIT_TREE: {
@@ -236,6 +251,7 @@ void PhysXSkinnedCloth3D::_notification(int p_what) {
 }
 
 void PhysXSkinnedCloth3D::_clear() {
+	_disconnect_skeleton();
 	MeshInstance3D *ri = ObjectDB::get_instance<MeshInstance3D>(render_instance_id);
 	if (ri != nullptr) {
 		ri->queue_free();
@@ -827,6 +843,7 @@ void PhysXSkinnedCloth3D::_try_build() {
 
 	source_id = source->get_instance_id();
 	skeleton_id = skeleton->get_instance_id();
+	_connect_skeleton(skeleton);
 	prev_capsules.clear();
 	_find_capsules(skeleton);
 	if (!using_physical_bones) {
@@ -835,63 +852,63 @@ void PhysXSkinnedCloth3D::_try_build() {
 	built = true;
 }
 
-void PhysXSkinnedCloth3D::_step(double p_delta) {
-	Skeleton3D *skeleton = ObjectDB::get_instance<Skeleton3D>(skeleton_id);
-	MeshInstance3D *source = ObjectDB::get_instance<MeshInstance3D>(source_id);
-	if (skeleton == nullptr || source == nullptr || solver == nullptr) {
-		return;
-	}
-	const Transform3D skel_xform = skeleton->get_global_transform();
-	PackedFloat32Array bone_data;
-	bone_data.resize(MAX(bind_bones.size(), 1) * 16);
-	float *bw = bone_data.ptrw();
+void PhysXSkinnedCloth3D::_capture_pose(Skeleton3D *p_skeleton) {
+	const Transform3D skel_xform = p_skeleton->get_global_transform();
+	captured_bones.resize(MAX(bind_bones.size(), 1) * 16);
+	float *bw = captured_bones.ptrw();
 	for (int j = 0; j < bind_bones.size(); j++) {
 		const int bone = bind_bones[j];
-		const Transform3D bone_pose = bone >= 0 ? skeleton->get_bone_global_pose(bone) : Transform3D();
+		const Transform3D bone_pose = bone >= 0 ? p_skeleton->get_bone_global_pose(bone) : Transform3D();
 		put_mat4(bw + j * 16, skel_xform * bone_pose * bind_poses[j]);
 	}
+	captured_capsules.resize(capsules.size() * 8);
+	float *cw = captured_capsules.ptrw();
+	for (int c = 0; c < capsules.size(); c++) {
+		Vector3 a;
+		Vector3 b;
+		float scale = collision_radius_scale;
+		if (capsules[c].from_shape) {
+			// Where the PhysicalBone3D puts its shape: bone pose * body offset.
+			const Transform3D x = skel_xform * p_skeleton->get_bone_global_pose(capsules[c].bone_a) * capsules[c].shape_local;
+			a = x.xform(Vector3(0, -capsules[c].half_length, 0));
+			b = x.xform(Vector3(0, capsules[c].half_length, 0));
+			scale = 1.0f; // authored shapes are used as they are
+		} else {
+			a = skel_xform.xform(p_skeleton->get_bone_global_pose(capsules[c].bone_a).origin);
+			b = skel_xform.xform(p_skeleton->get_bone_global_pose(capsules[c].bone_b).origin);
+		}
+		cw[c * 8 + 0] = a.x;
+		cw[c * 8 + 1] = a.y;
+		cw[c * 8 + 2] = a.z;
+		cw[c * 8 + 3] = capsules[c].radius_a * scale;
+		cw[c * 8 + 4] = b.x;
+		cw[c * 8 + 5] = b.y;
+		cw[c * 8 + 6] = b.z;
+		cw[c * 8 + 7] = capsules[c].radius_b * scale;
+	}
+	has_capture = true;
+}
 
+void PhysXSkinnedCloth3D::_advance(double p_delta) {
+	MeshInstance3D *source = ObjectDB::get_instance<MeshInstance3D>(source_id);
+	if (source == nullptr || solver == nullptr || !has_capture) {
+		return;
+	}
 	PackedFloat32Array capsule_data;
 	if (collide_with_body) {
 		// This frame's capsule ends, after last frame's: the solver blends
 		// between them across the substeps, so a fast leg sweeps through the
 		// substeps instead of jumping through the cloth once per frame.
-		PackedFloat32Array current;
-		current.resize(capsules.size() * 8);
-		float *cw = current.ptrw();
-		for (int c = 0; c < capsules.size(); c++) {
-			Vector3 a;
-			Vector3 b;
-			float scale = collision_radius_scale;
-			if (capsules[c].from_shape) {
-				// Where the PhysicalBone3D puts its shape: bone pose * body offset.
-				const Transform3D x = skel_xform * skeleton->get_bone_global_pose(capsules[c].bone_a) * capsules[c].shape_local;
-				a = x.xform(Vector3(0, -capsules[c].half_length, 0));
-				b = x.xform(Vector3(0, capsules[c].half_length, 0));
-				scale = 1.0f; // authored shapes are used as they are
-			} else {
-				a = skel_xform.xform(skeleton->get_bone_global_pose(capsules[c].bone_a).origin);
-				b = skel_xform.xform(skeleton->get_bone_global_pose(capsules[c].bone_b).origin);
-			}
-			cw[c * 8 + 0] = a.x;
-			cw[c * 8 + 1] = a.y;
-			cw[c * 8 + 2] = a.z;
-			cw[c * 8 + 3] = capsules[c].radius_a * scale;
-			cw[c * 8 + 4] = b.x;
-			cw[c * 8 + 5] = b.y;
-			cw[c * 8 + 6] = b.z;
-			cw[c * 8 + 7] = capsules[c].radius_b * scale;
-		}
-		if (prev_capsules.size() != current.size()) {
-			prev_capsules = current;
+		if (prev_capsules.size() != captured_capsules.size()) {
+			prev_capsules = captured_capsules;
 		}
 		capsule_data.resize(capsules.size() * 16);
 		float *dw = capsule_data.ptrw();
 		for (int c = 0; c < capsules.size(); c++) {
 			memcpy(dw + c * 16, prev_capsules.ptr() + c * 8, 8 * sizeof(float));
-			memcpy(dw + c * 16 + 8, current.ptr() + c * 8, 8 * sizeof(float));
+			memcpy(dw + c * 16 + 8, captured_capsules.ptr() + c * 8, 8 * sizeof(float));
 		}
-		prev_capsules = current;
+		prev_capsules = captured_capsules;
 	}
 
 	SkinnedClothSolver::Settings s;
@@ -902,12 +919,64 @@ void PhysXSkinnedCloth3D::_step(double p_delta) {
 	s.animation_drive = animation_drive;
 	s.self_collision_thickness = self_collision ? self_collision_thickness : 0.0f;
 	s.output_xform = source->get_global_transform().affine_inverse();
-	solver->step(bone_data, capsule_data, p_delta, substeps, s);
+	solver->step(captured_bones, capsule_data, p_delta, substeps, s);
 
 	MeshInstance3D *ri = ObjectDB::get_instance<MeshInstance3D>(render_instance_id);
 	if (ri != nullptr && ri->get_transform() != source->get_transform()) {
 		ri->set_transform(source->get_transform());
 	}
+	last_step_frame = Engine::get_singleton()->get_process_frames();
+	last_step_usec = OS::get_singleton()->get_ticks_usec();
+}
+
+// One step: the time since the last one (clamped), else this frame's delta.
+void PhysXSkinnedCloth3D::_step(double p_delta) {
+	double dt = p_delta;
+	const uint64_t now = OS::get_singleton()->get_ticks_usec();
+	if (last_step_usec > 0 && now > last_step_usec) {
+		dt = CLAMP((now - last_step_usec) / 1000000.0, 0.0, 0.1);
+	}
+	if (dt <= 0.0) {
+		return;
+	}
+	_advance(dt);
+}
+
+void PhysXSkinnedCloth3D::_on_skeleton_updated() {
+	// The modifiers' pose is live now (and only now): capture it, step on it.
+	Skeleton3D *skeleton = ObjectDB::get_instance<Skeleton3D>(skeleton_id);
+	if (!built || skeleton == nullptr) {
+		return;
+	}
+	_capture_pose(skeleton);
+	if (simulating && last_step_frame != Engine::get_singleton()->get_process_frames()) {
+		_step(get_process_delta_time());
+	}
+}
+
+void PhysXSkinnedCloth3D::_connect_skeleton(Skeleton3D *p_skeleton) {
+	_disconnect_skeleton();
+	if (p_skeleton == nullptr) {
+		return;
+	}
+	const Callable cb = callable_mp(this, &PhysXSkinnedCloth3D::_on_skeleton_updated);
+	if (!p_skeleton->is_connected(SceneStringName(skeleton_updated), cb)) {
+		p_skeleton->connect(SceneStringName(skeleton_updated), cb);
+	}
+	connected_skeleton_id = p_skeleton->get_instance_id();
+}
+
+void PhysXSkinnedCloth3D::_disconnect_skeleton() {
+	Skeleton3D *sk = ObjectDB::get_instance<Skeleton3D>(connected_skeleton_id);
+	if (sk != nullptr) {
+		const Callable cb = callable_mp(this, &PhysXSkinnedCloth3D::_on_skeleton_updated);
+		if (sk->is_connected(SceneStringName(skeleton_updated), cb)) {
+			sk->disconnect(SceneStringName(skeleton_updated), cb);
+		}
+	}
+	connected_skeleton_id = ObjectID();
+	has_capture = false;
+	last_step_usec = 0;
 }
 
 Array PhysXSkinnedCloth3D::get_body_capsules() const {
