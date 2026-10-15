@@ -64,6 +64,9 @@ class GodotPhysXBody3D;
 // cost tradeoff.
 class GodotPhysXArea3D {
 public:
+	// An area's actor is kinematic (a PxRigidDynamic), named with this pointer so the scene's active-actor pass can
+	// tell it from a body's (both carry their object in userData).
+	static constexpr const char *ACTOR_NAME = "GodotPhysXArea3D";
 	struct ShapeRef {
 		GodotPhysXShape3D *shape = nullptr;
 		Transform3D xform;

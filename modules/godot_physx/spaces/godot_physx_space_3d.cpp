@@ -82,6 +82,13 @@ PxFilterFlags godot_physx_filter_shader(
 		pair_flags = PxPairFlag::eTRIGGER_DEFAULT;
 		return PxFilterFlag::eDEFAULT;
 	}
+	// The scene keeps kinematic-static and kinematic-kinematic pairs (for areas, which are kinematic); between
+	// bodies they have nothing to solve, as PhysX's default would have it.
+	const bool moves0 = PxGetFilterObjectType(attributes0) != PxFilterObjectType::eRIGID_STATIC && !PxFilterObjectIsKinematic(attributes0);
+	const bool moves1 = PxGetFilterObjectType(attributes1) != PxFilterObjectType::eRIGID_STATIC && !PxFilterObjectIsKinematic(attributes1);
+	if (!moves0 && !moves1) {
+		return PxFilterFlag::eSUPPRESS;
+	}
 
 	pair_flags = PxPairFlag::eCONTACT_DEFAULT;
 	if ((filter_data0.word2 | filter_data1.word2) & GodotPhysXBody3D::FILTER_REPORTS_CONTACTS) {
@@ -214,6 +221,9 @@ GodotPhysXSpace3D::GodotPhysXSpace3D(PxPhysics *p_physics, PxDefaultCpuDispatche
 	scene_desc.filterCallback = &g_filter_callback;
 	scene_desc.simulationEventCallback = &g_contact_callback;
 	scene_desc.flags |= PxSceneFlag::eENABLE_ACTIVE_ACTORS;
+	// Areas are kinematic actors: these pairs reach the filter shader, so an area sees static and kinematic bodies.
+	scene_desc.staticKineFilteringMode = PxPairFilteringMode::eKEEP;
+	scene_desc.kineKineFilteringMode = PxPairFilteringMode::eKEEP;
 	if (GodotPhysXProjectSettings::stabilization) {
 		// Damps low-mass stacked/piled bodies toward rest so they settle and
 		// cross the sleep threshold instead of jittering forever. The same
@@ -410,6 +420,9 @@ void GodotPhysXSpace3D::step(real_t p_step) {
 		// actors; only rigid dynamics carry a GodotPhysXBody3D in userData.
 		if (!active[i]->is<PxRigidDynamic>()) {
 			continue;
+		}
+		if (active[i]->getName() == GodotPhysXArea3D::ACTOR_NAME) {
+			continue; // an area (kinematic): its userData is the area
 		}
 		GodotPhysXBody3D *body = static_cast<GodotPhysXBody3D *>(active[i]->userData);
 		if (!body) {

@@ -176,8 +176,16 @@ void GodotPhysXArea3D::_build_actor() {
 	ERR_FAIL_NULL(scene);
 	ERR_FAIL_NULL(space->get_default_material());
 
-	px_actor = physics->createRigidStatic(to_px(area_transform));
-	ERR_FAIL_NULL(px_actor);
+	// Kinematic, not static: PhysX never pairs two statics, so a static area could never see a StaticBody3D (Godot
+	// Physics and Jolt do), and an area that moves every step (a hitbox) is a static the static pruner keeps
+	// rebuilding. The scene keeps kinematic-static / kinematic-kinematic pairs for the filter shader, which lets only
+	// an area's triggers through.
+	PxRigidDynamic *dyn = physics->createRigidDynamic(to_px(area_transform));
+	ERR_FAIL_NULL(dyn);
+	dyn->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+	dyn->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, true);
+	dyn->setName(ACTOR_NAME);
+	px_actor = dyn;
 	px_actor->userData = this;
 	built_scale = area_transform.basis.get_scale();
 

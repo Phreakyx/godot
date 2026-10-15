@@ -258,6 +258,10 @@ sleep energy threshold and wake counter.
 
 ## Area3D overrides
 
+Areas detect rigid, kinematic and static bodies (`body_entered`,
+`get_overlapping_bodies()`), as Godot Physics and Jolt do, moving areas
+included.
+
 `Area3D` gravity, damping and wind overrides are applied to the rigid bodies
 that overlap the area, each physics step, folded across overlapping areas in
 `priority` order (`COMBINE` adds, `REPLACE` replaces):
