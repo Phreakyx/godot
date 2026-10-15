@@ -204,6 +204,14 @@ if flow_sdk:
 if env["platform"] == "linuxbsd" and (physx_gpu or blast_sdk or flow_sdk):
     env.Append(RPATH=[env.Literal("\\$$ORIGIN")])
 
+# Linking Blast's .so files makes the linker export the C++ runtime symbols the binary defines -- with Godot's
+# default use_static_cpp=yes, its private static libstdc++ (~4,400 symbols, where a stock build exports 5). Other
+# libraries in the process that use the system libstdc++.so.6 (GPU drivers, GDExtensions, PhysX's GPU and Flow
+# libraries loaded at run time) then bind part of their C++ to that copy and can crash. Blast's libraries load the
+# system libstdc++ themselves, so keep the static runtime out of the binary's dynamic symbol table.
+if env["platform"] == "linuxbsd" and blast_sdk and env.get("use_static_cpp", False):
+    env.Append(LINKFLAGS=["-Wl,--exclude-libs,libstdc++.a:libsupc++.a:libgcc.a:libgcc_eh.a"])
+
 # MLS-MPM compute-fluid shaders (cross-vendor fallback for the PhysX GPU path).
 # Every pass #include's mpm_fluid_inc.glsl, which GLSL_HEADER does not see, so
 # bind the dependency to each .gen.h target *by name* (a Glob here only catches
