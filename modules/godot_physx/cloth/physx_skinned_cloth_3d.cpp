@@ -117,12 +117,6 @@ int find_bone_any(Skeleton3D *p_skeleton, const char *const p_names[2]) {
 	return -1;
 }
 
-uint32_t float_bits_u(float p_f) {
-	uint32_t u;
-	memcpy(&u, &p_f, 4);
-	return u;
-}
-
 float bits_as_float(uint32_t p_u) {
 	float f;
 	memcpy(&f, &p_u, 4);

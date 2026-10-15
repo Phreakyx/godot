@@ -247,13 +247,11 @@ void GodotPhysXJoint3D::_apply_params() {
 			// velocity motor share the per-axis drive slot.
 			PxVec3 drive_pos(0.0f);
 			PxVec3 lin_vel_target(0.0f);
-			bool any_lin_drive = false;
 			for (int a = 0; a < 3; a++) {
 				const Axis6DOF &ax = axis6[a];
 				if (!ax.lin_spring && !ax.lin_motor) {
 					continue;
 				}
-				any_lin_drive = true;
 				const PxReal k = ax.lin_spring ? (PxReal)ax.lin_spring_stiffness : 0.0f;
 				const PxReal d = ax.lin_spring ? (PxReal)ax.lin_spring_damping : 1.0e6f;
 				const PxReal f = (ax.lin_motor && ax.lin_motor_force > 0.0) ? (PxReal)ax.lin_motor_force : PX_MAX_F32;
@@ -283,7 +281,6 @@ void GodotPhysXJoint3D::_apply_params() {
 				}
 				j->setDrive(ang_drives[a], PxD6JointDrive((PxReal)ax.ang_spring_stiffness, (PxReal)ax.ang_spring_damping, PX_MAX_F32));
 				drive_rot = drive_rot * PxQuat((PxReal)-ax.ang_spring_eq, ang_drive_axis[a]); // (the other way round too)
-				any_lin_drive = true;
 				if (!(ax.ang_limit && ax.ang_upper > ax.ang_lower)) {
 					j->setMotion(ang_axes[a], PxD6Motion::eFREE);
 				}
@@ -302,7 +299,6 @@ void GodotPhysXJoint3D::_apply_params() {
 				// Not negated like the limits: PhysX's drive velocity is actor0 relative to actor1, so this already
 				// turns body B the way Jolt does (a positive target spins it clockwise about the axis).
 				(&ang_vel_target.x)[a] = (PxReal)ax.ang_motor_target;
-				any_lin_drive = true;
 				if (!(ax.ang_limit && ax.ang_upper > ax.ang_lower)) {
 					j->setMotion(ang_axes[a], PxD6Motion::eFREE);
 				}

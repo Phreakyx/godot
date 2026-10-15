@@ -37,8 +37,9 @@
 
 namespace {
 
-// Shared by both passes (binding 5 in each).
-#define PARAMS_BLOCK R"(
+// Shared by both passes (binding 5 in each), spliced in where a pass has @PARAMS_BLOCK@. A plain string, not a
+// macro: a raw string literal can't span lines inside a #define on GCC / Clang (MSVC took it).
+const char *PARAMS_BLOCK = R"(
 layout(set = 0, binding = 5, std140) uniform Params {
 	mat4 inv_view_projection; // clip -> world meters
 	vec4 camera; // xyz meters; w: units per meter
@@ -62,14 +63,14 @@ float scene_distance(ivec2 frame_px, float depth) {
 	vec4 h = p.inv_view_projection * vec4(uv * 2.0 - 1.0, depth, 1.0);
 	return length(h.xyz / h.w - p.camera.xyz);
 }
-)"
+)";
 
 const char *SCATTER_SHADER = R"(
 #[compute]
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-)" PARAMS_BLOCK R"(
+@PARAMS_BLOCK@
 
 // Flow's density atlas (r: temperature, b: sun light, a: smoke) and its
 // sparse table; see NvFlowShader.hlsli for the lookups ported below.
@@ -355,7 +356,7 @@ const char *UPSAMPLE_SHADER = R"(
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-)" PARAMS_BLOCK R"(
+@PARAMS_BLOCK@
 layout(set = 0, binding = 2) uniform sampler2D depth_tex;
 layout(set = 0, binding = 3, rgba16f) uniform restrict readonly image2D scatter_img;
 layout(set = 0, binding = 4, rgba16f) uniform restrict image2D color_img;
@@ -409,7 +410,8 @@ constexpr uint32_t PARAMS_WORDS = 16 + 4 + 40 + 4 * 8;
 RID compile(RenderingDevice *p_rd, const char *p_source, const char *p_name) {
 	Ref<RDShaderFile> file;
 	file.instantiate();
-	ERR_FAIL_COND_V_MSG(file->parse_versions_from_text(p_source) != OK, RID(), vformat("PhysXFlow3D: light scattering %s shader failed to compile.", p_name));
+	const String source = String(p_source).replace("@PARAMS_BLOCK@", PARAMS_BLOCK);
+	ERR_FAIL_COND_V_MSG(file->parse_versions_from_text(source) != OK, RID(), vformat("PhysXFlow3D: light scattering %s shader failed to compile.", p_name));
 	Ref<RDShaderSPIRV> spirv = file->get_spirv();
 	ERR_FAIL_COND_V(spirv.is_null(), RID());
 	const String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
