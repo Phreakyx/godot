@@ -107,7 +107,7 @@ class PhysXSkinnedCloth3D : public Node3D {
 	void _find_capsules(Skeleton3D *p_skeleton);
 	bool _find_physical_bone_shapes(Skeleton3D *p_skeleton);
 	void _fit_capsules(Skeleton3D *p_skeleton, MeshInstance3D *p_body);
-	void _step(double p_delta);
+	void _step();
 	// The skeleton's FINAL pose — after its modifiers (IK, spring bones, ...) — exists only while the skeleton
 	// updates: it emits skeleton_updated, skins, then restores the unmodified poses. So the pose is captured in
 	// skeleton_updated (and the cloth steps right there); a frame with no skeleton update reuses the last capture.
@@ -121,7 +121,8 @@ class PhysXSkinnedCloth3D : public Node3D {
 	PackedFloat32Array captured_capsules; // per capsule: a.xyz ra, b.xyz rb (world)
 	bool has_capture = false;
 	uint64_t last_step_frame = 0;
-	uint64_t last_step_usec = 0;
+	// Game time (the process delta, so Engine.time_scale and pausing apply) not yet simulated; a step consumes it.
+	double pending_delta = 0.0;
 
 protected:
 	void _notification(int p_what);

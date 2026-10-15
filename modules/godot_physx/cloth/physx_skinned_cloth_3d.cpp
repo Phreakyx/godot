@@ -31,7 +31,6 @@
 #include "physx_skinned_cloth_3d.h"
 
 #include "core/config/engine.h"
-#include "core/os/os.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_map.h"
@@ -40,15 +39,15 @@
 #include "scene/3d/physics/physical_bone_3d.h"
 #include "scene/3d/physics/physical_bone_simulator_3d.h"
 #include "scene/3d/skeleton_3d.h"
-#include "scene/resources/3d/world_3d.h"
-#include "servers/physics_3d/physics_server_3d.h"
-#include "scene/scene_string_names.h"
 #include "scene/resources/3d/capsule_shape_3d.h"
 #include "scene/resources/3d/skin.h"
 #include "scene/resources/3d/sphere_shape_3d.h"
+#include "scene/resources/3d/world_3d.h"
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
 #include "scene/resources/texture_rd.h"
+#include "scene/scene_string_names.h"
+#include "servers/physics_3d/physics_server_3d.h"
 
 namespace {
 
@@ -241,6 +240,7 @@ void PhysXSkinnedCloth3D::_notification(int p_what) {
 				_try_build();
 			}
 			if (built && simulating) {
+				pending_delta += get_process_delta_time();
 				// Normally the step runs in skeleton_updated (the final pose, after IK / spring bones). A frame in
 				// which the skeleton didn't update (a still pose) steps here on the last capture, so the cloth
 				// still settles; with no capture yet, the pose as it reads now (no modifiers) starts it off.
@@ -252,7 +252,7 @@ void PhysXSkinnedCloth3D::_notification(int p_what) {
 							_capture_pose(skeleton);
 						}
 					}
-					_step(get_process_delta_time());
+					_step();
 				}
 			}
 		} break;
@@ -939,16 +939,12 @@ void PhysXSkinnedCloth3D::_advance(double p_delta) {
 		ri->set_transform(source->get_transform());
 	}
 	last_step_frame = Engine::get_singleton()->get_process_frames();
-	last_step_usec = OS::get_singleton()->get_ticks_usec();
 }
 
-// One step: the time since the last one (clamped), else this frame's delta.
-void PhysXSkinnedCloth3D::_step(double p_delta) {
-	double dt = p_delta;
-	const uint64_t now = OS::get_singleton()->get_ticks_usec();
-	if (last_step_usec > 0 && now > last_step_usec) {
-		dt = CLAMP((now - last_step_usec) / 1000000.0, 0.0, 0.1);
-	}
+// One step over the game time not yet simulated (clamped: a long hitch doesn't explode the cloth).
+void PhysXSkinnedCloth3D::_step() {
+	const double dt = MIN(pending_delta, 0.1);
+	pending_delta = 0.0;
 	if (dt <= 0.0) {
 		return;
 	}
@@ -963,7 +959,7 @@ void PhysXSkinnedCloth3D::_on_skeleton_updated() {
 	}
 	_capture_pose(skeleton);
 	if (simulating && last_step_frame != Engine::get_singleton()->get_process_frames()) {
-		_step(get_process_delta_time());
+		_step();
 	}
 }
 
@@ -989,7 +985,7 @@ void PhysXSkinnedCloth3D::_disconnect_skeleton() {
 	}
 	connected_skeleton_id = ObjectID();
 	has_capture = false;
-	last_step_usec = 0;
+	pending_delta = 0.0;
 }
 
 Array PhysXSkinnedCloth3D::get_body_capsules() const {

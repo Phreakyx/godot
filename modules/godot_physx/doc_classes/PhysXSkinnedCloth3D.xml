@@ -25,6 +25,12 @@
 				The colliders the cloth uses, for debugging: one [Dictionary] per capsule with [code]bone_a[/code], [code]bone_b[/code], [code]radius_a[/code], [code]radius_b[/code] and [code]from_physical_bone[/code]. Filled once the cloth is built (in a running game).
 			</description>
 		</method>
+		<method name="get_effective_gravity" qualifiers="const">
+			<return type="Vector3" />
+			<description>
+				The acceleration the cloth steps with right now, in m/s²: the world's gravity (or [member fixed_gravity] when [member use_world_gravity] is off) plus [member extra_acceleration].
+			</description>
+		</method>
 		<method name="get_effective_max_distances" qualifiers="const">
 			<return type="PackedFloat32Array" />
 			<description>
@@ -72,6 +78,12 @@
 		<member name="damping" type="float" setter="set_damping" getter="get_damping" default="0.05">
 			Fraction of the cloth's motion relative to the animated garment lost per second: settles swinging and jiggle. Moving the character doesn't count, so running doesn't push the cloth back like a headwind.
 		</member>
+		<member name="extra_acceleration" type="Vector3" setter="set_extra_acceleration" getter="get_extra_acceleration" default="Vector3(0, 0, 0)">
+			A world-space acceleration added to the gravity, in m/s²: a game's own force field or a gust of wind, set every frame from script.
+		</member>
+		<member name="fixed_gravity" type="Vector3" setter="set_fixed_gravity" getter="get_fixed_gravity" default="Vector3(0, -9.8, 0)">
+			The gravity the cloth uses when [member use_world_gravity] is off, in m/s².
+		</member>
 		<member name="max_distance" type="float" setter="set_max_distance" getter="get_max_distance" default="0.4">
 			The largest max distance (meters) of the automatic painting: the ramp's value at the mesh's lowest point (it rises linearly from [code]0[/code] at [member pin_height]), and the value a vertex colour of [code]1[/code] maps to with [member use_vertex_color].
 		</member>
@@ -107,6 +119,9 @@
 		</member>
 		<member name="use_vertex_color" type="bool" setter="set_use_vertex_color" getter="get_use_vertex_color" default="false">
 			When [member max_distances] isn't painted, take each vertex's max distance from the red channel of the mesh's vertex colour times [member max_distance], so distances painted in a modeling tool carry over. Ignored if the mesh has no vertex colors.
+		</member>
+		<member name="use_world_gravity" type="bool" setter="set_use_world_gravity" getter="get_use_world_gravity" default="true">
+			If [code]true[/code], the cloth falls with its world's gravity: the physics space's default (the [code]physics/3d/default_gravity[/code] project settings, or a change made to the space at run time). If [code]false[/code], it uses [member fixed_gravity].
 		</member>
 	</members>
 </class>
