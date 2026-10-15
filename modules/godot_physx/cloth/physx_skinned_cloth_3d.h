@@ -63,6 +63,11 @@ class PhysXSkinnedCloth3D : public Node3D {
 	float thickness = 0.012f;
 	float backstop = 0.02f;
 	float animation_drive = 0.0f;
+	// Gravity: the world's (this node's physics space default gravity — the project setting, or a space override)
+	// unless use_world_gravity is off (then fixed_gravity), plus extra_acceleration (the game's force fields, wind …).
+	bool use_world_gravity = true;
+	Vector3 fixed_gravity = Vector3(0, -9.8f, 0);
+	Vector3 extra_acceleration;
 	bool self_collision = false;
 	float self_collision_thickness = 0.02f;
 	float collision_radius_scale = 1.0f;
@@ -163,6 +168,14 @@ public:
 	float get_self_collision_thickness() const { return self_collision_thickness; }
 	void set_animation_drive(float p_drive);
 	float get_animation_drive() const { return animation_drive; }
+	void set_use_world_gravity(bool p_on) { use_world_gravity = p_on; }
+	bool get_use_world_gravity() const { return use_world_gravity; }
+	void set_fixed_gravity(const Vector3 &p_g) { fixed_gravity = p_g; }
+	Vector3 get_fixed_gravity() const { return fixed_gravity; }
+	void set_extra_acceleration(const Vector3 &p_a) { extra_acceleration = p_a; }
+	Vector3 get_extra_acceleration() const { return extra_acceleration; }
+	// The gravity the cloth steps with right now (world or fixed, + extra_acceleration), m/s^2.
+	Vector3 get_effective_gravity() const;
 	void set_collide_with_body(bool p_enabled);
 	bool get_collide_with_body() const { return collide_with_body; }
 	void set_collision_radius_scale(float p_scale);

@@ -40,6 +40,8 @@
 #include "scene/3d/physics/physical_bone_3d.h"
 #include "scene/3d/physics/physical_bone_simulator_3d.h"
 #include "scene/3d/skeleton_3d.h"
+#include "scene/resources/3d/world_3d.h"
+#include "servers/physics_3d/physics_server_3d.h"
 #include "scene/scene_string_names.h"
 #include "scene/resources/3d/capsule_shape_3d.h"
 #include "scene/resources/3d/skin.h"
@@ -178,6 +180,13 @@ void PhysXSkinnedCloth3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_self_collision_thickness", "thickness"), &PhysXSkinnedCloth3D::set_self_collision_thickness);
 	ClassDB::bind_method(D_METHOD("get_self_collision_thickness"), &PhysXSkinnedCloth3D::get_self_collision_thickness);
 	ClassDB::bind_method(D_METHOD("set_animation_drive", "drive"), &PhysXSkinnedCloth3D::set_animation_drive);
+	ClassDB::bind_method(D_METHOD("set_use_world_gravity", "enabled"), &PhysXSkinnedCloth3D::set_use_world_gravity);
+	ClassDB::bind_method(D_METHOD("get_use_world_gravity"), &PhysXSkinnedCloth3D::get_use_world_gravity);
+	ClassDB::bind_method(D_METHOD("set_fixed_gravity", "gravity"), &PhysXSkinnedCloth3D::set_fixed_gravity);
+	ClassDB::bind_method(D_METHOD("get_fixed_gravity"), &PhysXSkinnedCloth3D::get_fixed_gravity);
+	ClassDB::bind_method(D_METHOD("set_extra_acceleration", "acceleration"), &PhysXSkinnedCloth3D::set_extra_acceleration);
+	ClassDB::bind_method(D_METHOD("get_extra_acceleration"), &PhysXSkinnedCloth3D::get_extra_acceleration);
+	ClassDB::bind_method(D_METHOD("get_effective_gravity"), &PhysXSkinnedCloth3D::get_effective_gravity);
 	ClassDB::bind_method(D_METHOD("get_animation_drive"), &PhysXSkinnedCloth3D::get_animation_drive);
 	ClassDB::bind_method(D_METHOD("set_collide_with_body", "enabled"), &PhysXSkinnedCloth3D::set_collide_with_body);
 	ClassDB::bind_method(D_METHOD("get_collide_with_body"), &PhysXSkinnedCloth3D::get_collide_with_body);
@@ -210,6 +219,9 @@ void PhysXSkinnedCloth3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "collision_radius_scale", PROPERTY_HINT_RANGE, "0.1,3,0.01"), "set_collision_radius_scale", "get_collision_radius_scale");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "backstop", PROPERTY_HINT_RANGE, "-0.01,0.2,0.001,suffix:m"), "set_backstop", "get_backstop");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "animation_drive", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_animation_drive", "get_animation_drive");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_world_gravity"), "set_use_world_gravity", "get_use_world_gravity");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "fixed_gravity", PROPERTY_HINT_NONE, "suffix:m/s\u00b2"), "set_fixed_gravity", "get_fixed_gravity");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "extra_acceleration", PROPERTY_HINT_NONE, "suffix:m/s\u00b2"), "set_extra_acceleration", "get_extra_acceleration");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "self_collision"), "set_self_collision", "get_self_collision");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "self_collision_thickness", PROPERTY_HINT_RANGE, "0.001,0.1,0.001,suffix:m"), "set_self_collision_thickness", "get_self_collision_thickness");
 }
@@ -917,6 +929,7 @@ void PhysXSkinnedCloth3D::_advance(double p_delta) {
 	s.thickness = thickness;
 	s.backstop = backstop;
 	s.animation_drive = animation_drive;
+	s.gravity = get_effective_gravity();
 	s.self_collision_thickness = self_collision ? self_collision_thickness : 0.0f;
 	s.output_xform = source->get_global_transform().affine_inverse();
 	solver->step(captured_bones, capsule_data, p_delta, substeps, s);
@@ -1069,6 +1082,21 @@ void PhysXSkinnedCloth3D::set_self_collision(bool p_enabled) {
 
 void PhysXSkinnedCloth3D::set_self_collision_thickness(float p_thickness) {
 	self_collision_thickness = MAX(p_thickness, 0.001f);
+}
+
+Vector3 PhysXSkinnedCloth3D::get_effective_gravity() const {
+	Vector3 g = fixed_gravity;
+	if (use_world_gravity && is_inside_tree()) {
+		const Ref<World3D> w = const_cast<PhysXSkinnedCloth3D *>(this)->get_world_3d();
+		if (w.is_valid()) {
+			const RID space = w->get_space();
+			PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
+			const float mag = ps->area_get_param(space, PhysicsServer3D::AREA_PARAM_GRAVITY);
+			const Vector3 dir = ps->area_get_param(space, PhysicsServer3D::AREA_PARAM_GRAVITY_VECTOR);
+			g = dir * mag;
+		}
+	}
+	return g + extra_acceleration;
 }
 
 void PhysXSkinnedCloth3D::set_animation_drive(float p_drive) {
