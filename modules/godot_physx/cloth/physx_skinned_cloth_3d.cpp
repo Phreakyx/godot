@@ -944,7 +944,10 @@ void PhysXSkinnedCloth3D::_try_build() {
 }
 
 void PhysXSkinnedCloth3D::_capture_pose(Skeleton3D *p_skeleton) {
-	const Transform3D skel_xform = p_skeleton->get_global_transform();
+	// The skeleton where it's DRAWN: with physics interpolation the body moves on physics ticks and is drawn smoothly in
+	// between — the tick transform jumps once per tick (2.3 cm at a walk, 60 Hz) and sits still on the frames between,
+	// which yanked the cloth ~60 times a second against the smooth body you see (the jitter while moving).
+	const Transform3D skel_xform = p_skeleton->get_global_transform_interpolated();
 	captured_bones.resize(MAX(bind_bones.size(), 1) * 16);
 	float *bw = captured_bones.ptrw();
 	for (int j = 0; j < bind_bones.size(); j++) {
@@ -1067,7 +1070,7 @@ void PhysXSkinnedCloth3D::_advance(double p_delta) {
 	s.animation_drive = animation_drive;
 	s.gravity = get_effective_gravity();
 	s.self_collision_thickness = self_collision ? self_collision_thickness : 0.0f;
-	s.output_xform = source->get_global_transform().affine_inverse();
+	s.output_xform = source->get_global_transform_interpolated().affine_inverse();   // (as drawn — matches the capture)
 	solver->step(captured_bones, capsule_data, box_data, p_delta, substeps, s);
 
 	MeshInstance3D *ri = ObjectDB::get_instance<MeshInstance3D>(render_instance_id);
