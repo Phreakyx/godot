@@ -694,6 +694,56 @@ void PhysXSkinnedCloth3D::_try_build() {
 		}
 	}
 
+	// The garment as WORN, for the rest lengths: skinned on the skeleton's SHAPE -- each bone's rest rotation with its
+	// current pose position + scale (body shapes, proportions, a scaled character), and the skeleton node's scale.
+	// The solver works in world space; rest lengths straight from the mesh's bind-space vertices made a garment on a
+	// scaled body (a thicker hip bone, a taller character) shorter than what it's skinned onto, so every free particle
+	// was pulled up toward the pins -- the cloth curled up off the pinned line before it fell. The rotations stay at
+	// rest so the pose the cloth happens to be built in (mid-walk, sitting) isn't baked into its lengths.
+	Vector<Vector3> shaped;
+	shaped.resize(n);
+	{
+		const int bone_count = skeleton->get_bone_count();
+		Vector<Transform3D> shape_global;
+		shape_global.resize(bone_count);
+		Vector<uint8_t> done;
+		done.resize(bone_count);
+		done.fill(0);
+		// Parents first (any order the skeleton stores them in).
+		for (int b = 0; b < bone_count; b++) {
+			LocalVector<int> chain;
+			for (int c = b; c >= 0 && !done[c]; c = skeleton->get_bone_parent(c)) {
+				chain.push_back(c);
+			}
+			for (int k = (int)chain.size() - 1; k >= 0; k--) {
+				const int c = chain[k];
+				const Transform3D local(Basis(skeleton->get_bone_rest(c).basis.get_rotation_quaternion(), skeleton->get_bone_pose_scale(c)),
+						skeleton->get_bone_pose_position(c));
+				const int parent = skeleton->get_bone_parent(c);
+				shape_global.write[c] = parent >= 0 ? shape_global[parent] * local : local;
+				done.write[c] = 1;
+			}
+		}
+		const Basis node_basis = skeleton->get_global_transform().basis;
+		LocalVector<Transform3D> mats;
+		mats.resize(bind_bones.size());
+		for (int j = 0; j < bind_bones.size(); j++) {
+			const int bone = bind_bones[j];
+			mats[j] = Transform3D(node_basis, Vector3()) * (bone >= 0 && bone < bone_count ? shape_global[bone] : Transform3D()) * bind_poses[j];
+		}
+		for (int p = 0; p < n; p++) {
+			const Vector3 v(rest[p * 4], rest[p * 4 + 1], rest[p * 4 + 2]);
+			Vector3 out;
+			for (int s = 0; s < 4; s++) {
+				const float w = skin_w[p * 4 + s];
+				if (w > 0.0f && skin_idx[p * 4 + s] < (int)mats.size()) {
+					out += mats[skin_idx[p * 4 + s]].xform(v) * w;
+				}
+			}
+			shaped.write[p] = mats.is_empty() ? v : out;
+		}
+	}
+
 	// Triangles in particle indices; edges with their opposite corners.
 	LocalVector<Vector3i> tris;
 	for (int t = 0; t + 2 < indices.size(); t += 3) {
@@ -733,7 +783,7 @@ void PhysXSkinnedCloth3D::_try_build() {
 	};
 	LocalVector<Con> cons;
 	auto particle_pos = [&](int p) {
-		return Vector3(rest[p * 4], rest[p * 4 + 1], rest[p * 4 + 2]);
+		return shaped[p];
 	};
 	auto add_con = [&](int a, int b, float k) {
 		if (particle_max[a] <= 0.0f && particle_max[b] <= 0.0f) {
