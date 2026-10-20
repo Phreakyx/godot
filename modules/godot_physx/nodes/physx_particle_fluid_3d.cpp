@@ -1067,6 +1067,27 @@ void PhysXParticleFluid3D::_update_render() {
 	if (foam_multimesh.is_null()) {
 		return;
 	}
+	// In screen space the effect draws the foam over the surface (the spheres
+	// would end up under it).
+	if (screen_space && !_is_granular()) {
+		rs->multimesh_set_visible_instances(foam_multimesh, 0);
+		PackedFloat32Array foam_points;
+		if (foam_enabled) {
+			const Vector<Vector3> foam = server->particle_fluid_get_foam_positions(fluid);
+			const int fn = MIN(foam.size(), foam_particle_count);
+			foam_points.resize(fn * 4);
+			float *fw = foam_points.ptrw();
+			const float radius = _effective_foam_size() * 0.75f; // a soft disc, a little wider than the sphere
+			for (int i = 0; i < fn; i++) {
+				fw[i * 4 + 0] = foam[i].x;
+				fw[i * 4 + 1] = foam[i].y;
+				fw[i * 4 + 2] = foam[i].z;
+				fw[i * 4 + 3] = radius;
+			}
+		}
+		PhysXFluidRenderEffect::set_foam(get_instance_id(), foam_points);
+		return;
+	}
 	// With the isosurface path on, foam is drawn as foam_array_mesh instead.
 	if (!foam_enabled || _iso()) {
 		rs->multimesh_set_visible_instances(foam_multimesh, 0);

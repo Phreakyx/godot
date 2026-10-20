@@ -47,27 +47,16 @@ class RenderData;
 // transparent geometry.
 //
 // While a world has flows, the effect is made to run without touching
-// anything the user owns or saves: with no Compositor on the world, one is
-// created on the World3D (never on the WorldEnvironment, never saved); a
-// user's Compositor (world or camera) gets the effect added at the
-// RenderingServer level only -- its effects array stays as the user made
-// it -- unless it already holds a PhysXFlowRenderEffect. When the world's
-// last flow leaves, all of that is undone.
+// anything the user owns or saves (see PhysXCompositorEffects), after the
+// screen-space fluid's: where a fluid's surface is in front of the scene, the
+// gas is marched up to the surface rather than to the geometry behind it.
+// When the world's last flow leaves, all of that is undone.
 class PhysXFlowRenderEffect : public CompositorEffect {
 	GDCLASS(PhysXFlowRenderEffect, CompositorEffect);
 
 	static LocalVector<PhysXFlow3D *> flows;
 
-	struct WorldState {
-		int flows = 0;
-		Ref<Compositor> created; // installed on the World3D by us
-		// User compositors the effect was added to, with their own effect
-		// RIDs as last seen (a change means the user re-set them).
-		HashMap<ObjectID, LocalVector<RID>> injected;
-	};
-	static HashMap<ObjectID, WorldState> worlds;
-	static void _inject(WorldState &r_state, const Ref<Compositor> &p_compositor);
-	static void _restore(const ObjectID &p_compositor);
+	static HashMap<ObjectID, int> worlds; // flows per world
 
 	// Copies Flow's composited result into Godot's color buffer, which
 	// RenderingDevice won't copy into directly (no copy-to usage) but a

@@ -4,8 +4,8 @@
 		Draws every [PhysXFlow3D] into the frame.
 	</brief_description>
 	<description>
-		A [CompositorEffect] that runs after transparent geometry and draws each [PhysXFlow3D] in the world with NVIDIA Flow's ray marcher, compositing the gas into the scene color and against the scene depth.
-		[PhysXFlow3D] installs it by itself, so there's normally nothing to set up (see [PhysXFlow3D]). Adding one to your own [Compositor] is also fine, for example to control its order among your effects: it is then used as is and not added a second time.
+		A [CompositorEffect] that runs after transparent geometry and draws each [PhysXFlow3D] in the world with NVIDIA Flow's ray marcher, compositing the gas into the scene color and against the scene depth. With a [PhysXParticleFluid3D] drawn in [constant PhysXParticleFluid3D.RENDER_MODE_SCREEN_SPACE], the gas is marched against the depth with the liquid's surface in it: the fluid's own effect runs just before this one when both install themselves.
+		[PhysXFlow3D] installs it by itself, so there's normally nothing to set up (see [PhysXFlow3D]). Adding one to your own [Compositor] is also fine, for example to control its order among your effects: it is then used as is and not added a second time. (The fluid's effect is then added after your effects, so a liquid draws over the gas instead.)
 	</description>
 	<tutorials>
 	</tutorials>

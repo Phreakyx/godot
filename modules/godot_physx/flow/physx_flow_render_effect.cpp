@@ -30,6 +30,8 @@
 
 #include "physx_flow_render_effect.h"
 
+#include "../nodes/physx_compositor_effects.h"
+#include "../nodes/physx_fluid_render_effect.h"
 #include "flow_backend.h"
 #include "physx_flow_3d.h"
 
@@ -46,7 +48,7 @@
 #include "servers/rendering/storage/render_data.h"
 
 LocalVector<PhysXFlow3D *> PhysXFlowRenderEffect::flows;
-HashMap<ObjectID, PhysXFlowRenderEffect::WorldState> PhysXFlowRenderEffect::worlds;
+HashMap<ObjectID, int> PhysXFlowRenderEffect::worlds;
 
 namespace {
 
@@ -99,115 +101,26 @@ void PhysXFlowRenderEffect::unregister_flow(PhysXFlow3D *p_flow) {
 
 namespace {
 
-// The RIDs of a compositor's own (valid) effects, in order; whether one of
-// them is a PhysXFlowRenderEffect.
-LocalVector<RID> own_effect_rids(const Ref<Compositor> &p_compositor, bool &r_has_flow_effect) {
-	LocalVector<RID> rids;
-	r_has_flow_effect = false;
-	const TypedArray<CompositorEffect> effects = p_compositor->get_compositor_effects();
-	for (int i = 0; i < effects.size(); i++) {
-		Ref<CompositorEffect> e = effects[i];
-		if (e.is_valid()) {
-			rids.push_back(e->get_rid());
-			r_has_flow_effect = r_has_flow_effect || Object::cast_to<PhysXFlowRenderEffect>(e.ptr()) != nullptr;
-		}
-	}
-	return rids;
-}
-
-bool same_rids(const LocalVector<RID> &p_a, const LocalVector<RID> &p_b) {
-	if (p_a.size() != p_b.size()) {
-		return false;
-	}
-	for (uint32_t i = 0; i < p_a.size(); i++) {
-		if (p_a[i] != p_b[i]) {
-			return false;
-		}
-	}
-	return true;
-}
-
-void push_effects(RID p_compositor, const LocalVector<RID> &p_rids, RID p_extra) {
-	TypedArray<RID> rids;
-	for (const RID &r : p_rids) {
-		rids.push_back(r);
-	}
-	if (p_extra.is_valid()) {
-		rids.push_back(p_extra);
-	}
-	RenderingServer::get_singleton()->compositor_set_compositor_effects(p_compositor, rids);
-}
-
 } // namespace
-
-void PhysXFlowRenderEffect::_inject(WorldState &r_state, const Ref<Compositor> &p_compositor) {
-	if (p_compositor.is_null() || p_compositor == r_state.created) {
-		return;
-	}
-	bool has_flow_effect = false;
-	const LocalVector<RID> own = own_effect_rids(p_compositor, has_flow_effect);
-	if (has_flow_effect) {
-		return; // the user added it themselves
-	}
-	const ObjectID id = p_compositor->get_instance_id();
-	LocalVector<RID> *seen = r_state.injected.getptr(id);
-	if (seen != nullptr && same_rids(*seen, own)) {
-		return; // already in, and the user hasn't re-set the effects since
-	}
-	push_effects(p_compositor->get_rid(), own, get_shared()->get_rid());
-	r_state.injected[id] = own;
-}
-
-void PhysXFlowRenderEffect::_restore(const ObjectID &p_compositor) {
-	Compositor *compositor = Object::cast_to<Compositor>(ObjectDB::get_instance(p_compositor));
-	if (compositor == nullptr) {
-		return;
-	}
-	// Exactly what the user's resource says, i.e. without ours.
-	bool has_flow_effect = false;
-	push_effects(compositor->get_rid(), own_effect_rids(Ref<Compositor>(compositor), has_flow_effect), RID());
-}
 
 void PhysXFlowRenderEffect::attach_world(World3D *p_world) {
 	ERR_FAIL_NULL(p_world);
-	worlds[p_world->get_instance_id()].flows++;
+	worlds[p_world->get_instance_id()]++;
 }
 
 void PhysXFlowRenderEffect::detach_world(const ObjectID &p_world) {
-	WorldState *state = worlds.getptr(p_world);
-	if (state == nullptr || --state->flows > 0) {
+	int *count = worlds.getptr(p_world);
+	if (count == nullptr || --(*count) > 0) {
 		return;
 	}
-	for (const KeyValue<ObjectID, LocalVector<RID>> &kv : state->injected) {
-		_restore(kv.key);
-	}
-	World3D *world = Object::cast_to<World3D>(ObjectDB::get_instance(p_world));
-	if (world != nullptr && state->created.is_valid() && world->get_compositor() == state->created) {
-		world->set_compositor(Ref<Compositor>());
-	}
 	worlds.erase(p_world);
+	PhysXCompositorEffects::uninstall(p_world, get_shared());
 }
 
 void PhysXFlowRenderEffect::install(World3D *p_world, Camera3D *p_camera) {
 	ERR_FAIL_NULL(p_world);
-	WorldState *state = worlds.getptr(p_world->get_instance_id());
-	ERR_FAIL_NULL(state);
-	Ref<Compositor> world_compositor = p_world->get_compositor();
-	if (world_compositor.is_null()) {
-		if (state->created.is_null()) {
-			state->created.instantiate();
-			TypedArray<CompositorEffect> effects;
-			effects.push_back(get_shared());
-			state->created->set_compositor_effects(effects);
-		}
-		p_world->set_compositor(state->created);
-	} else {
-		_inject(*state, world_compositor);
-	}
-	// A camera's own compositor replaces the world's for that camera.
-	if (p_camera != nullptr) {
-		_inject(*state, p_camera->get_compositor());
-	}
+	ERR_FAIL_COND(!worlds.has(p_world->get_instance_id()));
+	PhysXCompositorEffects::install(p_world, p_camera, get_shared(), PhysXCompositorEffects::ORDER_FLOW);
 }
 
 Ref<Compositor> PhysXFlowRenderEffect::get_world_compositor(const Ref<World3D> &p_world) {
@@ -304,9 +217,19 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 	}
 	const Size2i size = buffers->get_internal_size();
 	const RID color = buffers->get_internal_texture();
-	const RID depth = buffers->get_depth_texture();
+	RID depth = buffers->get_depth_texture();
 	if (size.x <= 0 || size.y <= 0 || !color.is_valid() || !depth.is_valid()) {
 		return;
+	}
+	// A screen-space fluid drawn this frame (it runs just before) leaves the
+	// depth with its surface in: march to that, so the gas in front of the
+	// liquid draws over it and the gas behind it is hidden.
+	const RID merged = PhysXFluidRenderEffect::take_merged_depth(buffers->get_instance_id());
+	if (merged.is_valid() && rd->texture_is_valid(merged)) {
+		const RD::TextureFormat mf = rd->texture_get_format(merged);
+		if ((int)mf.width == size.x && (int)mf.height == size.y) {
+			depth = merged;
+		}
 	}
 
 	// The projection the depth buffer was rendered with: Godot's camera

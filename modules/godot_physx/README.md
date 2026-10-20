@@ -290,7 +290,7 @@ and once `particle_count` is reached the oldest particles are recycled.
 
 Set `foam_enabled` to have the solver spawn diffuse particles — foam, spray and
 bubbles — where the fluid is agitated (`PxParticleAndDiffuseBuffer`). They render
-as a separate sphere cloud, do not affect the fluid, and are tuned with
+to match `render_mode` (see below), do not affect the fluid, and are tuned with
 `foam_particle_count`, `foam_lifetime`, `foam_threshold`, `foam_buoyancy`.
 
 `get_submersion(world_aabb)` returns the 0..1 fraction of a box currently filled
@@ -336,14 +336,41 @@ editor — press Play to see the fluid.
 
 ### Surface rendering
 
-Set `surface_mesh` on the node to draw the fluid as a smooth liquid surface
-instead of spheres: PhysX smooths the particle positions and marching-cubes a
-triangle mesh on the GPU (`PxIsosurfaceExtractor`), which the node renders as an
-`ArrayMesh`. Give it a water look with `material_override` (transparency +
-refraction). It uses the normal Godot material pipeline and needs no compositor
-setup. `surface_anisotropy` optionally feeds PhysX per-particle anisotropy to the
-extractor for sharper crests — off by default; leave it off while emitting, where
-fast particles along the stream can mesh as spikes.
+`render_mode` picks how the fluid is drawn:
+
+- **Particles** (default) — the sphere `MultiMesh`; foam is a second sphere cloud.
+- **Isosurface** — a smooth liquid mesh: the particles are smoothed and
+  marching-cubed into a triangle mesh (PBD: `PxIsosurfaceExtractor` on the GPU;
+  MPM: a compute march), rendered as an `ArrayMesh` through the normal material
+  pipeline. Give it a water look with `material_override` (transparency +
+  refraction). It's a real mesh — it casts shadows and shows in reflections and
+  other cameras — but the most expensive mode, re-meshed every few steps.
+  `surface_anisotropy` optionally feeds PhysX per-particle anisotropy to the PBD
+  extractor for sharper crests — off by default; leave it off while emitting,
+  where fast particles along the stream can mesh as spikes. Foam is its own
+  coarser froth mesh. (Scenes saved with the older `surface_mesh = true` load as
+  Isosurface.)
+- **Screen Space** — the surface is built on the screen each frame instead: the
+  particles are splatted as spheres into a depth and thickness buffer, the depth
+  is smoothed, and the surface is shaded straight into the frame (refraction,
+  absorption by thickness, fresnel against `screen_space_sky`, a highlight from
+  the scene's sun). The cost follows the pixels the fluid covers, not its volume,
+  and nothing is read back — on the debris showcase (30k particles, 1080p, RTX
+  5070) a physics frame costs 1.5 ms on MPM and 4.6 ms on PBD, against 4.0 and
+  13.5 ms for Isosurface. `screen_space_resolution` (Full / Half / Quarter,
+  default Half) is the splat and smoothing resolution; the shading and the edge
+  against geometry stay full resolution. A `StandardMaterial3D`
+  `material_override` sets the look (albedo → tint, alpha → how opaque thick fluid
+  gets, roughness → highlight, refraction, emission); any other material falls
+  back to the `screen_space_*` settings. PBD foam draws as soft white flecks over
+  the surface, fading with depth below it.
+
+  It draws after transparent geometry in the camera that renders it, so it casts
+  no shadow and isn't seen in reflections, and all screen-space fluids in view
+  merge into one surface (shaded with the nearest one's look). It installs
+  itself as a compositor effect the same way `PhysXFlow3D` does (see below),
+  ahead of Flow: smoke and fire in front of the liquid draw over it, smoke behind
+  it is hidden (it isn't seen through the liquid).
 
 ## Granular — `PhysXGranular3D`
 
@@ -382,7 +409,10 @@ transparent geometry, self-shadowed by the scene's first `DirectionalLight3D`,
 back to front. It installs itself: with no `Compositor` in the world it puts
 one on the `World3D`, and a user's own `Compositor` gets the effect at the
 rendering-server level only — its effects array is never modified — and all
-of it is undone when the last flow leaves. The look is per flow:
+of it is undone when the last flow leaves. A screen-space `PhysXParticleFluid3D`
+installs the same way and always runs just before it, whichever node came
+first, so the gas is marched only up to a liquid surface in front of the
+scene. The look is per flow:
 `smoke_density`, `smoke_color` / `smoke_ramp`, `heat_ramp`,
 `temperature_range`, `emission_strength`, `shadow_steps`.
 
