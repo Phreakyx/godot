@@ -119,7 +119,12 @@ public:
 	RID buf_bhash; // block-sparse: block keys (open addressing)
 	RID buf_bhash_val; // hash slot -> block-pool slot
 	RID buf_bkey; // block key per block-pool slot
-	RID buf_bcounts; // [0] active blocks, [1..3] indirect dispatch (needs DISPATCH_INDIRECT usage)
+	RID buf_bcounts; // [0] active blocks
+	// The per-block passes' indirect dispatch args, written by PASS_BS_BDISPATCH
+	// alone. A buffer of its own: Godot's render graph tracks one usage per
+	// buffer per compute list, so args a pass also binds as storage (bcounts)
+	// lose their indirect-read barrier and the dispatch reads stale counts.
+	RID buf_bargs;
 
 	bool block_sparse = false; // this build uses the mpm_bs_* passes (fluid, boundless-capable)
 	int capacity = 0;
