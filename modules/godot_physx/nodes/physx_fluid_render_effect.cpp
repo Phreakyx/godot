@@ -511,6 +511,22 @@ void fragment() {
 	METALLIC = surface_metallic * (1.0 - foam);
 	ALPHA = clamp(max(cover, foam), 0.0, 1.0);
 }
+
+// A liquid's own colour is light scattered inside it, so it hardly depends on
+// which way its surface faces: a wrapped diffuse lets the side away from a
+// light still glow (a solid's Lambert would go black there). Shadows still
+// apply (ATTENUATION). The highlight is a normalized Blinn-Phong with water's
+// fresnel, since writing light() replaces Godot's own.
+void light() {
+	float wrapped = max((dot(NORMAL, LIGHT) + 0.6) / 1.6, 0.0);
+	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * wrapped / PI;
+	float r = max(surface_roughness, 0.02);
+	float power = clamp(2.0 / (r * r * r * r) - 2.0, 4.0, 4096.0);
+	vec3 H = normalize(VIEW + LIGHT);
+	float F = 0.02 + 0.98 * pow(1.0 - clamp(dot(H, VIEW), 0.0, 1.0), 5.0);
+	float spec = pow(max(dot(NORMAL, H), 0.0), power) * (power + 8.0) / (8.0 * PI);
+	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * spec * F * max(dot(NORMAL, LIGHT), 0.0);
+}
 )";
 
 void put_matrix(float *r_dst, const Projection &p_m) {
