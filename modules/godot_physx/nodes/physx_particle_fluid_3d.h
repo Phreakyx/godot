@@ -150,6 +150,22 @@ private:
 	// Opt-in: feed PhysX per-particle anisotropy to the isosurface extractor.
 	// Crisper crests, but it needles fast particles, so keep it off while emitting.
 	bool surface_anisotropy = false;
+	// When true, the fluid draws as a screen-space surface (PhysXFluidRenderEffect): the particles are splatted,
+	// smoothed and shaded each frame instead of an isosurface mesh being marched every step. Takes precedence
+	// over surface_mesh.
+	bool screen_space = false;
+	float screen_space_radius = 1.5f; // splat radius, in particle_size
+	float screen_space_smoothing = 3.0f; // depth smoothing radius, in particle_size
+	float screen_space_refraction = 0.04f;
+	Color screen_space_absorption = Color(0.45, 0.12, 0.06);
+	Color screen_space_sky = Color(0.55, 0.68, 0.8);
+	ObjectID screen_space_world;
+	ObjectID screen_space_light;
+	// The isosurface mesh is on (surface_mesh, unless screen_space draws the fluid instead).
+	bool _iso() const { return surface_mesh && !screen_space; }
+	void _screen_space_attach();
+	void _screen_space_detach();
+	void _screen_space_publish(const float *p_transforms, int p_count);
 	RID array_mesh;
 	// Own world-space instance, like foam_mesh_instance below -- isosurface
 	// vertices come back in world space, and the mesh is only re-marched every
@@ -265,6 +281,18 @@ public:
 	bool is_surface_mesh() const { return surface_mesh; }
 	void set_surface_anisotropy(bool p_enabled);
 	bool is_surface_anisotropy() const { return surface_anisotropy; }
+	void set_screen_space(bool p_enabled);
+	bool is_screen_space() const { return screen_space; }
+	void set_screen_space_radius(float p_radius) { screen_space_radius = MAX(p_radius, 0.05f); }
+	float get_screen_space_radius() const { return screen_space_radius; }
+	void set_screen_space_smoothing(float p_smoothing) { screen_space_smoothing = MAX(p_smoothing, 0.0f); }
+	float get_screen_space_smoothing() const { return screen_space_smoothing; }
+	void set_screen_space_refraction(float p_refraction) { screen_space_refraction = p_refraction; }
+	float get_screen_space_refraction() const { return screen_space_refraction; }
+	void set_screen_space_absorption(const Color &p_absorption) { screen_space_absorption = p_absorption; }
+	Color get_screen_space_absorption() const { return screen_space_absorption; }
+	void set_screen_space_sky(const Color &p_sky) { screen_space_sky = p_sky; }
+	Color get_screen_space_sky() const { return screen_space_sky; }
 
 	void set_foam_enabled(bool p_enabled);
 	bool is_foam_enabled() const { return foam_enabled; }

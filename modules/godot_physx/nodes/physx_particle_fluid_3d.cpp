@@ -34,17 +34,21 @@
 #include "../objects/godot_physx_particle_fluid_3d.h"
 #include "../particles/mpm_fluid_solver.h"
 #include "physx_chunk_emitter_3d.h"
+#include "physx_fluid_render_effect.h"
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_map.h"
+#include "scene/3d/light_3d.h"
 #include "scene/3d/physics/animatable_body_3d.h"
 #include "scene/3d/physics/collision_object_3d.h"
 #include "scene/3d/physics/collision_shape_3d.h"
 #include "scene/3d/physics/rigid_body_3d.h"
 #include "scene/3d/physics/static_body_3d.h"
+#include "scene/main/scene_tree.h"
 #include "scene/main/viewport.h"
+#include "scene/main/window.h"
 #include "scene/resources/3d/box_shape_3d.h"
 #include "scene/resources/3d/capsule_shape_3d.h"
 #include "scene/resources/3d/primitive_meshes.h"
@@ -403,7 +407,7 @@ void PhysXParticleFluid3D::_mpm_step(double p_delta) {
 	// look continuous, not track every substep, so re-mesh it every 3rd step
 	// (~20 Hz) and let the sim run full-rate underneath.
 	static const uint32_t SURFACE_EVERY = 3;
-	const bool want_surface = surface_mesh && array_mesh.is_valid() && !_is_granular() && (_mpm_surface_tick++ % SURFACE_EVERY == 0);
+	const bool want_surface = _iso() && array_mesh.is_valid() && !_is_granular() && (_mpm_surface_tick++ % SURFACE_EVERY == 0);
 
 	if (mpm->get_particle_count() == 0) {
 		// Emit mode, nothing spawned yet.
@@ -500,7 +504,7 @@ void PhysXParticleFluid3D::_mpm_step(double p_delta) {
 		rs->multimesh_set_visible_instances(multimesh, 0);
 		return;
 	}
-	if (surface_mesh) {
+	if (_iso()) {
 		// Surface path, but this step's re-mesh was skipped for cost -- keep the
 		// mesh from the last update and don't fall through to the sphere buffer.
 		rs->multimesh_set_visible_instances(multimesh, 0);
@@ -516,6 +520,11 @@ void PhysXParticleFluid3D::_mpm_step(double p_delta) {
 	const int n = mpm->get_particle_count();
 	const int cap = mpm->get_capacity();
 	if (buffer.size() < cap * 12) {
+		return;
+	}
+	if (screen_space && !_is_granular()) {
+		_screen_space_publish(buffer.ptr(), n);
+		rs->multimesh_set_visible_instances(multimesh, 0);
 		return;
 	}
 	rs->multimesh_set_buffer(multimesh, buffer);
@@ -564,7 +573,7 @@ void PhysXParticleFluid3D::_make_fluid() {
 		rs->instance_geometry_set_material_override(particle_instance, particle_override_mat.is_valid() ? particle_override_mat->get_rid() : RID());
 		_apply_gi_mode(particle_instance);
 
-		if (surface_mesh) {
+		if (_iso()) {
 			// Marching-tetrahedra mesh over the solver's density grid, drawn with a
 			// translucent water material. The particle MultiMesh stays hidden.
 			array_mesh = rs->mesh_create();
@@ -672,7 +681,7 @@ void PhysXParticleFluid3D::_make_fluid() {
 	// GPU isosurface mesh path: PhysX marching-cubes a triangle mesh we draw as
 	// an ArrayMesh with an ordinary water material. Granular grains render as the
 	// sphere MultiMesh -- no surface.
-	const bool pbd_surface = surface_mesh && !pbd_granular;
+	const bool pbd_surface = _iso() && !pbd_granular;
 	server->particle_fluid_set_surface_mesh(fluid, pbd_surface);
 	server->particle_fluid_set_surface_anisotropy(fluid, surface_anisotropy && !pbd_granular);
 	if (pbd_surface) {
@@ -1015,7 +1024,7 @@ void PhysXParticleFluid3D::_update_render() {
 	}
 	RenderingServer *rs = RenderingServer::get_singleton();
 
-	if (surface_mesh && !_is_granular()) {
+	if (_iso() && !_is_granular()) {
 		// The isosurface mesh draws the fluid -- do not read back every particle
 		// position or rebuild the sphere buffer. (Foam is still updated below.)
 		rs->multimesh_set_visible_instances(multimesh, 0);
@@ -1046,15 +1055,20 @@ void PhysXParticleFluid3D::_update_render() {
 			t[10] = 1;
 			t[11] = w.z;
 		}
-		rs->multimesh_set_buffer(multimesh, buffer);
-		rs->multimesh_set_visible_instances(multimesh, n);
+		if (screen_space && !_is_granular()) {
+			_screen_space_publish(buffer.ptr(), n);
+			rs->multimesh_set_visible_instances(multimesh, 0);
+		} else {
+			rs->multimesh_set_buffer(multimesh, buffer);
+			rs->multimesh_set_visible_instances(multimesh, n);
+		}
 	}
 
 	if (foam_multimesh.is_null()) {
 		return;
 	}
 	// With the isosurface path on, foam is drawn as foam_array_mesh instead.
-	if (!foam_enabled || surface_mesh) {
+	if (!foam_enabled || _iso()) {
 		rs->multimesh_set_visible_instances(foam_multimesh, 0);
 		return;
 	}
@@ -1085,7 +1099,7 @@ void PhysXParticleFluid3D::_update_render() {
 }
 
 void PhysXParticleFluid3D::_update_surface_mesh() {
-	if (!surface_mesh || array_mesh.is_null()) {
+	if (!_iso() || array_mesh.is_null()) {
 		return;
 	}
 	GodotPhysXServer3D *server = GodotPhysXServer3D::get_singleton();
@@ -1313,9 +1327,13 @@ void PhysXParticleFluid3D::_notification(int p_what) {
 				// frame under load, which spirals.
 				set_physics_process_internal(true);
 				set_process_internal(true);
+				if (screen_space) {
+					_screen_space_attach();
+				}
 			}
 		} break;
 		case NOTIFICATION_EXIT_WORLD: {
+			_screen_space_detach();
 			set_physics_process_internal(false);
 			set_process_internal(false);
 			_editor_preview_exit();
@@ -1355,6 +1373,10 @@ void PhysXParticleFluid3D::_notification(int p_what) {
 			}
 		} break;
 		case NOTIFICATION_INTERNAL_PHYSICS_PROCESS: {
+			if (screen_space_world.is_valid()) {
+				// The user may swap compositors at any time.
+				PhysXFluidRenderEffect::install(get_world_3d().ptr(), get_viewport() ? get_viewport()->get_camera_3d() : nullptr);
+			}
 			const bool mpm_here = _mpm_path() && !_is_granular();
 			const double pdt = get_physics_process_delta_time();
 			if (emitting) {
@@ -1654,6 +1676,90 @@ void PhysXParticleFluid3D::set_surface_anisotropy(bool p_enabled) {
 	update_configuration_warnings();
 }
 
+void PhysXParticleFluid3D::_screen_space_attach() {
+	if (screen_space_world.is_valid() || !is_inside_world() || Engine::get_singleton()->is_editor_hint()) {
+		return;
+	}
+	World3D *world = get_world_3d().ptr();
+	if (world == nullptr) {
+		return;
+	}
+	PhysXFluidRenderEffect::attach_world(world);
+	screen_space_world = world->get_instance_id();
+	PhysXFluidRenderEffect::install(world, get_viewport() ? get_viewport()->get_camera_3d() : nullptr);
+}
+
+void PhysXParticleFluid3D::_screen_space_detach() {
+	PhysXFluidRenderEffect::remove_fluid(get_instance_id());
+	if (screen_space_world.is_valid()) {
+		PhysXFluidRenderEffect::detach_world(screen_space_world);
+		screen_space_world = ObjectID();
+	}
+}
+
+void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int p_count) {
+	PhysXFluidRenderEffect::Snapshot s;
+	s.points.resize(p_count * 4);
+	float *w = s.points.ptrw();
+	const float radius = particle_size * screen_space_radius;
+	for (int i = 0; i < p_count; i++) {
+		w[i * 4 + 0] = p_transforms[i * 12 + 3];
+		w[i * 4 + 1] = p_transforms[i * 12 + 7];
+		w[i * 4 + 2] = p_transforms[i * 12 + 11];
+		w[i * 4 + 3] = radius;
+	}
+	s.absorption = screen_space_absorption;
+	s.sky = screen_space_sky;
+	s.refraction = screen_space_refraction;
+	s.smoothing = MAX(particle_size * screen_space_smoothing, 0.0001f);
+	s.depth_threshold = MAX(radius * 2.0f, 0.0001f);
+	s.fade_thickness = MAX(radius * 3.0f, 0.0001f);
+	s.center = get_global_position();
+	// The scene's sun, for the highlight (found once, like PhysXFlow3D's).
+	DirectionalLight3D *light = Object::cast_to<DirectionalLight3D>(ObjectDB::get_instance(screen_space_light));
+	if (light == nullptr && is_inside_tree()) {
+		TypedArray<Node> lights = get_tree()->get_root()->find_children("*", "DirectionalLight3D", true, false);
+		for (int i = 0; i < lights.size() && light == nullptr; i++) {
+			DirectionalLight3D *l = Object::cast_to<DirectionalLight3D>(lights[i]);
+			if (l != nullptr && l->is_visible_in_tree()) {
+				light = l;
+			}
+		}
+		screen_space_light = light != nullptr ? light->get_instance_id() : ObjectID();
+	}
+	if (light != nullptr) {
+		s.light_direction = -light->get_global_transform().basis.get_column(2).normalized();
+		s.light_color = light->get_color();
+		s.light_color.a = light->get_param(Light3D::PARAM_ENERGY);
+	} else {
+		s.light_color.a = 0.0f;
+	}
+	PhysXFluidRenderEffect::set_fluid(get_instance_id(), s);
+}
+
+void PhysXParticleFluid3D::set_screen_space(bool p_enabled) {
+	if (screen_space == p_enabled) {
+		return;
+	}
+	screen_space = p_enabled;
+	if (screen_space) {
+		_screen_space_attach();
+	} else {
+		_screen_space_detach();
+	}
+	// Rebuild so the isosurface extractor comes up or tears down with it.
+	if (fluid.is_valid() && surface_mesh) {
+		const bool was_spawned = spawned || emitting;
+		_free_fluid();
+		if (is_inside_tree() && !Engine::get_singleton()->is_editor_hint()) {
+			_make_fluid();
+			if (was_spawned && spawn_on_ready) {
+				spawn();
+			}
+		}
+	}
+}
+
 void PhysXParticleFluid3D::set_surface_mesh(bool p_enabled) {
 	if (surface_mesh == p_enabled) {
 		return;
@@ -1809,6 +1915,18 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_emission_velocity"), &PhysXParticleFluid3D::get_emission_velocity);
 	ClassDB::bind_method(D_METHOD("set_surface_mesh", "enabled"), &PhysXParticleFluid3D::set_surface_mesh);
 	ClassDB::bind_method(D_METHOD("is_surface_mesh"), &PhysXParticleFluid3D::is_surface_mesh);
+	ClassDB::bind_method(D_METHOD("set_screen_space", "enabled"), &PhysXParticleFluid3D::set_screen_space);
+	ClassDB::bind_method(D_METHOD("is_screen_space"), &PhysXParticleFluid3D::is_screen_space);
+	ClassDB::bind_method(D_METHOD("set_screen_space_radius", "radius"), &PhysXParticleFluid3D::set_screen_space_radius);
+	ClassDB::bind_method(D_METHOD("get_screen_space_radius"), &PhysXParticleFluid3D::get_screen_space_radius);
+	ClassDB::bind_method(D_METHOD("set_screen_space_smoothing", "smoothing"), &PhysXParticleFluid3D::set_screen_space_smoothing);
+	ClassDB::bind_method(D_METHOD("get_screen_space_smoothing"), &PhysXParticleFluid3D::get_screen_space_smoothing);
+	ClassDB::bind_method(D_METHOD("set_screen_space_refraction", "refraction"), &PhysXParticleFluid3D::set_screen_space_refraction);
+	ClassDB::bind_method(D_METHOD("get_screen_space_refraction"), &PhysXParticleFluid3D::get_screen_space_refraction);
+	ClassDB::bind_method(D_METHOD("set_screen_space_absorption", "absorption"), &PhysXParticleFluid3D::set_screen_space_absorption);
+	ClassDB::bind_method(D_METHOD("get_screen_space_absorption"), &PhysXParticleFluid3D::get_screen_space_absorption);
+	ClassDB::bind_method(D_METHOD("set_screen_space_sky", "sky"), &PhysXParticleFluid3D::set_screen_space_sky);
+	ClassDB::bind_method(D_METHOD("get_screen_space_sky"), &PhysXParticleFluid3D::get_screen_space_sky);
 	ClassDB::bind_method(D_METHOD("set_surface_anisotropy", "enabled"), &PhysXParticleFluid3D::set_surface_anisotropy);
 	ClassDB::bind_method(D_METHOD("is_surface_anisotropy"), &PhysXParticleFluid3D::is_surface_anisotropy);
 
@@ -1851,6 +1969,13 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ADD_GROUP("Rendering", "");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "surface_mesh"), "set_surface_mesh", "is_surface_mesh");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "surface_anisotropy"), "set_surface_anisotropy", "is_surface_anisotropy");
+	ADD_SUBGROUP("Screen Space", "screen_space_");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "screen_space"), "set_screen_space", "is_screen_space");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_radius", PROPERTY_HINT_RANGE, "0.25,4,0.01"), "set_screen_space_radius", "get_screen_space_radius");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_smoothing", PROPERTY_HINT_RANGE, "0,8,0.01"), "set_screen_space_smoothing", "get_screen_space_smoothing");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_refraction", PROPERTY_HINT_RANGE, "0,0.3,0.001"), "set_screen_space_refraction", "get_screen_space_refraction");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "screen_space_absorption", PROPERTY_HINT_COLOR_NO_ALPHA), "set_screen_space_absorption", "get_screen_space_absorption");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "screen_space_sky", PROPERTY_HINT_COLOR_NO_ALPHA), "set_screen_space_sky", "get_screen_space_sky");
 	ADD_GROUP("Foam", "foam_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "foam_enabled"), "set_foam_enabled", "is_foam_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "foam_particle_count", PROPERTY_HINT_RANGE, "1,262144,1"), "set_foam_particle_count", "get_foam_particle_count");

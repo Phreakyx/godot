@@ -47,6 +47,7 @@
 #endif
 #include "nodes/physx_chunk_emitter_3d.h"
 #include "nodes/physx_cloth_3d.h"
+#include "nodes/physx_fluid_render_effect.h"
 #include "nodes/physx_granular_3d.h"
 #include "nodes/physx_particle_fluid_3d.h"
 #include "vehicle/godot_physx_motorcycle_probe.h"
@@ -69,12 +70,11 @@
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
 #ifdef TOOLS_ENABLED
+#include "editor/editor_node.h"
+#include "editor/export/editor_export.h"
 #include "editor/physx_cloth_paint_plugin.h"
 #include "editor/physx_editor_plugin.h"
 #include "editor/physx_export_plugin.h"
-
-#include "editor/editor_node.h"
-#include "editor/export/editor_export.h"
 #include "editor/plugins/editor_plugin.h"
 #endif
 
@@ -107,6 +107,7 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		GDREGISTER_ABSTRACT_CLASS(PhysX);
 		GDREGISTER_CLASS(PhysXParticleFluid3D);
+		GDREGISTER_INTERNAL_CLASS(PhysXFluidRenderEffect);
 		GDREGISTER_CLASS(PhysXGranular3D);
 		GDREGISTER_CLASS(PhysXCloth3D);
 		GDREGISTER_CLASS(PhysXSkinnedCloth3D);
@@ -152,6 +153,9 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 }
 
 void uninitialize_godot_physx_module(ModuleInitializationLevel p_level) {
+	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		PhysXFluidRenderEffect::free_shared();
+	}
 #ifdef GODOT_PHYSX_FLOW
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		PhysXFlowRenderEffect::free_shared();
