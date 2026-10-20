@@ -811,6 +811,7 @@ void PhysXParticleFluid3D::_apply_params() {
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_COHESION, cohesion);
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_VORTICITY, vorticity);
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_ADHESION, adhesion);
+	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_FRICTION, surface_friction);
 	server->particle_fluid_set_param(fluid, GodotPhysXParticleFluid3D::PARAM_GRAVITY_SCALE, gravity_scale);
 }
 
@@ -1655,6 +1656,11 @@ void PhysXParticleFluid3D::set_adhesion(float p_v) {
 	_apply_params();
 }
 
+void PhysXParticleFluid3D::set_surface_friction(float p_v) {
+	surface_friction = MAX(p_v, 0.0f);
+	_apply_params();
+}
+
 void PhysXParticleFluid3D::set_gravity_scale(float p_v) {
 	gravity_scale = p_v;
 	_apply_params(); // PBD: live; MPM takes it at the next configure (spawn / a grid rebuild), like viscosity
@@ -1960,6 +1966,8 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_vorticity"), &PhysXParticleFluid3D::get_vorticity);
 	ClassDB::bind_method(D_METHOD("set_adhesion", "adhesion"), &PhysXParticleFluid3D::set_adhesion);
 	ClassDB::bind_method(D_METHOD("get_adhesion"), &PhysXParticleFluid3D::get_adhesion);
+	ClassDB::bind_method(D_METHOD("set_surface_friction", "friction"), &PhysXParticleFluid3D::set_surface_friction);
+	ClassDB::bind_method(D_METHOD("get_surface_friction"), &PhysXParticleFluid3D::get_surface_friction);
 	ClassDB::bind_method(D_METHOD("set_gravity_scale", "scale"), &PhysXParticleFluid3D::set_gravity_scale);
 	ClassDB::bind_method(D_METHOD("get_gravity_scale"), &PhysXParticleFluid3D::get_gravity_scale);
 	ClassDB::bind_method(D_METHOD("set_spawn_region_size", "size"), &PhysXParticleFluid3D::set_spawn_region_size);
@@ -2061,6 +2069,7 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cohesion", PROPERTY_HINT_RANGE, "0,1,0.001,or_greater"), "set_cohesion", "get_cohesion");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "vorticity", PROPERTY_HINT_RANGE, "0,50,0.01,or_greater"), "set_vorticity", "get_vorticity");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "adhesion", PROPERTY_HINT_RANGE, "0,1,0.001,or_greater"), "set_adhesion", "get_adhesion");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "surface_friction", PROPERTY_HINT_RANGE, "0,1,0.01,or_greater"), "set_surface_friction", "get_surface_friction");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "gravity_scale", PROPERTY_HINT_RANGE, "-2,4,0.01,or_less,or_greater"), "set_gravity_scale", "get_gravity_scale");
 }
 

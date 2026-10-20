@@ -281,7 +281,9 @@ A `GeometryInstance3D`-derived node that fills a box region with GPU position-
 based fluid particles (PhysX 5 `PxPBDParticleSystem`). The particles collide with
 the rigid bodies in the same space and are drawn as a `MultiMesh` of spheres
 (`material_override` applies). Tunables: `particle_count`, `particle_size`,
-`viscosity`, `surface_tension`, `cohesion`, `vorticity`.
+`viscosity`, `surface_tension`, `cohesion`, `vorticity`, and against the
+surfaces it touches `adhesion` and `surface_friction` (too little friction and a
+pool frays into single droplets that creep across the floor).
 
 Set `emitting` to stream particles in over time instead of spawning them all at
 once — a faucet or hose. Particles spawn near the node origin at `emission_rate`

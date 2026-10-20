@@ -156,6 +156,9 @@
 			Only used when [member surface_mesh] is enabled. Anisotropy is PhysX computing a per-particle ellipsoid from each particle's neighbor distribution instead of treating every particle as a sphere: a particle deep in the fluid stays round, while one on the surface or in a thin sheet is flattened and aligned to that surface. Feeding those ellipsoids to the isosurface extractor gives sharper wave crests and thinner splash sheets, so the surface looks less like a cluster of blobs.
 			The trade-off is that a fast-moving or isolated particle gets a strongly stretched ellipsoid that marching cubes can mesh as a thin spike, so this is off by default and best reserved for a settled pool. Leave it disabled while the fluid is actively emitting or splashing.
 		</member>
+		<member name="surface_friction" type="float" setter="set_surface_friction" getter="get_surface_friction" default="0.2">
+			PBD solver only. Friction between the fluid and the surfaces it flows over. Low values let particles keep sliding once the fluid has thinned out to a single layer, so a pool frays into stray droplets creeping across the floor; the default holds a pool together while still letting it spread and run down slopes. The MPM solver ignores it.
+		</member>
 		<member name="surface_mesh" type="bool" setter="set_surface_mesh" getter="is_surface_mesh" deprecated="Use [member render_mode] instead.">
 			[code]true[/code] is [member render_mode] [constant RENDER_MODE_ISOSURFACE], [code]false[/code] [constant RENDER_MODE_PARTICLES]. Still read from scenes saved with it; no longer saved.
 		</member>

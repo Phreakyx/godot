@@ -62,6 +62,7 @@ public:
 		PARAM_VORTICITY,
 		PARAM_GRAVITY_SCALE,
 		PARAM_PARTICLE_SIZE,
+		PARAM_FRICTION,
 		PARAM_MAX,
 	};
 
@@ -94,6 +95,7 @@ private:
 	real_t surface_tension = 0.006;
 	real_t cohesion = 0.02;
 	real_t adhesion = 0.0;
+	real_t friction = 0.2; // against colliders (the fluid phase; granular uses granular_friction)
 	real_t vorticity = 8.0;
 	real_t gravity_scale = 1.0;
 	real_t particle_size = 0.1; // spacing between particles at rest, in meters

@@ -630,7 +630,7 @@ void GodotPhysXParticleFluid3D::_ensure_system() {
 	ERR_FAIL_NULL(scene);
 
 	px_material = physics->createPBDMaterial(
-			granular ? CLAMP((PxReal)granular_friction, 0.0f, 2.0f) : 0.05f, // friction
+			CLAMP((PxReal)(granular ? granular_friction : friction), 0.0f, 2.0f), // friction
 			0.0f, // damping
 			granular ? 0.0f : (PxReal)adhesion,
 			granular ? 0.0f : (PxReal)viscosity,
@@ -710,6 +710,7 @@ void GodotPhysXParticleFluid3D::_apply_material() {
 		px_material->setAdhesion(0.0f);
 		px_material->setVorticityConfinement(0.0f);
 	} else {
+		px_material->setFriction(CLAMP((PxReal)friction, 0.0f, 2.0f));
 		px_material->setViscosity((PxReal)viscosity);
 		px_material->setSurfaceTension((PxReal)surface_tension);
 		px_material->setCohesion((PxReal)cohesion);
@@ -752,6 +753,9 @@ void GodotPhysXParticleFluid3D::set_param(Param p_param, real_t p_value) {
 		case PARAM_PARTICLE_SIZE:
 			particle_size = MAX(p_value, (real_t)0.001);
 			break;
+		case PARAM_FRICTION:
+			friction = MAX(p_value, (real_t)0.0);
+			break;
 		default:
 			return;
 	}
@@ -769,6 +773,8 @@ real_t GodotPhysXParticleFluid3D::get_param(Param p_param) const {
 			return cohesion;
 		case PARAM_ADHESION:
 			return adhesion;
+		case PARAM_FRICTION:
+			return friction;
 		case PARAM_VORTICITY:
 			return vorticity;
 		case PARAM_GRAVITY_SCALE:
@@ -1099,6 +1105,9 @@ void GodotPhysXParticleFluid3D::set_param(Param p_param, real_t p_value) {
 		case PARAM_PARTICLE_SIZE:
 			particle_size = MAX(p_value, (real_t)0.001);
 			break;
+		case PARAM_FRICTION:
+			friction = MAX(p_value, (real_t)0.0);
+			break;
 		default:
 			break;
 	}
@@ -1114,6 +1123,8 @@ real_t GodotPhysXParticleFluid3D::get_param(Param p_param) const {
 			return cohesion;
 		case PARAM_ADHESION:
 			return adhesion;
+		case PARAM_FRICTION:
+			return friction;
 		case PARAM_VORTICITY:
 			return vorticity;
 		case PARAM_GRAVITY_SCALE:

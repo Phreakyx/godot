@@ -145,6 +145,7 @@ private:
 	float cohesion = 0.02;
 	float vorticity = 8.0;
 	float adhesion = 0.0; // PBD: how much the fluid sticks to the surfaces it touches (honey, blood on a wall)
+	float surface_friction = 0.2; // PBD: friction against the surfaces it flows over
 	float gravity_scale = 1.0; // gravity x (PBD material; MPM at configure time)
 	Vector3 spawn_region_size = Vector3(1, 1, 1);
 	bool spawn_on_ready = true;
@@ -273,6 +274,8 @@ public:
 	float get_vorticity() const { return vorticity; }
 	void set_adhesion(float p_v);
 	float get_adhesion() const { return adhesion; }
+	void set_surface_friction(float p_v);
+	float get_surface_friction() const { return surface_friction; }
 	void set_gravity_scale(float p_v);
 	float get_gravity_scale() const { return gravity_scale; }
 	void set_spawn_region_size(const Vector3 &p_size);
