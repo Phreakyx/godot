@@ -47,9 +47,9 @@ class RenderData;
 // transparent geometry.
 //
 // While a world has flows, the effect is made to run without touching
-// anything the user owns or saves (see PhysXCompositorEffects), after the
-// screen-space fluid's: where a fluid's surface is in front of the scene, the
-// gas is marched up to the surface rather than to the geometry behind it.
+// anything the user owns or saves (see PhysXCompositorEffects). A
+// screen-space fluid writes its surface into the depth before transparent
+// geometry, so the gas is marched up to the liquid.
 // When the world's last flow leaves, all of that is undone.
 class PhysXFlowRenderEffect : public CompositorEffect {
 	GDCLASS(PhysXFlowRenderEffect, CompositorEffect);

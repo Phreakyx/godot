@@ -46,9 +46,9 @@ class World3D;
 // other's injection, and their order would follow whichever node came first.
 class PhysXCompositorEffects {
 public:
-	// Lower runs first. The fluid goes before Flow: it leaves Flow a depth with
-	// its surface in it, so gas in front of the liquid draws over it and gas
-	// behind it is hidden.
+	// Lower runs first, among effects at the same callback point (the fluid
+	// runs before transparent geometry and Flow after it, so for them this is
+	// just a stable order).
 	enum Order {
 		ORDER_FLUID = 0,
 		ORDER_FLOW = 1,

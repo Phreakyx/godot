@@ -365,12 +365,14 @@ editor — press Play to see the fluid.
   back to the `screen_space_*` settings. PBD foam draws as soft white flecks over
   the surface, fading with depth below it.
 
-  It draws after transparent geometry in the camera that renders it, so it casts
-  no shadow and isn't seen in reflections, and all screen-space fluids in view
-  merge into one surface (shaded with the nearest one's look). It installs
-  itself as a compositor effect the same way `PhysXFlow3D` does (see below),
-  ahead of Flow: smoke and fire in front of the liquid draw over it, smoke behind
-  it is hidden (it isn't seen through the liquid).
+  It draws just before transparent geometry, in the camera that renders it, and
+  writes the liquid's depth into the frame: transparent objects in front of the
+  liquid draw over it, those behind it are hidden where it's solid (they aren't
+  seen through clear liquid), and Flow's smoke and fire sort against it the
+  same way. It casts no shadow, isn't seen in reflections, and a material that
+  reads the screen (refractive glass) doesn't see it; all screen-space fluids in
+  view merge into one surface (shaded with the nearest one's look). It installs
+  itself as a compositor effect the same way `PhysXFlow3D` does (see below).
 
 ## Granular — `PhysXGranular3D`
 
@@ -410,9 +412,9 @@ back to front. It installs itself: with no `Compositor` in the world it puts
 one on the `World3D`, and a user's own `Compositor` gets the effect at the
 rendering-server level only — its effects array is never modified — and all
 of it is undone when the last flow leaves. A screen-space `PhysXParticleFluid3D`
-installs the same way and always runs just before it, whichever node came
-first, so the gas is marched only up to a liquid surface in front of the
-scene. The look is per flow:
+installs the same way (the two never displace each other) and writes its
+surface into the depth before transparent geometry, so the gas is marched only
+up to a liquid surface in front of the scene. The look is per flow:
 `smoke_density`, `smoke_color` / `smoke_ramp`, `heat_ramp`,
 `temperature_range`, `emission_strength`, `shadow_steps`.
 

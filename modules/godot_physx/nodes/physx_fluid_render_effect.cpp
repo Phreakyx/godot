@@ -35,6 +35,7 @@
 #include "core/object/callable_mp.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/resources/3d/world_3d.h"
+#include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
 #include "servers/rendering/rendering_device.h"
@@ -45,7 +46,6 @@
 Mutex PhysXFluidRenderEffect::mutex;
 HashMap<ObjectID, PhysXFluidRenderEffect::Snapshot> PhysXFluidRenderEffect::fluids;
 HashMap<ObjectID, int> PhysXFluidRenderEffect::worlds;
-HashMap<ObjectID, PhysXFluidRenderEffect::MergedDepth> PhysXFluidRenderEffect::merged_depths;
 
 namespace {
 
@@ -327,11 +327,11 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 1, r32f) uniform restrict readonly image2D zimg;
 layout(set = 0, binding = 2, r32ui) uniform restrict readonly uimage2D thick_img;
 layout(set = 0, binding = 3) uniform sampler2D scene_color;
-layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D color_img;
+layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D liquid_img; // a: drawn here
 layout(set = 0, binding = 5) uniform sampler2D scene_depth;
 layout(set = 0, binding = 6, r32ui) uniform restrict readonly uimage2D foam_depth_img;
 layout(set = 0, binding = 7, r32ui) uniform restrict readonly uimage2D foam_img;
-layout(set = 0, binding = 8, r32f) uniform restrict writeonly image2D merged_depth;
+layout(set = 0, binding = 8, r32f) uniform restrict writeonly image2D liquid_depth; // the depth buffer's value here
 
 float zat(ivec2 q, float fallback) {
 	q = clamp(q, ivec2(0), p.size.xy - 1);
@@ -348,7 +348,7 @@ void main() {
 	float sd = texelFetch(scene_depth, fpx, 0).r;
 	vec4 sv = p.inv_proj * vec4(uv * 2.0 - 1.0, sd, 1.0);
 	float scene_z = -sv.z / sv.w;
-	float out_depth = sd; // what Flow marches against
+	float out_depth = sd; // goes into the depth buffer: what later passes test against
 	float surface_z = 1e30; // the fluid's surface, where it draws solid enough
 	vec3 base = textureLod(scene_color, uv, 0.0).rgb;
 	vec3 col = base;
@@ -436,15 +436,40 @@ void main() {
 		col = mix(col, p.foam.rgb * (0.65 + 0.35 * min(p.light_dir.w, 1.0)), fa);
 		drawn = true;
 	}
-	if (drawn) {
-		imageStore(color_img, fpx, vec4(col, 1.0));
-	}
-	imageStore(merged_depth, fpx, vec4(out_depth));
+	imageStore(liquid_img, fpx, vec4(col, drawn ? 1.0 : 0.0));
+	imageStore(liquid_depth, fpx, vec4(out_depth));
 }
 )",
 };
 
 const char *PASS_NAMES[PASS_MAX] = { "clear", "splat", "foam", "resolve", "filter", "copy", "composite" };
+
+// Draws the composited liquid into the frame's own colour and depth targets
+// (the multisampled ones with MSAA), before the transparent pass: its depth
+// then sorts transparent geometry against the liquid. A compute pass can't
+// write a depth attachment; a fullscreen triangle with gl_FragDepth can.
+const char *WRITE_SHADER = R"(
+#[vertex]
+#version 450
+void main() {
+	vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+	gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+#[fragment]
+#version 450
+layout(set = 0, binding = 0) uniform sampler2D liquid;
+layout(set = 0, binding = 1) uniform sampler2D liquid_depth;
+layout(location = 0) out vec4 frag_color;
+void main() {
+	ivec2 px = ivec2(gl_FragCoord.xy);
+	vec4 c = texelFetch(liquid, px, 0);
+	if (c.a < 0.5) {
+		discard;
+	}
+	frag_color = vec4(c.rgb, 1.0);
+	gl_FragDepth = texelFetch(liquid_depth, px, 0).r;
+}
+)";
 
 void put_matrix(float *r_dst, const Projection &p_m) {
 	for (int c = 0; c < 4; c++) {
@@ -494,18 +519,6 @@ void PhysXFluidRenderEffect::install(World3D *p_world, Camera3D *p_camera) {
 	PhysXCompositorEffects::install(p_world, p_camera, get_shared(), PhysXCompositorEffects::ORDER_FLUID);
 }
 
-RID PhysXFluidRenderEffect::take_merged_depth(const ObjectID &p_buffers) {
-	MutexLock lock(mutex);
-	const MergedDepth *m = merged_depths.getptr(p_buffers);
-	if (m == nullptr) {
-		return RID();
-	}
-	RenderingDevice *rd = RenderingServer::get_singleton()->get_rendering_device();
-	const RID depth = (rd != nullptr && m->frame == rd->get_frames_drawn()) ? m->texture : RID();
-	merged_depths.erase(p_buffers);
-	return depth;
-}
-
 Ref<PhysXFluidRenderEffect> PhysXFluidRenderEffect::get_shared() {
 	if (shared_effect.is_null()) {
 		shared_effect.instantiate();
@@ -518,10 +531,12 @@ void PhysXFluidRenderEffect::free_shared() {
 }
 
 PhysXFluidRenderEffect::PhysXFluidRenderEffect() {
-	set_effect_callback_type(EFFECT_CALLBACK_TYPE_POST_TRANSPARENT);
+	// Before the transparent pass, so transparent geometry sorts against the
+	// liquid (see WRITE_SHADER).
+	set_effect_callback_type(EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT);
 	set_access_resolved_color(true);
 	set_access_resolved_depth(true);
-	RenderingServer::get_singleton()->compositor_effect_set_callback(get_rid(), RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT, callable_mp(this, &PhysXFluidRenderEffect::_render));
+	RenderingServer::get_singleton()->compositor_effect_set_callback(get_rid(), RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT, callable_mp(this, &PhysXFluidRenderEffect::_render));
 }
 
 PhysXFluidRenderEffect::~PhysXFluidRenderEffect() {
@@ -538,7 +553,10 @@ PhysXFluidRenderEffect::~PhysXFluidRenderEffect() {
 			rd->free_rid(shaders[i]);
 		}
 	}
-	for (RID r : { linear_sampler, point_sampler, params_buffer, points_buffer, foam_buffer }) {
+	for (const KeyValue<int64_t, RID> &kv : write_pipelines) {
+		rd->free_rid(kv.value);
+	}
+	for (RID r : { write_shader, linear_sampler, point_sampler, params_buffer, points_buffer, foam_buffer }) {
 		if (r.is_valid()) {
 			rd->free_rid(r);
 		}
@@ -567,6 +585,19 @@ bool PhysXFluidRenderEffect::_ensure(RenderingDevice *p_rd) {
 		pipelines[i] = p_rd->compute_pipeline_create(shaders[i]);
 		ERR_FAIL_COND_V(!pipelines[i].is_valid(), false);
 	}
+	{
+		Ref<RDShaderFile> file;
+		file.instantiate();
+		ERR_FAIL_COND_V_MSG(file->parse_versions_from_text(WRITE_SHADER) != OK, false, "PhysXParticleFluid3D: screen-space write shader failed to compile.");
+		Ref<RDShaderSPIRV> spirv = file->get_spirv();
+		ERR_FAIL_COND_V(spirv.is_null(), false);
+		for (RD::ShaderStage stage : { RD::SHADER_STAGE_VERTEX, RD::SHADER_STAGE_FRAGMENT }) {
+			const String err = spirv->get_stage_compile_error(stage);
+			ERR_FAIL_COND_V_MSG(!err.is_empty(), false, vformat("PhysXParticleFluid3D: screen-space write shader: %s", err));
+		}
+		write_shader = p_rd->shader_create_from_spirv(file->get_spirv_stages());
+		ERR_FAIL_COND_V(!write_shader.is_valid(), false);
+	}
 	RD::SamplerState linear;
 	linear.mag_filter = RD::SAMPLER_FILTER_LINEAR;
 	linear.min_filter = RD::SAMPLER_FILTER_LINEAR;
@@ -581,7 +612,7 @@ bool PhysXFluidRenderEffect::_ensure(RenderingDevice *p_rd) {
 }
 
 void PhysXFluidRenderEffect::_free_targets(RenderingDevice *p_rd) {
-	for (RID *r : { &depth_u, &thick_u, &foam_depth_u, &foam_u, &smooth_a, &smooth_b, &scene_copy, &merged_depth }) {
+	for (RID *r : { &depth_u, &thick_u, &foam_depth_u, &foam_u, &smooth_a, &smooth_b, &scene_copy, &liquid, &liquid_depth }) {
 		if (r->is_valid()) {
 			p_rd->free_rid(*r);
 			*r = RID();
@@ -616,8 +647,9 @@ void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i
 	tf.width = p_frame.x;
 	tf.height = p_frame.y;
 	scene_copy = p_rd->texture_create(tf, RD::TextureView());
+	liquid = p_rd->texture_create(tf, RD::TextureView());
 	tf.format = RD::DATA_FORMAT_R32_SFLOAT;
-	merged_depth = p_rd->texture_create(tf, RD::TextureView());
+	liquid_depth = p_rd->texture_create(tf, RD::TextureView());
 }
 
 void PhysXFluidRenderEffect::_dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, uint32_t p_x, uint32_t p_y, const void *p_push, uint32_t p_push_size) {
@@ -789,8 +821,41 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 		_dispatch(rd, PASS_FILTER, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, to) }, gx, gy, no_dir, sizeof(no_dir));
 	}
 	_dispatch(rd, PASS_COPY, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, color), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, scene_copy) }, fx, fy, nullptr, 0);
-	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, scene_copy })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, color), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, merged_depth) }, fx, fy, nullptr, 0);
-	// For PhysXFlowRenderEffect, which runs next (see PhysXCompositorEffects).
-	MutexLock lock(mutex);
-	merged_depths[buffers->get_instance_id()] = MergedDepth{ merged_depth, rd->get_frames_drawn() };
+	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, scene_copy })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, liquid), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, liquid_depth) }, fx, fy, nullptr, 0);
+	_write(rd, buffers, color, depth);
+}
+
+void PhysXFluidRenderEffect::_write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_color, const RID &p_depth) {
+	// The targets the transparent pass draws into: with MSAA the multisampled
+	// ones (the resolved copies we read get overwritten from them later).
+	const bool msaa = p_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED;
+	const RID color_target = msaa ? p_buffers->get_color_msaa() : p_color;
+	const RID depth_target = msaa ? p_buffers->get_depth_msaa() : p_depth;
+	ERR_FAIL_COND(!color_target.is_valid() || !depth_target.is_valid());
+	const RID framebuffer = FramebufferCacheRD::get_singleton()->get_cache(color_target, depth_target);
+	ERR_FAIL_COND(!framebuffer.is_valid());
+	const RD::FramebufferFormatID format = p_rd->framebuffer_get_format(framebuffer);
+	RID *pipeline = write_pipelines.getptr(format);
+	if (pipeline == nullptr) {
+		RD::PipelineMultisampleState multisample;
+		multisample.sample_count = p_rd->framebuffer_format_get_texture_samples(format);
+		RD::PipelineDepthStencilState depth_state;
+		depth_state.enable_depth_test = true;
+		depth_state.enable_depth_write = true;
+		depth_state.depth_compare_operator = RD::COMPARE_OP_ALWAYS; // the composite already kept the nearer
+		const RID created = p_rd->render_pipeline_create(write_shader, format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, depth_state, RD::PipelineColorBlendState::create_disabled(1));
+		ERR_FAIL_COND(!created.is_valid());
+		pipeline = &write_pipelines.insert(format, created)->value;
+	}
+	Vector<RD::Uniform> uniforms;
+	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ point_sampler, liquid })));
+	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ point_sampler, liquid_depth })));
+	const RID set = p_rd->uniform_set_create(uniforms, write_shader, 0);
+	ERR_FAIL_COND(!set.is_valid());
+	const RD::DrawListID list = p_rd->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL);
+	p_rd->draw_list_bind_render_pipeline(list, *pipeline);
+	p_rd->draw_list_bind_uniform_set(list, set, 0);
+	p_rd->draw_list_draw(list, false, 1, 3);
+	p_rd->draw_list_end();
+	p_rd->free_rid(set);
 }

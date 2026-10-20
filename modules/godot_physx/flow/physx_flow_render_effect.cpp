@@ -31,7 +31,6 @@
 #include "physx_flow_render_effect.h"
 
 #include "../nodes/physx_compositor_effects.h"
-#include "../nodes/physx_fluid_render_effect.h"
 #include "flow_backend.h"
 #include "physx_flow_3d.h"
 
@@ -217,19 +216,11 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 	}
 	const Size2i size = buffers->get_internal_size();
 	const RID color = buffers->get_internal_texture();
-	RID depth = buffers->get_depth_texture();
+	// (A screen-space fluid has written its surface into this depth: the gas
+	// is marched up to the liquid.)
+	const RID depth = buffers->get_depth_texture();
 	if (size.x <= 0 || size.y <= 0 || !color.is_valid() || !depth.is_valid()) {
 		return;
-	}
-	// A screen-space fluid drawn this frame (it runs just before) leaves the
-	// depth with its surface in: march to that, so the gas in front of the
-	// liquid draws over it and the gas behind it is hidden.
-	const RID merged = PhysXFluidRenderEffect::take_merged_depth(buffers->get_instance_id());
-	if (merged.is_valid() && rd->texture_is_valid(merged)) {
-		const RD::TextureFormat mf = rd->texture_get_format(merged);
-		if ((int)mf.width == size.x && (int)mf.height == size.y) {
-			depth = merged;
-		}
 	}
 
 	// The projection the depth buffer was rendered with: Godot's camera

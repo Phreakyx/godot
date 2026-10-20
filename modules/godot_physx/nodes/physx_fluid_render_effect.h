@@ -40,6 +40,7 @@
 class Camera3D;
 class World3D;
 class RenderData;
+class RenderSceneBuffersRD;
 
 // Screen-space surface for PhysXParticleFluid3D (screen_space on): instead of
 // marching an isosurface mesh every step, the particles are splatted as
@@ -49,9 +50,10 @@ class RenderData;
 // volume, and nothing is read back.
 //
 // PBD foam is drawn here too, as soft white splats over the surface (fading
-// with how far below it they are). The composite also leaves a copy of the
-// scene depth with the fluid's surface in it, which PhysXFlowRenderEffect
-// marches against (it runs after this one -- see PhysXCompositorEffects).
+// with how far below it they are). It runs before the transparent pass and
+// writes the liquid's depth into the frame's depth buffer, so transparent
+// geometry sorts against it, and so does PhysXFlowRenderEffect (after
+// transparent). Installed by PhysXCompositorEffects.
 class PhysXFluidRenderEffect : public CompositorEffect {
 	GDCLASS(PhysXFluidRenderEffect, CompositorEffect);
 
@@ -81,12 +83,6 @@ public:
 	static void set_foam(const ObjectID &p_fluid, const PackedFloat32Array &p_foam);
 	static void remove_fluid(const ObjectID &p_fluid);
 
-	// The scene depth with the fluid's surface in it, from this frame's
-	// composite for those render buffers, or an invalid RID when no fluid drew
-	// there this frame (or hasn't yet: the user put Flow's effect ahead of it).
-	// Render thread; each one is handed out once.
-	static RID take_merged_depth(const ObjectID &p_buffers);
-
 	static void attach_world(World3D *p_world);
 	static void detach_world(const ObjectID &p_world);
 	static void install(World3D *p_world, Camera3D *p_camera);
@@ -101,11 +97,6 @@ private:
 	static HashMap<ObjectID, Snapshot> fluids;
 
 	static HashMap<ObjectID, int> worlds; // fluids in screen-space mode, per world
-	struct MergedDepth {
-		RID texture;
-		uint64_t frame = 0; // RenderingDevice::get_frames_drawn() when drawn
-	};
-	static HashMap<ObjectID, MergedDepth> merged_depths; // per render buffers
 
 	// GPU state (render thread only).
 	static constexpr uint32_t PARAMS_FLOATS = 96; // the shaders' Params block, std140
@@ -120,12 +111,16 @@ private:
 	uint32_t foam_capacity = 0;
 	Size2i size; // the surface buffers
 	Size2i frame_size; // the colour copy
-	RID depth_u, thick_u, foam_depth_u, foam_u, smooth_a, smooth_b, scene_copy, merged_depth;
+	RID depth_u, thick_u, foam_depth_u, foam_u, smooth_a, smooth_b, scene_copy;
+	RID liquid, liquid_depth; // the composite: colour (a: drawn) and the depth buffer's new value
+	RID write_shader;
+	HashMap<int64_t, RID> write_pipelines; // per framebuffer format
 
 	bool _ensure(RenderingDevice *p_rd);
 	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size, const Size2i &p_frame);
 	void _free_targets(RenderingDevice *p_rd);
 	void _dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, uint32_t p_x, uint32_t p_y, const void *p_push, uint32_t p_push_size);
+	void _write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_color, const RID &p_depth);
 	void _render(int p_callback_type, const RenderData *p_render_data);
 
 protected:
