@@ -32,6 +32,7 @@
 
 #include "physx_compositor_effects.h"
 
+#include "core/config/engine.h"
 #include "core/object/callable_mp.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/resources/3d/primitive_meshes.h"
@@ -58,6 +59,9 @@ Ref<Texture2DRD> PhysXFluidRenderEffect::surf_a_texture;
 Ref<Texture2DRD> PhysXFluidRenderEffect::surf_b_texture;
 RID PhysXFluidRenderEffect::published_a;
 RID PhysXFluidRenderEffect::published_b;
+bool PhysXFluidRenderEffect::textures_hooked = false;
+bool PhysXFluidRenderEffect::proxies_shown = false;
+uint64_t PhysXFluidRenderEffect::ready_since = UINT64_MAX;
 
 namespace {
 
@@ -443,13 +447,11 @@ void main() {
 #version 450
 layout(set = 0, binding = 0) uniform sampler2D surf_b;
 layout(set = 0, binding = 1) uniform sampler2D liquid_depth;
-layout(location = 0) out vec4 frag_color;
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
 	if (texelFetch(surf_b, px, 0).g <= 0.5) {
 		discard;
 	}
-	frag_color = vec4(0.0); // not written (colour write mask off)
 	gl_FragDepth = texelFetch(liquid_depth, px, 0).r;
 }
 )";
@@ -581,6 +583,9 @@ void PhysXFluidRenderEffect::attach_world(World3D *p_world) {
 	rs->instance_set_custom_aabb(instance, AABB(Vector3(-1e6, -1e6, -1e6), Vector3(2e6, 2e6, 2e6)));
 	rs->instance_geometry_set_cast_shadows_setting(instance, RSE::SHADOW_CASTING_SETTING_OFF);
 	rs->instance_set_ignore_culling(instance, true);
+	// Hidden until its textures are hooked up (see _update_proxy): until then
+	// they read as Godot's placeholder, a checkerboard over the whole screen.
+	rs->instance_set_visible(instance, false);
 	proxies[p_world->get_instance_id()] = instance;
 }
 
@@ -611,6 +616,7 @@ void PhysXFluidRenderEffect::_update_proxy(Camera3D *p_camera) {
 	RID a, b;
 	Snapshot look;
 	bool found = false;
+	bool anything = false; // a fluid with particles or foam to draw
 	{
 		MutexLock lock(mutex);
 		a = published_a;
@@ -619,6 +625,7 @@ void PhysXFluidRenderEffect::_update_proxy(Camera3D *p_camera) {
 		const Vector3 eye = p_camera != nullptr ? p_camera->get_global_position() : Vector3();
 		real_t best = 1e30;
 		for (const KeyValue<ObjectID, Snapshot> &kv : fluids) {
+			anything = anything || !kv.value.points.is_empty() || !kv.value.foam.is_empty();
 			const real_t d = eye.distance_squared_to(kv.value.center);
 			if (d < best) {
 				best = d;
@@ -632,6 +639,28 @@ void PhysXFluidRenderEffect::_update_proxy(Camera3D *p_camera) {
 	}
 	if (b.is_valid() && surf_b_texture->get_texture_rd_rid() != b) {
 		surf_b_texture->set_texture_rd_rid(b);
+	}
+	// Shown once both textures point at the effect's own (the hookup lands on
+	// the render thread, a frame later) -- and they stay hooked up across a
+	// resize, the old textures outliving the switch -- while there's anything
+	// to draw (no stale surface after the fluids clear).
+	if (surf_a_texture->get_texture_rd_rid().is_valid() && surf_b_texture->get_texture_rd_rid().is_valid()) {
+		textures_hooked = true;
+	}
+	// ...and two frames on from that, by which time everything the material
+	// reads (the screen copy among them) has been drawn once.
+	const uint64_t now = Engine::get_singleton()->get_frames_drawn();
+	if (!(textures_hooked && anything)) {
+		ready_since = UINT64_MAX;
+	} else if (ready_since == UINT64_MAX) {
+		ready_since = now;
+	}
+	const bool show = ready_since != UINT64_MAX && now >= ready_since + 2;
+	if (show != proxies_shown) {
+		proxies_shown = show;
+		for (const KeyValue<ObjectID, RID> &kv : proxies) {
+			RenderingServer::get_singleton()->instance_set_visible(kv.value, show);
+		}
 	}
 	if (!found) {
 		return;
@@ -663,6 +692,9 @@ void PhysXFluidRenderEffect::free_shared() {
 	proxy_shader.unref();
 	surf_a_texture.unref();
 	surf_b_texture.unref();
+	textures_hooked = false;
+	proxies_shown = false;
+	ready_since = UINT64_MAX;
 	shared_effect.unref();
 }
 
@@ -791,8 +823,12 @@ void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i
 	tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
 	tf.width = p_frame.x;
 	tf.height = p_frame.y;
+	tf.usage_bits |= RD::TEXTURE_USAGE_CAN_COPY_TO_BIT; // cleared on creation
 	surf_a = p_rd->texture_create(tf, RD::TextureView());
 	surf_b = p_rd->texture_create(tf, RD::TextureView());
+	// No surface anywhere until the composite has run.
+	p_rd->texture_clear(surf_a, Color(0, 0, 0, 0), 0, 1, 0, 1);
+	p_rd->texture_clear(surf_b, Color(0, 0, 0, 0), 0, 1, 0, 1);
 	tf.format = RD::DATA_FORMAT_R32_SFLOAT;
 	liquid_depth = p_rd->texture_create(tf, RD::TextureView());
 	MutexLock lock(mutex);
@@ -957,7 +993,7 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 		_dispatch(rd, PASS_FILTER, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, to) }, gx, gy, no_dir, sizeof(no_dir));
 	}
 	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, surf_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, surf_b), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, liquid_depth) }, fx, fy, nullptr, 0);
-	_write(rd, buffers, color, depth);
+	_write(rd, buffers, depth);
 	// Retired targets the proxy can no longer be reading.
 	for (uint32_t i = 0; i < retired.size();) {
 		if (rd->get_frames_drawn() > retired[i].frame + 4) {
@@ -969,14 +1005,16 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 	}
 }
 
-void PhysXFluidRenderEffect::_write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_color, const RID &p_depth) {
-	// The targets the transparent pass draws into: with MSAA the multisampled
-	// ones (the resolved copies we read get overwritten from them later).
+void PhysXFluidRenderEffect::_write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_depth) {
+	// The depth target the transparent pass tests against: with MSAA the
+	// multisampled one (the resolved copy we read gets overwritten from it
+	// later). Depth only -- no colour attachment, so nothing but depth can be
+	// written (a colour write mask alone didn't hold: the pass painted black
+	// where the liquid was solid).
 	const bool msaa = p_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED;
-	const RID color_target = msaa ? p_buffers->get_color_msaa() : p_color;
 	const RID depth_target = msaa ? p_buffers->get_depth_msaa() : p_depth;
-	ERR_FAIL_COND(!color_target.is_valid() || !depth_target.is_valid());
-	const RID framebuffer = FramebufferCacheRD::get_singleton()->get_cache(color_target, depth_target);
+	ERR_FAIL_COND(!depth_target.is_valid());
+	const RID framebuffer = FramebufferCacheRD::get_singleton()->get_cache(depth_target);
 	ERR_FAIL_COND(!framebuffer.is_valid());
 	const RD::FramebufferFormatID format = p_rd->framebuffer_get_format(framebuffer);
 	RID *pipeline = write_pipelines.getptr(format);
@@ -987,12 +1025,7 @@ void PhysXFluidRenderEffect::_write(RenderingDevice *p_rd, RenderSceneBuffersRD 
 		depth_state.enable_depth_test = true;
 		depth_state.enable_depth_write = true;
 		depth_state.depth_compare_operator = RD::COMPARE_OP_ALWAYS; // the composite already kept the nearer
-		RD::PipelineColorBlendState blend = RD::PipelineColorBlendState::create_disabled(1);
-		blend.attachments.write[0].write_r = false; // depth only: the proxy draws the colour
-		blend.attachments.write[0].write_g = false;
-		blend.attachments.write[0].write_b = false;
-		blend.attachments.write[0].write_a = false;
-		const RID created = p_rd->render_pipeline_create(write_shader, format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, depth_state, blend);
+		const RID created = p_rd->render_pipeline_create(write_shader, format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, depth_state, RD::PipelineColorBlendState());
 		ERR_FAIL_COND(!created.is_valid());
 		pipeline = &write_pipelines.insert(format, created)->value;
 	}

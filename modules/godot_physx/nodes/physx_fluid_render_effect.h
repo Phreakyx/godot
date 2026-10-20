@@ -109,6 +109,8 @@ private:
 	static Ref<Shader> proxy_shader;
 	static Ref<Texture2DRD> surf_a_texture, surf_b_texture;
 	static RID published_a, published_b;
+	static bool textures_hooked, proxies_shown;
+	static uint64_t ready_since; // Engine::get_frames_drawn() when it could first show
 	static void _update_proxy(Camera3D *p_camera);
 
 	// GPU state (render thread only).
@@ -138,7 +140,7 @@ private:
 	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size, const Size2i &p_frame);
 	void _free_targets(RenderingDevice *p_rd, bool p_now);
 	void _dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, uint32_t p_x, uint32_t p_y, const void *p_push, uint32_t p_push_size);
-	void _write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_color, const RID &p_depth);
+	void _write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_depth);
 	void _render(int p_callback_type, const RenderData *p_render_data);
 
 protected:
