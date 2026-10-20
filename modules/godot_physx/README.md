@@ -366,8 +366,8 @@ editor — press Play to see the fluid.
   default Half) is the splat and smoothing resolution; the shading and the edge
   against geometry stay full resolution. A `StandardMaterial3D`
   `material_override` sets the look as it does on a mesh (albedo and alpha: the
-  fluid's own lit colour, mixed with what's behind -- 5 cm of fluid reaches the
-  material's alpha; roughness, metallic, refraction, emission); any other
+  fluid's own lit colour, mixed with what's behind -- the material's alpha wherever
+  there's fluid, as on a mesh, and denser where it's thicker; roughness, metallic, refraction, emission); any other
   material falls back to the `screen_space_*` settings. PBD foam draws as soft white flecks over
   the surface, fading with depth below it.
 

@@ -501,7 +501,10 @@ void fragment() {
 	vec3 n = normalize(a.xyz);
 	NORMAL = n;
 	float T = a.w;
-	float own = 1.0 - exp(-body.a * T);
+	// At least the material's alpha wherever there's fluid, as on a mesh (5 cm
+	// of fluid reaches it), denser where it's thicker: a thin stream keeps its
+	// colour rather than going clear.
+	float own = 1.0 - exp(-body.a * max(T, 0.05));
 	vec2 ruv = clamp(SCREEN_UV + n.xy * refraction * min(T / 0.07, 1.0), vec2(0.0), vec2(1.0));
 	vec3 through = textureLod(screen, ruv, 0.0).rgb * exp(-absorption * T);
 	ALBEDO = mix(body.rgb * own, foam_color.rgb, foam);
