@@ -325,7 +325,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 1, r32f) uniform restrict readonly image2D zimg;
 layout(set = 0, binding = 2, r32ui) uniform restrict readonly uimage2D thick_img;
 layout(set = 0, binding = 3, rgba16f) uniform restrict writeonly image2D surf_a; // view-space normal, thickness (m)
-layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D surf_b; // eye depth (m), cover, foam, -
+layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D surf_b; // eye depth (m), cover, foam, resolved (0..1)
 layout(set = 0, binding = 5) uniform sampler2D scene_depth;
 layout(set = 0, binding = 6, r32ui) uniform restrict readonly uimage2D foam_depth_img;
 layout(set = 0, binding = 7, r32ui) uniform restrict readonly uimage2D foam_img;
@@ -353,6 +353,7 @@ void main() {
 	float T = 0.0;
 	float a = 0.0;
 	float fa = 0.0;
+	float resolved = 1.0; // how much of the surface's curvature the texels show here
 
 	vec2 l = (vec2(fpx) + 0.5) / float(p.frame.z) - 0.5;
 	ivec2 b = ivec2(floor(l));
@@ -389,15 +390,24 @@ void main() {
 		z /= coverage;
 		T /= coverage;
 		// Normal from the depth around the nearest surface texel: per axis, the
-		// neighbour on the flatter side, so silhouettes don't smear.
+		// neighbour on the flatter side, so silhouettes don't smear -- but where
+		// one side is empty, the side with fluid. (Treating the empty side as
+		// level tilted a sheet's rim toward the camera, and rims that tilt onto
+		// the sun's mirror angle flashed white.) A texel with neither neighbour
+		// on an axis keeps a level slope there.
 		float zc = imageLoad(zimg, px).r;
 		vec3 P = view_pos(vec2(px), zc);
-		float zr = zat(px + ivec2(1, 0), zc);
-		float zl = zat(px - ivec2(1, 0), zc);
-		float zu = zat(px + ivec2(0, 1), zc);
-		float zd = zat(px - ivec2(0, 1), zc);
-		vec3 ddx = abs(zr - zc) < abs(zc - zl) ? view_pos(vec2(px + ivec2(1, 0)), zr) - P : P - view_pos(vec2(px - ivec2(1, 0)), zl);
-		vec3 ddy = abs(zu - zc) < abs(zc - zd) ? view_pos(vec2(px + ivec2(0, 1)), zu) - P : P - view_pos(vec2(px - ivec2(0, 1)), zd);
+		float zr = zat(px + ivec2(1, 0), 1e30);
+		float zl = zat(px - ivec2(1, 0), 1e30);
+		float zu = zat(px + ivec2(0, 1), 1e30);
+		float zd = zat(px - ivec2(0, 1), 1e30);
+		// Neighbours with fluid: a lone texel (a droplet below the surface's
+		// resolution) or a one-texel rim can't show its own curvature.
+		resolved = (float(zr < 1e29) + float(zl < 1e29) + float(zu < 1e29) + float(zd < 1e29)) / 4.0;
+		bool use_r = zr < 1e29 && (zl > 1e29 || abs(zr - zc) < abs(zc - zl));
+		bool use_u = zu < 1e29 && (zd > 1e29 || abs(zu - zc) < abs(zc - zd));
+		vec3 ddx = use_r ? view_pos(vec2(px + ivec2(1, 0)), zr) - P : (zl < 1e29 ? P - view_pos(vec2(px - ivec2(1, 0)), zl) : view_pos(vec2(px + ivec2(1, 0)), zc) - P);
+		vec3 ddy = use_u ? view_pos(vec2(px + ivec2(0, 1)), zu) - P : (zd < 1e29 ? P - view_pos(vec2(px - ivec2(0, 1)), zd) : view_pos(vec2(px + ivec2(0, 1)), zc) - P);
 		n = normalize(cross(ddx, ddy));
 		if (dot(n, normalize(-P)) < 0.0) {
 			n = -n;
@@ -424,7 +434,7 @@ void main() {
 		}
 	}
 	imageStore(surf_a, fpx, vec4(n, T * p.shading.z));
-	imageStore(surf_b, fpx, vec4(z_out, a, fa, 0.0));
+	imageStore(surf_b, fpx, vec4(z_out, a, fa, resolved));
 	imageStore(liquid_depth, fpx, vec4(out_depth));
 }
 )",
@@ -475,6 +485,7 @@ uniform vec4 body = vec4(0.0); // rgb: colour, a: opacity per meter of fluid
 uniform float refraction = 0.04;
 uniform float surface_roughness = 0.05;
 uniform float surface_metallic = 0.0;
+varying float spec_roughness;
 uniform vec3 emission_color = vec3(0.0);
 uniform vec4 foam_color = vec4(1.0, 1.0, 1.0, 0.85);
 
@@ -499,6 +510,20 @@ void fragment() {
 	vec3 P = dir * (b.x / -dir.z);
 	LIGHT_VERTEX = P;
 	vec3 n = normalize(a.xyz);
+	// Where the texels can't show the surface's curvature (a lone droplet, a
+	// one-texel rim), its normals could point anywhere across the pixel: a
+	// rough highlight, the average over them, not a mirror of the sun.
+	spec_roughness = mix(0.7, surface_roughness, b.w * b.w);
+	// Not quite edge-on to the view: a silhouette's normals come from a depth
+	// gradient a texel or more wide, so at grazing angles a whole band of
+	// pixels -- a droplet's rim, a smear's edge -- would turn into a perfect
+	// mirror of the sky (fresnel -> 1) and read white, even in shadow. A real
+	// rim that bright is a hairline; keep the band from going past ~70 degrees.
+	vec3 Vv = normalize(-P);
+	float ndv = dot(n, Vv);
+	if (ndv < 0.35) {
+		n = normalize(n + Vv * (0.35 - ndv) / max(1.0 - 0.35 * 0.35, 0.5));
+	}
 	NORMAL = n;
 	float T = a.w;
 	// At least the material's alpha wherever there's fluid, as on a mesh (5 cm
@@ -511,7 +536,7 @@ void fragment() {
 	// (Godot's own specular adds the reflection on top; it doesn't take the
 	// grazing-angle share out of what shows through, so neither does this.)
 	EMISSION = through * (1.0 - own) * (1.0 - foam) + emission_color;
-	ROUGHNESS = mix(surface_roughness, 1.0, foam);
+	ROUGHNESS = mix(spec_roughness, 1.0, foam);
 	SPECULAR = 0.25 * (1.0 - foam); // F0 ~ 0.02: water
 	METALLIC = surface_metallic * (1.0 - foam);
 	ALPHA = clamp(max(cover, foam), 0.0, 1.0);
@@ -525,7 +550,7 @@ void fragment() {
 void light() {
 	float wrapped = max((dot(NORMAL, LIGHT) + 0.6) / 1.6, 0.0);
 	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * wrapped / PI;
-	float r = max(surface_roughness, 0.02);
+	float r = max(spec_roughness, 0.02);
 	float power = clamp(2.0 / (r * r * r * r) - 2.0, 4.0, 4096.0);
 	vec3 H = normalize(VIEW + LIGHT);
 	float F = 0.02 + 0.98 * pow(1.0 - clamp(dot(H, VIEW), 0.0, 1.0), 5.0);
