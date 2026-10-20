@@ -144,7 +144,7 @@
 			With [constant RENDER_MODE_SCREEN_SPACE], how far the surface is smoothed, in [member particle_size]: higher melts the spheres into a calmer surface.
 		</member>
 		<member name="solver" type="int" setter="set_solver" getter="get_solver" enum="PhysXParticleFluid3D.SolverBackend" default="0">
-			Which fluid solver simulates the particles. [code]Auto[/code] uses the PBD solver when a CUDA device is present and falls back to the MPM compute solver otherwise. See the class description for the differences.
+			Which fluid solver simulates the particles. [code]Auto[/code] uses the PBD solver when a CUDA device is present and falls back to the MPM compute solver otherwise; the dropdown shows which one it picks on this machine. The Inspector shows only the chosen solver's settings (the MPM group, or the PBD-only fluid, foam and anisotropy settings); the others keep their values and are still saved, for when the scene runs where Auto picks the other solver. See the class description for the differences.
 		</member>
 		<member name="spawn_on_ready" type="bool" setter="set_spawn_on_ready" getter="get_spawn_on_ready" default="true">
 			When enabled, [method spawn] runs automatically the first time the node enters the world outside the editor.

@@ -1311,8 +1311,18 @@ void PhysXParticleFluid3D::_commit_iso_mesh(RID p_mesh, PackedVector3Array &vert
 }
 
 void PhysXParticleFluid3D::_validate_property(PropertyInfo &p_property) const {
+	const String name = p_property.name;
 	// Each render mode's own settings only.
-	if ((String(p_property.name).begins_with("screen_space_") && !screen_space) || (p_property.name == SNAME("surface_anisotropy") && !_iso())) {
+	if ((name.begins_with("screen_space_") && !screen_space) || (name == "surface_anisotropy" && !_iso())) {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
+	// Each solver's own settings only -- for Auto, the solver it picks on this
+	// machine (named in the solver dropdown). Hidden values are still saved.
+	const bool mpm = _resolved_solver() == SOLVER_MPM;
+	if (mpm && (name.begins_with("foam_") || name == "surface_tension" || name == "cohesion" || name == "vorticity" || name == "adhesion" || name == "surface_friction" || name == "surface_anisotropy")) {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
+	if (!mpm && name.begins_with("mpm_")) {
 		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
 	}
 	// The MPM fluid path is block-sparse and boundless: the grid cell size is
@@ -1330,8 +1340,11 @@ void PhysXParticleFluid3D::_validate_property(PropertyInfo &p_property) const {
 	// the dropdown is just confusing. "Label:value" syntax keeps
 	// SOLVER_MPM's stored int (2) correct even with SOLVER_PBD (1) skipped.
 	GodotPhysXServer3D *server = GodotPhysXServer3D::get_singleton();
-	if (p_property.name == SNAME("solver") && (!server || !server->has_gpu())) {
-		p_property.hint_string = "Auto:0,MPM (compute):2";
+	if (p_property.name == SNAME("solver")) {
+		const bool gpu = server && server->has_gpu();
+		// Name what Auto picks here (granular always picks MPM).
+		const String auto_label = (gpu && !_is_granular()) ? "Auto (PBD here)" : "Auto (MPM here)";
+		p_property.hint_string = gpu ? auto_label + ":0,PBD (CUDA):1,MPM (compute):2" : auto_label + ":0,MPM (compute):2";
 	}
 }
 
@@ -1916,8 +1929,14 @@ PackedStringArray PhysXParticleFluid3D::get_configuration_warnings() const {
 	if (on_mpm && (int)mpm_colliders.size() > 32) {
 		warnings.push_back(RTR("MPM coupling uses at most 32 colliders (rigid bodies plus any nearby debris chunks); the rest are ignored."));
 	}
-	if (surface_anisotropy && !surface_mesh) {
-		warnings.push_back(RTR("\"Surface Anisotropy\" has no effect unless \"Surface Mesh\" is enabled."));
+	if (surface_anisotropy && !_iso()) {
+		warnings.push_back(RTR("\"Surface Anisotropy\" has no effect unless \"Render Mode\" is \"Isosurface\"."));
+	}
+	if (on_mpm && surface_anisotropy) {
+		warnings.push_back(RTR("\"Surface Anisotropy\" only applies to the PBD solver's isosurface; the MPM solver ignores it."));
+	}
+	if (on_mpm && foam_enabled && !_is_granular()) {
+		warnings.push_back(RTR("Foam is enabled, but only the PBD solver makes foam; the MPM solver ignores the Foam settings."));
 	}
 	if (surface_anisotropy && emitting) {
 		warnings.push_back(RTR("\"Surface Anisotropy\" sharpens the isosurface but can mesh fast particles along the emission stream as thin spikes. It is meant for a settled pool; disable it while emitting."));
