@@ -325,11 +325,18 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 1, r32f) uniform restrict readonly image2D zimg;
 layout(set = 0, binding = 2, r32ui) uniform restrict readonly uimage2D thick_img;
 layout(set = 0, binding = 3, rgba16f) uniform restrict writeonly image2D surf_a; // view-space normal, thickness (m)
-layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D surf_b; // eye depth (m), cover, foam, resolved (0..1)
+layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D surf_b; // eye depth (m), cover, foam, -
 layout(set = 0, binding = 5) uniform sampler2D scene_depth;
 layout(set = 0, binding = 6, r32ui) uniform restrict readonly uimage2D foam_depth_img;
 layout(set = 0, binding = 7, r32ui) uniform restrict readonly uimage2D foam_img;
 layout(set = 0, binding = 8, r32f) uniform restrict writeonly image2D liquid_depth; // the depth buffer's value here
+layout(set = 0, binding = 9, r32ui) uniform restrict readonly uimage2D raw_depth; // the splatted spheres, before smoothing
+
+// The unsmoothed depth: each particle's own sphere (+inf where empty).
+float rzat(ivec2 q) {
+	q = clamp(q, ivec2(0), p.size.xy - 1);
+	return uintBitsToFloat(imageLoad(raw_depth, q).r);
+}
 
 float zat(ivec2 q, float fallback) {
 	q = clamp(q, ivec2(0), p.size.xy - 1);
@@ -353,7 +360,6 @@ void main() {
 	float T = 0.0;
 	float a = 0.0;
 	float fa = 0.0;
-	float resolved = 1.0; // how much of the surface's curvature the texels show here
 
 	vec2 l = (vec2(fpx) + 0.5) / float(p.frame.z) - 0.5;
 	ivec2 b = ivec2(floor(l));
@@ -401,14 +407,50 @@ void main() {
 		float zl = zat(px - ivec2(1, 0), 1e30);
 		float zu = zat(px + ivec2(0, 1), 1e30);
 		float zd = zat(px - ivec2(0, 1), 1e30);
-		// Neighbours with fluid: a lone texel (a droplet below the surface's
-		// resolution) or a one-texel rim can't show its own curvature.
-		resolved = (float(zr < 1e29) + float(zl < 1e29) + float(zu < 1e29) + float(zd < 1e29)) / 4.0;
 		bool use_r = zr < 1e29 && (zl > 1e29 || abs(zr - zc) < abs(zc - zl));
 		bool use_u = zu < 1e29 && (zd > 1e29 || abs(zu - zc) < abs(zc - zd));
 		vec3 ddx = use_r ? view_pos(vec2(px + ivec2(1, 0)), zr) - P : (zl < 1e29 ? P - view_pos(vec2(px - ivec2(1, 0)), zl) : view_pos(vec2(px + ivec2(1, 0)), zc) - P);
 		vec3 ddy = use_u ? view_pos(vec2(px + ivec2(0, 1)), zu) - P : (zd < 1e29 ? P - view_pos(vec2(px - ivec2(0, 1)), zd) : view_pos(vec2(px + ivec2(0, 1)), zc) - P);
 		n = normalize(cross(ddx, ddy));
+		// Fluid that isn't part of a larger surface (droplets, a scattered
+		// smear): the smoothing is wider than it, flattening it to one depth --
+		// a flat disc facing the camera, whose rim rings and whose face mirrors
+		// the sun whole. Its normal comes from the unsmoothed depth instead, the
+		// particles' own spheres. Pools and streams keep the smoothed normal.
+		// Probed a few particle radii out, measured on screen: a close-up droplet
+		// spans many texels, and a fixed distance would land inside it (counting
+		// it as pooled, so flat and facing the camera, mirroring the sun whole).
+		float radius_px = p.absorption.a * 0.5 * abs(p.proj[1][1]) * 0.5 * float(p.size.y) / zc;
+		float probe = clamp(radius_px * 2.5, 3.0, 24.0);
+		float pooled = 0.0;
+		for (int k = 0; k < 8; k++) {
+			vec2 dir = vec2(cos(float(k) * 0.785398), sin(float(k) * 0.785398));
+			pooled += float(zat(px + ivec2(round(dir * probe)), 1e30) < 1e29);
+		}
+		pooled /= 8.0;
+		float rc = rzat(px);
+		if (pooled < 1.0 && rc < 1e30) {
+			vec3 RP = view_pos(vec2(px), rc);
+			float rr = rzat(px + ivec2(1, 0));
+			float rl = rzat(px - ivec2(1, 0));
+			float ru = rzat(px + ivec2(0, 1));
+			float rd = rzat(px - ivec2(0, 1));
+			// Per axis the nearer-in-depth neighbour, skipping empty ones (a
+			// sphere's rim): a jump to another particle isn't this one's slope.
+			bool rur = rr < 1e30 && (rl >= 1e30 || abs(rr - rc) < abs(rc - rl));
+			bool ruu = ru < 1e30 && (rd >= 1e30 || abs(ru - rc) < abs(rc - rd));
+			vec3 rdx = rur ? view_pos(vec2(px + ivec2(1, 0)), rr) - RP : (rl < 1e30 ? RP - view_pos(vec2(px - ivec2(1, 0)), rl) : vec3(1.0, 0.0, 0.0));
+			vec3 rdy = ruu ? view_pos(vec2(px + ivec2(0, 1)), ru) - RP : (rd < 1e30 ? RP - view_pos(vec2(px - ivec2(0, 1)), rd) : vec3(0.0, 1.0, 0.0));
+			vec3 rn = normalize(cross(rdx, rdy));
+			if (dot(rn, normalize(-RP)) < 0.0) {
+				rn = -rn;
+			}
+			// A body's edge (a pool's rim, a stream's sides) still has fluid in about
+			// half the directions; only loose fluid has next to none. (Blending up
+			// to 1.0 gave every silhouette the raw spheres' edge-on rim normals,
+			// outlining the pool and stream in dark.)
+			n = normalize(mix(rn, n, smoothstep(0.1, 0.35, pooled)));
+		}
 		if (dot(n, normalize(-P)) < 0.0) {
 			n = -n;
 		}
@@ -434,7 +476,7 @@ void main() {
 		}
 	}
 	imageStore(surf_a, fpx, vec4(n, T * p.shading.z));
-	imageStore(surf_b, fpx, vec4(z_out, a, fa, resolved));
+	imageStore(surf_b, fpx, vec4(z_out, a, fa, 0.0));
 	imageStore(liquid_depth, fpx, vec4(out_depth));
 }
 )",
@@ -485,7 +527,6 @@ uniform vec4 body = vec4(0.0); // rgb: colour, a: opacity per meter of fluid
 uniform float refraction = 0.04;
 uniform float surface_roughness = 0.05;
 uniform float surface_metallic = 0.0;
-varying float spec_roughness;
 uniform vec3 emission_color = vec3(0.0);
 uniform vec4 foam_color = vec4(1.0, 1.0, 1.0, 0.85);
 
@@ -510,20 +551,6 @@ void fragment() {
 	vec3 P = dir * (b.x / -dir.z);
 	LIGHT_VERTEX = P;
 	vec3 n = normalize(a.xyz);
-	// Where the texels can't show the surface's curvature (a lone droplet, a
-	// one-texel rim), its normals could point anywhere across the pixel: a
-	// rough highlight, the average over them, not a mirror of the sun.
-	spec_roughness = mix(0.7, surface_roughness, b.w * b.w);
-	// Not quite edge-on to the view: a silhouette's normals come from a depth
-	// gradient a texel or more wide, so at grazing angles a whole band of
-	// pixels -- a droplet's rim, a smear's edge -- would turn into a perfect
-	// mirror of the sky (fresnel -> 1) and read white, even in shadow. A real
-	// rim that bright is a hairline; keep the band from going past ~70 degrees.
-	vec3 Vv = normalize(-P);
-	float ndv = dot(n, Vv);
-	if (ndv < 0.35) {
-		n = normalize(n + Vv * (0.35 - ndv) / max(1.0 - 0.35 * 0.35, 0.5));
-	}
 	NORMAL = n;
 	float T = a.w;
 	// At least the material's alpha wherever there's fluid, as on a mesh (5 cm
@@ -536,7 +563,7 @@ void fragment() {
 	// (Godot's own specular adds the reflection on top; it doesn't take the
 	// grazing-angle share out of what shows through, so neither does this.)
 	EMISSION = through * (1.0 - own) * (1.0 - foam) + emission_color;
-	ROUGHNESS = mix(spec_roughness, 1.0, foam);
+	ROUGHNESS = mix(surface_roughness, 1.0, foam);
 	SPECULAR = 0.25 * (1.0 - foam); // F0 ~ 0.02: water
 	METALLIC = surface_metallic * (1.0 - foam);
 	ALPHA = clamp(max(cover, foam), 0.0, 1.0);
@@ -548,13 +575,13 @@ void fragment() {
 // apply (ATTENUATION). The highlight is a normalized Blinn-Phong with water's
 // fresnel, since writing light() replaces Godot's own.
 void light() {
-	float wrapped = max((dot(NORMAL, LIGHT) + 0.6) / 1.6, 0.0);
-	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * wrapped / PI;
-	float r = max(spec_roughness, 0.02);
+	float r = max(surface_roughness, 0.02);
 	float power = clamp(2.0 / (r * r * r * r) - 2.0, 4.0, 4096.0);
 	vec3 H = normalize(VIEW + LIGHT);
 	float F = 0.02 + 0.98 * pow(1.0 - clamp(dot(H, VIEW), 0.0, 1.0), 5.0);
 	float spec = pow(max(dot(NORMAL, H), 0.0), power) * (power + 8.0) / (8.0 * PI);
+	float wrapped = max((dot(NORMAL, LIGHT) + 0.6) / 1.6, 0.0);
+	DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * wrapped / PI;
 	SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * spec * F * max(dot(NORMAL, LIGHT), 0.0);
 }
 )";
@@ -1020,7 +1047,7 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 		const RID to = (i % 2 == 0) ? smooth_a : smooth_b;
 		_dispatch(rd, PASS_FILTER, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, to) }, gx, gy, no_dir, sizeof(no_dir));
 	}
-	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, surf_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, surf_b), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, liquid_depth) }, fx, fy, nullptr, 0);
+	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, surf_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, surf_b), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, liquid_depth), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 9, depth_u) }, fx, fy, nullptr, 0);
 	_write(rd, buffers, depth);
 	// Retired targets the proxy can no longer be reading.
 	for (uint32_t i = 0; i < retired.size();) {
