@@ -60,8 +60,7 @@
 	</methods>
 	<members>
 		<member name="adhesion" type="float" setter="set_adhesion" getter="get_adhesion" default="0.0">
-			PBD solver only. How much the fluid sticks to the surfaces it touches: [code]0[/code] runs off cleanly like water, higher values cling like honey or blood on a wall. The MPM solver ignores it.
-			[b]Note:[/b] currently has no visible effect. The value reaches PhysX, but PhysX's particle adhesion doesn't act yet in this module (a fluid slides off a wall or ceiling the same at any value); this is a known issue being worked on.
+			PBD solver only. How much the fluid sticks to the surfaces it touches: [code]0[/code] runs off cleanly like water, higher values cling like honey or blood on a wall. It pulls fluid that touches a surface back onto it, so a thin film under a ceiling hangs there instead of dripping (a single layer of particles drips below about [code]0.1[/code] and holds from about [code]0.2[/code]); thicker fluid needs more to hold its own weight. The MPM solver ignores it.
 		</member>
 		<member name="cohesion" type="float" setter="set_cohesion" getter="get_cohesion" default="0.02">
 			How strongly particles clump together. Higher values give a more gel-like fluid.

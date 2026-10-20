@@ -641,6 +641,11 @@ void GodotPhysXParticleFluid3D::_ensure_system() {
 			0.0f); // drag (deprecated)
 	ERR_FAIL_NULL(px_material);
 	px_material->setGravityScale((PxReal)gravity_scale);
+	// Adhesion only acts within restOffset * adhesionRadiusScale of a collider,
+	// and PhysX defaults the scale to 0: without this, adhesion does nothing.
+	// 2 reaches past the particle contact offset, which is the real limit (a
+	// particle further out has no contact to pull on); 3 measured the same.
+	px_material->setAdhesionRadiusScale(2.0f);
 	if (granular) {
 		// Grain-on-grain friction is a separate scale from the base coefficient;
 		// PBD particle friction is weak for piling, so crank it hard (the range
