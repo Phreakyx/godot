@@ -1289,6 +1289,10 @@ void PhysXParticleFluid3D::_commit_iso_mesh(RID p_mesh, PackedVector3Array &vert
 }
 
 void PhysXParticleFluid3D::_validate_property(PropertyInfo &p_property) const {
+	// Each render mode's own settings only.
+	if ((String(p_property.name).begins_with("screen_space_") && !screen_space) || (p_property.name == SNAME("surface_anisotropy") && !_iso())) {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
 	// The MPM fluid path is block-sparse and boundless: the grid cell size is
 	// 2 x particle_size and there is no box, so mpm_grid_resolution has no effect.
 	// PhysXGranular3D's dense box grid still uses it (this runs for that subclass
@@ -1711,6 +1715,29 @@ void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int 
 	s.absorption = screen_space_absorption;
 	s.sky = screen_space_sky;
 	s.refraction = screen_space_refraction;
+	// A StandardMaterial3D (or ORMMaterial3D) override is translated; anything
+	// else leaves the screen_space_* settings (see the configuration warning).
+	const Ref<BaseMaterial3D> mat = get_material_override();
+	if (mat.is_valid()) {
+		const Color albedo = mat->get_albedo().srgb_to_linear();
+		// 10 cm of fluid transmits the albedo colour.
+		for (int c = 0; c < 3; c++) {
+			s.absorption.components[c] = -Math::log(CLAMP(albedo.components[c], 0.02f, 0.999f)) / 0.1f;
+		}
+		// Alpha: how fast the fluid turns into its own lit colour -- 5 cm of
+		// fluid reaches the material's alpha; an opaque material, at once.
+		const float a = mat->get_transparency() == BaseMaterial3D::TRANSPARENCY_DISABLED ? 1.0f : CLAMP((float)mat->get_albedo().a, 0.0f, 0.999f);
+		s.surface = Color(albedo.r, albedo.g, albedo.b, a >= 0.999f ? 1000.0f : -Math::log(1.0f - a) / 0.05f);
+		const float r = CLAMP((float)mat->get_roughness(), 0.0f, 1.0f);
+		s.highlight_power = CLAMP(2.0f / MAX(r * r * r * r, 1e-5f) - 2.0f, 8.0f, 2048.0f);
+		s.highlight_strength = 1.0f - 0.75f * r;
+		if (mat->get_feature(BaseMaterial3D::FEATURE_REFRACTION)) {
+			s.refraction = mat->get_refraction();
+		}
+		if (mat->get_feature(BaseMaterial3D::FEATURE_EMISSION)) {
+			s.emission = mat->get_emission().srgb_to_linear() * mat->get_emission_energy_multiplier();
+		}
+	}
 	s.smoothing = MAX(particle_size * screen_space_smoothing, 0.0001f);
 	s.depth_threshold = MAX(radius * 2.0f, 0.0001f);
 	s.fade_thickness = MAX(radius * 3.0f, 0.0001f);
@@ -1738,7 +1765,17 @@ void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int 
 	PhysXFluidRenderEffect::set_fluid(get_instance_id(), s);
 }
 
-void PhysXParticleFluid3D::set_screen_space(bool p_enabled) {
+void PhysXParticleFluid3D::set_render_mode(RenderMode p_mode) {
+	if (get_render_mode() == p_mode) {
+		return;
+	}
+	_set_screen_space(p_mode == RENDER_MODE_SCREEN_SPACE);
+	set_surface_mesh(p_mode == RENDER_MODE_ISOSURFACE);
+	notify_property_list_changed();
+	update_configuration_warnings();
+}
+
+void PhysXParticleFluid3D::_set_screen_space(bool p_enabled) {
 	if (screen_space == p_enabled) {
 		return;
 	}
@@ -1836,6 +1873,9 @@ PackedStringArray PhysXParticleFluid3D::get_configuration_warnings() const {
 	GodotPhysXServer3D *server = GodotPhysXServer3D::get_singleton();
 	const bool on_mpm = _resolved_solver() == SOLVER_MPM;
 
+	if (screen_space && get_material_override().is_valid() && Object::cast_to<BaseMaterial3D>(get_material_override().ptr()) == nullptr) {
+		warnings.push_back(RTR("Screen space reads a StandardMaterial3D's colour, transparency, roughness, refraction and emission; this material override isn't one, so the Screen Space settings are used instead."));
+	}
 	const String engine = GLOBAL_GET("physics/3d/physics_engine");
 	if (!on_mpm && engine != "PhysX" && engine != "DEFAULT") {
 		warnings.push_back(RTR("The PBD backend only does anything when Project Settings > Physics > 3D > Physics Engine is set to \"PhysX\"."));
@@ -1916,8 +1956,8 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_emission_velocity"), &PhysXParticleFluid3D::get_emission_velocity);
 	ClassDB::bind_method(D_METHOD("set_surface_mesh", "enabled"), &PhysXParticleFluid3D::set_surface_mesh);
 	ClassDB::bind_method(D_METHOD("is_surface_mesh"), &PhysXParticleFluid3D::is_surface_mesh);
-	ClassDB::bind_method(D_METHOD("set_screen_space", "enabled"), &PhysXParticleFluid3D::set_screen_space);
-	ClassDB::bind_method(D_METHOD("is_screen_space"), &PhysXParticleFluid3D::is_screen_space);
+	ClassDB::bind_method(D_METHOD("set_render_mode", "mode"), &PhysXParticleFluid3D::set_render_mode);
+	ClassDB::bind_method(D_METHOD("get_render_mode"), &PhysXParticleFluid3D::get_render_mode);
 	ClassDB::bind_method(D_METHOD("set_screen_space_resolution", "resolution"), &PhysXParticleFluid3D::set_screen_space_resolution);
 	ClassDB::bind_method(D_METHOD("get_screen_space_resolution"), &PhysXParticleFluid3D::get_screen_space_resolution);
 	ClassDB::bind_method(D_METHOD("set_screen_space_radius", "radius"), &PhysXParticleFluid3D::set_screen_space_radius);
@@ -1950,6 +1990,9 @@ void PhysXParticleFluid3D::_bind_methods() {
 	BIND_ENUM_CONSTANT(SOLVER_AUTO);
 	BIND_ENUM_CONSTANT(SOLVER_PBD);
 	BIND_ENUM_CONSTANT(SOLVER_MPM);
+	BIND_ENUM_CONSTANT(RENDER_MODE_PARTICLES);
+	BIND_ENUM_CONSTANT(RENDER_MODE_ISOSURFACE);
+	BIND_ENUM_CONSTANT(RENDER_MODE_SCREEN_SPACE);
 	BIND_ENUM_CONSTANT(SCREEN_SPACE_RESOLUTION_FULL);
 	BIND_ENUM_CONSTANT(SCREEN_SPACE_RESOLUTION_HALF);
 	BIND_ENUM_CONSTANT(SCREEN_SPACE_RESOLUTION_QUARTER);
@@ -1973,10 +2016,11 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "emission_radius", PROPERTY_HINT_RANGE, "0,2,0.001,or_greater,suffix:m"), "set_emission_radius", "get_emission_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "emission_velocity", PROPERTY_HINT_NONE, "suffix:m/s"), "set_emission_velocity", "get_emission_velocity");
 	ADD_GROUP("Rendering", "");
-	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "surface_mesh"), "set_surface_mesh", "is_surface_mesh");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "render_mode", PROPERTY_HINT_ENUM, "Particles,Isosurface,Screen Space"), "set_render_mode", "get_render_mode");
+	// The old switch: still loaded (true -> render_mode Isosurface), no longer shown or saved.
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "surface_mesh", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "set_surface_mesh", "is_surface_mesh");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "surface_anisotropy"), "set_surface_anisotropy", "is_surface_anisotropy");
 	ADD_SUBGROUP("Screen Space", "screen_space_");
-	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "screen_space"), "set_screen_space", "is_screen_space");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "screen_space_resolution", PROPERTY_HINT_ENUM, "Full,Half,Quarter"), "set_screen_space_resolution", "get_screen_space_resolution");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_radius", PROPERTY_HINT_RANGE, "0.25,4,0.01"), "set_screen_space_radius", "get_screen_space_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_smoothing", PROPERTY_HINT_RANGE, "0,8,0.01"), "set_screen_space_smoothing", "get_screen_space_smoothing");

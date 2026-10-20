@@ -71,6 +71,9 @@ layout(set = 0, binding = 0, std140) uniform Params {
 	vec4 misc; // x: refraction, y: smoothing radius (m), z: max splat / filter radius (px), w: thickness units per meter
 	ivec4 size; // xy: the surface buffers (the frame / frame.z), z: particles
 	ivec4 frame; // xy: the frame, z: frame pixels per surface texel, each way
+	vec4 surface; // rgb: the body colour (linear), a: opacity per meter of fluid (0: clear)
+	vec4 shading; // x: highlight power, y: highlight strength
+	vec4 emission; // rgb, added
 } p;
 
 // Eye-space depth (meters in front of the camera) of a point on the pixel's ray.
@@ -324,10 +327,15 @@ void main() {
 	}
 	vec2 ruv = clamp(uv + n.xy * p.misc.x * min(T, 1.0), vec2(0.0), vec2(1.0));
 	vec3 refracted = textureLod(scene_color, ruv, 0.0).rgb * exp(-p.absorption.rgb * T);
-	float F = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
 	vec3 L = normalize(p.light_dir.xyz);
-	float spec = pow(max(dot(n, normalize(L + V)), 0.0), 160.0) * p.light_dir.w;
-	vec3 col = mix(refracted, p.sky.rgb, F) + spec * p.light_color.rgb;
+	// An opaque-ish fluid (the material's alpha) shows its own lit colour more
+	// the thicker it is.
+	float body = 1.0 - exp(-p.surface.a * T);
+	vec3 lit = p.surface.rgb * (0.3 + 0.7 * max(dot(n, L), 0.0) * p.light_dir.w * p.light_color.rgb);
+	refracted = mix(refracted, lit, body);
+	float F = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
+	float spec = pow(max(dot(n, normalize(L + V)), 0.0), p.shading.x) * p.shading.y * p.light_dir.w;
+	vec3 col = mix(refracted, p.sky.rgb, F) + spec * p.light_color.rgb + p.emission.rgb;
 	// Thin fluid (a lone droplet, a sheet's edge) fades into the scene rather
 	// than drawing as a hard bubble; so does the edge of the coverage.
 	float a = smoothstep(0.0, p.light_color.a, T) * coverage;
@@ -688,6 +696,15 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 	f[67] = 1000.0f; // thickness: millimeters in the uint buffer
 	const int32_t ints[8] = { low.x, low.y, (int32_t)count, 0, frame.x, frame.y, div, 0 };
 	memcpy(f + 68, ints, sizeof(ints));
+	f[76] = look.surface.r;
+	f[77] = look.surface.g;
+	f[78] = look.surface.b;
+	f[79] = look.surface.a;
+	f[80] = look.highlight_power;
+	f[81] = look.highlight_strength;
+	f[84] = look.emission.r;
+	f[85] = look.emission.g;
+	f[86] = look.emission.b;
 	rd->buffer_update(params_buffer, 0, sizeof(f), f);
 
 	const uint32_t gx = (low.x + 7) / 8;

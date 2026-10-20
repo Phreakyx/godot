@@ -57,6 +57,11 @@ public:
 		SOLVER_PBD,
 		SOLVER_MPM,
 	};
+	enum RenderMode {
+		RENDER_MODE_PARTICLES, // a sphere per particle (MultiMesh)
+		RENDER_MODE_ISOSURFACE, // a marched mesh
+		RENDER_MODE_SCREEN_SPACE, // splatted, smoothed and shaded each frame (PhysXFluidRenderEffect)
+	};
 	enum ScreenSpaceResolution {
 		SCREEN_SPACE_RESOLUTION_FULL,
 		SCREEN_SPACE_RESOLUTION_HALF,
@@ -155,9 +160,9 @@ private:
 	// Opt-in: feed PhysX per-particle anisotropy to the isosurface extractor.
 	// Crisper crests, but it needles fast particles, so keep it off while emitting.
 	bool surface_anisotropy = false;
-	// When true, the fluid draws as a screen-space surface (PhysXFluidRenderEffect): the particles are splatted,
-	// smoothed and shaded each frame instead of an isosurface mesh being marched every step. Takes precedence
-	// over surface_mesh.
+	// render_mode is one choice, kept as these two flags (surface_mesh is also the old property, still loaded):
+	// screen_space -- the particles are splatted, smoothed and shaded each frame (PhysXFluidRenderEffect)
+	// instead of an isosurface mesh being marched every step.
 	bool screen_space = false;
 	ScreenSpaceResolution screen_space_resolution = SCREEN_SPACE_RESOLUTION_HALF;
 	float screen_space_radius = 1.5f; // splat radius, in particle_size
@@ -172,6 +177,7 @@ private:
 	void _screen_space_attach();
 	void _screen_space_detach();
 	void _screen_space_publish(const float *p_transforms, int p_count);
+	void _set_screen_space(bool p_enabled);
 	RID array_mesh;
 	// Own world-space instance, like foam_mesh_instance below -- isosurface
 	// vertices come back in world space, and the mesh is only re-marched every
@@ -287,8 +293,8 @@ public:
 	bool is_surface_mesh() const { return surface_mesh; }
 	void set_surface_anisotropy(bool p_enabled);
 	bool is_surface_anisotropy() const { return surface_anisotropy; }
-	void set_screen_space(bool p_enabled);
-	bool is_screen_space() const { return screen_space; }
+	void set_render_mode(RenderMode p_mode);
+	RenderMode get_render_mode() const { return screen_space ? RENDER_MODE_SCREEN_SPACE : (surface_mesh ? RENDER_MODE_ISOSURFACE : RENDER_MODE_PARTICLES); }
 	void set_screen_space_resolution(ScreenSpaceResolution p_resolution) { screen_space_resolution = p_resolution; }
 	ScreenSpaceResolution get_screen_space_resolution() const { return screen_space_resolution; }
 	void set_screen_space_radius(float p_radius) { screen_space_radius = MAX(p_radius, 0.05f); }
@@ -338,3 +344,4 @@ public:
 
 VARIANT_ENUM_CAST(PhysXParticleFluid3D::SolverBackend);
 VARIANT_ENUM_CAST(PhysXParticleFluid3D::ScreenSpaceResolution);
+VARIANT_ENUM_CAST(PhysXParticleFluid3D::RenderMode);

@@ -65,6 +65,10 @@ public:
 		float depth_threshold = 0.04f; // a depth jump larger than this is an edge the smoothing keeps
 		float fade_thickness = 0.06f; // fluid thinner than this fades into the scene
 		int resolution_divisor = 2; // frame pixels per surface texel, each way (1, 2 or 4)
+		Color surface = Color(0, 0, 0, 0); // body colour (linear); a: opacity per meter of fluid, 0 = clear
+		float highlight_power = 160.0f; // the sun highlight's tightness (Blinn-Phong exponent)
+		float highlight_strength = 1.0f;
+		Color emission = Color(0, 0, 0);
 		Vector3 light_direction = Vector3(0, -1, 0); // world, toward the scene
 		Color light_color = Color(1, 1, 1);
 		Vector3 center;
@@ -96,7 +100,7 @@ private:
 	static void _restore(const ObjectID &p_compositor);
 
 	// GPU state (render thread only).
-	static constexpr uint32_t PARAMS_FLOATS = 76; // the shaders' Params block, std140
+	static constexpr uint32_t PARAMS_FLOATS = 88; // the shaders' Params block, std140
 	bool failed = false;
 	RID shaders[6];
 	RID pipelines[6];
