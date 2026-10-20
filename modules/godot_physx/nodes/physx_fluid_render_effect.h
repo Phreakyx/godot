@@ -64,6 +64,7 @@ public:
 		float smoothing = 0.04f; // world radius of the depth smoothing
 		float depth_threshold = 0.04f; // a depth jump larger than this is an edge the smoothing keeps
 		float fade_thickness = 0.06f; // fluid thinner than this fades into the scene
+		int resolution_divisor = 2; // frame pixels per surface texel, each way (1, 2 or 4)
 		Vector3 light_direction = Vector3(0, -1, 0); // world, toward the scene
 		Color light_color = Color(1, 1, 1);
 		Vector3 center;
@@ -95,7 +96,7 @@ private:
 	static void _restore(const ObjectID &p_compositor);
 
 	// GPU state (render thread only).
-	static constexpr uint32_t PARAMS_FLOATS = 72; // the shaders' Params block, std140
+	static constexpr uint32_t PARAMS_FLOATS = 76; // the shaders' Params block, std140
 	bool failed = false;
 	RID shaders[6];
 	RID pipelines[6];
@@ -103,11 +104,12 @@ private:
 	RID params_buffer;
 	RID points_buffer;
 	uint32_t points_capacity = 0;
-	Size2i size;
+	Size2i size; // the surface buffers
+	Size2i frame_size; // the colour copy
 	RID depth_u, thick_u, smooth_a, smooth_b, scene_copy;
 
 	bool _ensure(RenderingDevice *p_rd);
-	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size);
+	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size, const Size2i &p_frame);
 	void _free_targets(RenderingDevice *p_rd);
 	void _dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, uint32_t p_x, uint32_t p_y, const void *p_push, uint32_t p_push_size);
 	void _render(int p_callback_type, const RenderData *p_render_data);

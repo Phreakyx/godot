@@ -57,6 +57,11 @@ public:
 		SOLVER_PBD,
 		SOLVER_MPM,
 	};
+	enum ScreenSpaceResolution {
+		SCREEN_SPACE_RESOLUTION_FULL,
+		SCREEN_SPACE_RESOLUTION_HALF,
+		SCREEN_SPACE_RESOLUTION_QUARTER,
+	};
 
 protected:
 	// PhysXGranular3D overrides these to run the material as Drucker-Prager
@@ -154,6 +159,7 @@ private:
 	// smoothed and shaded each frame instead of an isosurface mesh being marched every step. Takes precedence
 	// over surface_mesh.
 	bool screen_space = false;
+	ScreenSpaceResolution screen_space_resolution = SCREEN_SPACE_RESOLUTION_HALF;
 	float screen_space_radius = 1.5f; // splat radius, in particle_size
 	float screen_space_smoothing = 3.0f; // depth smoothing radius, in particle_size
 	float screen_space_refraction = 0.04f;
@@ -283,6 +289,8 @@ public:
 	bool is_surface_anisotropy() const { return surface_anisotropy; }
 	void set_screen_space(bool p_enabled);
 	bool is_screen_space() const { return screen_space; }
+	void set_screen_space_resolution(ScreenSpaceResolution p_resolution) { screen_space_resolution = p_resolution; }
+	ScreenSpaceResolution get_screen_space_resolution() const { return screen_space_resolution; }
 	void set_screen_space_radius(float p_radius) { screen_space_radius = MAX(p_radius, 0.05f); }
 	float get_screen_space_radius() const { return screen_space_radius; }
 	void set_screen_space_smoothing(float p_smoothing) { screen_space_smoothing = MAX(p_smoothing, 0.0f); }
@@ -329,3 +337,4 @@ public:
 };
 
 VARIANT_ENUM_CAST(PhysXParticleFluid3D::SolverBackend);
+VARIANT_ENUM_CAST(PhysXParticleFluid3D::ScreenSpaceResolution);

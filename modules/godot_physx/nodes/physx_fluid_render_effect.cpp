@@ -69,7 +69,8 @@ layout(set = 0, binding = 0, std140) uniform Params {
 	vec4 light_dir; // xyz: view space, toward the light
 	vec4 light_color; // a: the thickness (m) under which the fluid fades out
 	vec4 misc; // x: refraction, y: smoothing radius (m), z: max splat / filter radius (px), w: thickness units per meter
-	ivec4 size; // xy: the frame, z: particles
+	ivec4 size; // xy: the surface buffers (the frame / frame.z), z: particles
+	ivec4 frame; // xy: the frame, z: frame pixels per surface texel, each way
 } p;
 
 // Eye-space depth (meters in front of the camera) of a point on the pixel's ray.
@@ -114,8 +115,9 @@ layout(set = 0, binding = 3, std430) restrict readonly buffer Points {
 layout(set = 0, binding = 4) uniform sampler2D scene_depth;
 
 float scene_eye_depth(ivec2 px) {
-	float d = texelFetch(scene_depth, px, 0).r;
-	vec2 ndc = (vec2(px) + 0.5) / vec2(p.size.xy) * 2.0 - 1.0;
+	ivec2 fpx = min(px * p.frame.z + p.frame.z / 2, p.frame.xy - 1);
+	float d = texelFetch(scene_depth, fpx, 0).r;
+	vec2 ndc = (vec2(fpx) + 0.5) / vec2(p.frame.xy) * 2.0 - 1.0;
 	vec4 v = p.inv_proj * vec4(ndc, d, 1.0);
 	return -v.z / v.w;
 }
@@ -236,13 +238,18 @@ layout(set = 0, binding = 1, rgba16f) uniform restrict readonly image2D src;
 layout(set = 0, binding = 2, rgba16f) uniform restrict writeonly image2D dst;
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(px, p.size.xy))) {
+	if (any(greaterThanEqual(px, p.frame.xy))) {
 		return;
 	}
 	imageStore(dst, px, imageLoad(src, px));
 }
 )",
-	// PASS_COMPOSITE: shade the smoothed surface into the frame.
+	// PASS_COMPOSITE (full resolution): shade the smoothed surface into the
+	// frame. At a reduced resolution each frame pixel blends the 2x2 surface
+	// texels around it that hold fluid -- the share that do is its coverage,
+	// a soft edge against the background -- and is tested against the scene's
+	// own full-resolution depth, so where the fluid meets geometry the edge
+	// stays sharp.
 	R"(
 #[compute]
 #version 450
@@ -252,6 +259,7 @@ layout(set = 0, binding = 1, r32f) uniform restrict readonly image2D zimg;
 layout(set = 0, binding = 2, r32ui) uniform restrict readonly uimage2D thick_img;
 layout(set = 0, binding = 3) uniform sampler2D scene_color;
 layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D color_img;
+layout(set = 0, binding = 5) uniform sampler2D scene_depth;
 
 float zat(ivec2 q, float fallback) {
 	q = clamp(q, ivec2(0), p.size.xy - 1);
@@ -260,30 +268,60 @@ float zat(ivec2 q, float fallback) {
 }
 
 void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(px, p.size.xy))) {
+	ivec2 fpx = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(fpx, p.frame.xy))) {
 		return;
 	}
-	float z = imageLoad(zimg, px).r;
-	if (z > 1e30) {
+	vec2 l = (vec2(fpx) + 0.5) / float(p.frame.z) - 0.5;
+	ivec2 b = ivec2(floor(l));
+	vec2 t = l - vec2(b);
+	ivec2 qs[4] = ivec2[](b, b + ivec2(1, 0), b + ivec2(0, 1), b + ivec2(1, 1));
+	float ws[4] = float[]((1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y);
+	float coverage = 0.0;
+	float z = 0.0;
+	float T = 0.0;
+	float best = -1.0;
+	ivec2 px = b;
+	for (int k = 0; k < 4; k++) {
+		ivec2 q = clamp(qs[k], ivec2(0), p.size.xy - 1);
+		float zk = imageLoad(zimg, q).r;
+		if (zk > 1e30) {
+			continue;
+		}
+		coverage += ws[k];
+		z += zk * ws[k];
+		T += float(imageLoad(thick_img, q).r) / p.misc.w * ws[k];
+		if (ws[k] > best) {
+			best = ws[k];
+			px = q;
+		}
+	}
+	if (coverage <= 0.0) {
 		return;
 	}
-	vec3 P = view_pos(vec2(px), z);
-	// Normal from the depth: per axis, the neighbour on the flatter side, so
-	// silhouettes don't smear.
-	float zr = zat(px + ivec2(1, 0), z);
-	float zl = zat(px - ivec2(1, 0), z);
-	float zu = zat(px + ivec2(0, 1), z);
-	float zd = zat(px - ivec2(0, 1), z);
-	vec3 ddx = abs(zr - z) < abs(z - zl) ? view_pos(vec2(px + ivec2(1, 0)), zr) - P : P - view_pos(vec2(px - ivec2(1, 0)), zl);
-	vec3 ddy = abs(zu - z) < abs(z - zd) ? view_pos(vec2(px + ivec2(0, 1)), zu) - P : P - view_pos(vec2(px - ivec2(0, 1)), zd);
+	z /= coverage;
+	T /= coverage;
+	// Behind the scene's geometry at this exact pixel?
+	vec2 uv = (vec2(fpx) + 0.5) / vec2(p.frame.xy);
+	vec4 sv = p.inv_proj * vec4(uv * 2.0 - 1.0, texelFetch(scene_depth, fpx, 0).r, 1.0);
+	if (z > -sv.z / sv.w) {
+		return;
+	}
+	// Normal from the depth around the nearest surface texel: per axis, the
+	// neighbour on the flatter side, so silhouettes don't smear.
+	float zc = imageLoad(zimg, px).r;
+	vec3 P = view_pos(vec2(px), zc);
+	float zr = zat(px + ivec2(1, 0), zc);
+	float zl = zat(px - ivec2(1, 0), zc);
+	float zu = zat(px + ivec2(0, 1), zc);
+	float zd = zat(px - ivec2(0, 1), zc);
+	vec3 ddx = abs(zr - zc) < abs(zc - zl) ? view_pos(vec2(px + ivec2(1, 0)), zr) - P : P - view_pos(vec2(px - ivec2(1, 0)), zl);
+	vec3 ddy = abs(zu - zc) < abs(zc - zd) ? view_pos(vec2(px + ivec2(0, 1)), zu) - P : P - view_pos(vec2(px - ivec2(0, 1)), zd);
 	vec3 n = normalize(cross(ddx, ddy));
 	vec3 V = normalize(-P);
 	if (dot(n, V) < 0.0) {
 		n = -n;
 	}
-	float T = float(imageLoad(thick_img, px).r) / p.misc.w;
-	vec2 uv = (vec2(px) + 0.5) / vec2(p.size.xy);
 	vec2 ruv = clamp(uv + n.xy * p.misc.x * min(T, 1.0), vec2(0.0), vec2(1.0));
 	vec3 refracted = textureLod(scene_color, ruv, 0.0).rgb * exp(-p.absorption.rgb * T);
 	float F = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
@@ -291,10 +329,10 @@ void main() {
 	float spec = pow(max(dot(n, normalize(L + V)), 0.0), 160.0) * p.light_dir.w;
 	vec3 col = mix(refracted, p.sky.rgb, F) + spec * p.light_color.rgb;
 	// Thin fluid (a lone droplet, a sheet's edge) fades into the scene rather
-	// than drawing as a hard bubble.
-	float a = smoothstep(0.0, p.light_color.a, T);
+	// than drawing as a hard bubble; so does the edge of the coverage.
+	float a = smoothstep(0.0, p.light_color.a, T) * coverage;
 	col = mix(textureLod(scene_color, uv, 0.0).rgb, col, a);
-	imageStore(color_img, px, vec4(col, 1.0));
+	imageStore(color_img, fpx, vec4(col, 1.0));
 }
 )",
 };
@@ -510,14 +548,16 @@ void PhysXFluidRenderEffect::_free_targets(RenderingDevice *p_rd) {
 		}
 	}
 	size = Size2i();
+	frame_size = Size2i();
 }
 
-void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i &p_size) {
-	if (p_size == size && depth_u.is_valid()) {
+void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i &p_size, const Size2i &p_frame) {
+	if (p_size == size && p_frame == frame_size && depth_u.is_valid()) {
 		return;
 	}
 	_free_targets(p_rd);
 	size = p_size;
+	frame_size = p_frame;
 	RD::TextureFormat tf;
 	tf.width = p_size.x;
 	tf.height = p_size.y;
@@ -531,6 +571,8 @@ void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i
 	smooth_a = p_rd->texture_create(tf, RD::TextureView());
 	smooth_b = p_rd->texture_create(tf, RD::TextureView());
 	tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+	tf.width = p_frame.x;
+	tf.height = p_frame.y;
 	scene_copy = p_rd->texture_create(tf, RD::TextureView());
 }
 
@@ -590,8 +632,6 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 	if (frame.x <= 0 || frame.y <= 0 || !color.is_valid() || !depth.is_valid()) {
 		return;
 	}
-	_ensure_targets(rd, frame);
-
 	// Nearest fluid's look.
 	const Transform3D cam = scene->get_cam_transform();
 	{
@@ -605,6 +645,10 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 			}
 		}
 	}
+
+	const int div = look.resolution_divisor;
+	const Size2i low((frame.x + div - 1) / div, (frame.y + div - 1) / div);
+	_ensure_targets(rd, low, frame);
 
 	const uint32_t count = points.size() / 4;
 	if (count > points_capacity) {
@@ -642,12 +686,14 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 	f[65] = look.smoothing;
 	f[66] = 24.0f; // max splat / filter radius, px
 	f[67] = 1000.0f; // thickness: millimeters in the uint buffer
-	const int32_t ints[4] = { frame.x, frame.y, (int32_t)count, 0 };
+	const int32_t ints[8] = { low.x, low.y, (int32_t)count, 0, frame.x, frame.y, div, 0 };
 	memcpy(f + 68, ints, sizeof(ints));
 	rd->buffer_update(params_buffer, 0, sizeof(f), f);
 
-	const uint32_t gx = (frame.x + 7) / 8;
-	const uint32_t gy = (frame.y + 7) / 8;
+	const uint32_t gx = (low.x + 7) / 8;
+	const uint32_t gy = (low.y + 7) / 8;
+	const uint32_t fx = (frame.x + 7) / 8;
+	const uint32_t fy = (frame.y + 7) / 8;
 	const RD::Uniform params(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 0, params_buffer);
 	_dispatch(rd, PASS_CLEAR, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u) }, gx, gy, nullptr, 0);
 	_dispatch(rd, PASS_SPLAT, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_STORAGE_BUFFER, 3, points_buffer), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 4, Vector<RID>({ point_sampler, depth })) }, (count + 63) / 64, 1, nullptr, 0);
@@ -658,6 +704,6 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 		const RID to = (i % 2 == 0) ? smooth_a : smooth_b;
 		_dispatch(rd, PASS_FILTER, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, to) }, gx, gy, no_dir, sizeof(no_dir));
 	}
-	_dispatch(rd, PASS_COPY, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, color), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, scene_copy) }, gx, gy, nullptr, 0);
-	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, scene_copy })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, color) }, gx, gy, nullptr, 0);
+	_dispatch(rd, PASS_COPY, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, color), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, scene_copy) }, fx, fy, nullptr, 0);
+	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, scene_copy })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, color), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })) }, fx, fy, nullptr, 0);
 }

@@ -1714,6 +1714,7 @@ void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int 
 	s.smoothing = MAX(particle_size * screen_space_smoothing, 0.0001f);
 	s.depth_threshold = MAX(radius * 2.0f, 0.0001f);
 	s.fade_thickness = MAX(radius * 3.0f, 0.0001f);
+	s.resolution_divisor = screen_space_resolution == SCREEN_SPACE_RESOLUTION_FULL ? 1 : (screen_space_resolution == SCREEN_SPACE_RESOLUTION_HALF ? 2 : 4);
 	s.center = get_global_position();
 	// The scene's sun, for the highlight (found once, like PhysXFlow3D's).
 	DirectionalLight3D *light = Object::cast_to<DirectionalLight3D>(ObjectDB::get_instance(screen_space_light));
@@ -1917,6 +1918,8 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_surface_mesh"), &PhysXParticleFluid3D::is_surface_mesh);
 	ClassDB::bind_method(D_METHOD("set_screen_space", "enabled"), &PhysXParticleFluid3D::set_screen_space);
 	ClassDB::bind_method(D_METHOD("is_screen_space"), &PhysXParticleFluid3D::is_screen_space);
+	ClassDB::bind_method(D_METHOD("set_screen_space_resolution", "resolution"), &PhysXParticleFluid3D::set_screen_space_resolution);
+	ClassDB::bind_method(D_METHOD("get_screen_space_resolution"), &PhysXParticleFluid3D::get_screen_space_resolution);
 	ClassDB::bind_method(D_METHOD("set_screen_space_radius", "radius"), &PhysXParticleFluid3D::set_screen_space_radius);
 	ClassDB::bind_method(D_METHOD("get_screen_space_radius"), &PhysXParticleFluid3D::get_screen_space_radius);
 	ClassDB::bind_method(D_METHOD("set_screen_space_smoothing", "smoothing"), &PhysXParticleFluid3D::set_screen_space_smoothing);
@@ -1947,6 +1950,9 @@ void PhysXParticleFluid3D::_bind_methods() {
 	BIND_ENUM_CONSTANT(SOLVER_AUTO);
 	BIND_ENUM_CONSTANT(SOLVER_PBD);
 	BIND_ENUM_CONSTANT(SOLVER_MPM);
+	BIND_ENUM_CONSTANT(SCREEN_SPACE_RESOLUTION_FULL);
+	BIND_ENUM_CONSTANT(SCREEN_SPACE_RESOLUTION_HALF);
+	BIND_ENUM_CONSTANT(SCREEN_SPACE_RESOLUTION_QUARTER);
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "solver", PROPERTY_HINT_ENUM, "Auto,PBD (CUDA),MPM (compute)"), "set_solver", "get_solver");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "particle_count", PROPERTY_HINT_RANGE, "1,262144,1"), "set_particle_count", "get_particle_count");
@@ -1971,6 +1977,7 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "surface_anisotropy"), "set_surface_anisotropy", "is_surface_anisotropy");
 	ADD_SUBGROUP("Screen Space", "screen_space_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "screen_space"), "set_screen_space", "is_screen_space");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "screen_space_resolution", PROPERTY_HINT_ENUM, "Full,Half,Quarter"), "set_screen_space_resolution", "get_screen_space_resolution");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_radius", PROPERTY_HINT_RANGE, "0.25,4,0.01"), "set_screen_space_radius", "get_screen_space_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_smoothing", PROPERTY_HINT_RANGE, "0,8,0.01"), "set_screen_space_smoothing", "get_screen_space_smoothing");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_refraction", PROPERTY_HINT_RANGE, "0,0.3,0.001"), "set_screen_space_refraction", "get_screen_space_refraction");
