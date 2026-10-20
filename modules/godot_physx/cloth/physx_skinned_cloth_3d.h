@@ -94,10 +94,20 @@ class PhysXSkinnedCloth3D : public Node3D {
 		bool from_shape = false;
 		Transform3D shape_local; // bone space: body_offset * shape transform
 		float half_length = 0.0f; // along the shape's local Y
+		// From a physical bone: the nodes, re-read every frame (sizes, offsets
+		// and disabling apply live), and whether it's a box.
+		ObjectID body_id;
+		ObjectID shape_id;
+		bool is_box = false;
+		Vector3 half_extents; // box, in its own (unscaled) space
+		bool active = true;
+		Transform3D bone_world; // bone_a's world transform at the last capture
+		Vector3 end_world; // automatic capsules: bone_b's head then
 	};
 	bool using_physical_bones = false;
 	Vector<Capsule> capsules;
 	PackedFloat32Array prev_capsules; // last frame's capsule ends, for blending across substeps
+	PackedFloat32Array prev_boxes; // last frame's boxes, likewise
 	int particle_count = 0;
 	bool built = false;
 	bool build_pending = false;
@@ -106,6 +116,8 @@ class PhysXSkinnedCloth3D : public Node3D {
 	void _clear();
 	void _find_capsules(Skeleton3D *p_skeleton);
 	bool _find_physical_bone_shapes(Skeleton3D *p_skeleton);
+	static bool _read_shape(Capsule &r_c);
+	void _pack_colliders();
 	void _fit_capsules(Skeleton3D *p_skeleton, MeshInstance3D *p_body);
 	void _step();
 	// The skeleton's FINAL pose — after its modifiers (IK, spring bones, ...) — exists only while the skeleton
@@ -119,6 +131,7 @@ class PhysXSkinnedCloth3D : public Node3D {
 	ObjectID connected_skeleton_id;
 	PackedFloat32Array captured_bones; // per skin bind: skel_xform * global pose * bind pose (mat4)
 	PackedFloat32Array captured_capsules; // per capsule: a.xyz ra, b.xyz rb (world)
+	PackedFloat32Array captured_boxes; // per box: centre.xyz active, half-axes x, y, z (world)
 	bool has_capture = false;
 	uint64_t last_step_frame = 0;
 	// Game time (the process delta, so Engine.time_scale and pausing apply) not yet simulated; a step consumes it.
