@@ -40,7 +40,6 @@
 #include "core/config/project_settings.h"
 #include "core/object/class_db.h"
 #include "core/templates/hash_map.h"
-#include "scene/3d/light_3d.h"
 #include "scene/3d/physics/animatable_body_3d.h"
 #include "scene/3d/physics/collision_object_3d.h"
 #include "scene/3d/physics/collision_shape_3d.h"
@@ -1752,25 +1751,26 @@ void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int 
 		w[i * 4 + 2] = p_transforms[i * 12 + 11];
 		w[i * 4 + 3] = radius;
 	}
-	s.absorption = screen_space_absorption;
-	s.sky = screen_space_sky;
+	// 10 cm of fluid lets screen_space_tint through.
+	for (int c = 0; c < 3; c++) {
+		s.absorption.components[c] = -Math::log(CLAMP(screen_space_tint.components[c], 0.01f, 1.0f)) / 0.1f;
+	}
 	s.refraction = screen_space_refraction;
 	// A StandardMaterial3D (or ORMMaterial3D) override is translated; anything
 	// else leaves the screen_space_* settings (see the configuration warning).
 	const Ref<BaseMaterial3D> mat = get_material_override();
 	if (mat.is_valid()) {
 		const Color albedo = mat->get_albedo().srgb_to_linear();
-		// 10 cm of fluid transmits the albedo colour.
-		for (int c = 0; c < 3; c++) {
-			s.absorption.components[c] = -Math::log(CLAMP(albedo.components[c], 0.02f, 0.999f)) / 0.1f;
-		}
+		// What's behind shows through as it does through the same material on a
+		// mesh: mixed with the fluid's own lit colour, not filtered by it.
+		s.absorption = Color(0, 0, 0);
+		s.metallic = CLAMP((float)mat->get_metallic(), 0.0f, 1.0f);
 		// Alpha: how fast the fluid turns into its own lit colour -- 5 cm of
 		// fluid reaches the material's alpha; an opaque material, at once.
 		const float a = mat->get_transparency() == BaseMaterial3D::TRANSPARENCY_DISABLED ? 1.0f : CLAMP((float)mat->get_albedo().a, 0.0f, 0.999f);
 		s.surface = Color(albedo.r, albedo.g, albedo.b, a >= 0.999f ? 1000.0f : -Math::log(1.0f - a) / 0.05f);
 		const float r = CLAMP((float)mat->get_roughness(), 0.0f, 1.0f);
-		s.highlight_power = CLAMP(2.0f / MAX(r * r * r * r, 1e-5f) - 2.0f, 8.0f, 2048.0f);
-		s.highlight_strength = 1.0f - 0.75f * r;
+		s.roughness = r;
 		if (mat->get_feature(BaseMaterial3D::FEATURE_REFRACTION)) {
 			s.refraction = mat->get_refraction();
 		}
@@ -1778,30 +1778,12 @@ void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int 
 			s.emission = mat->get_emission().srgb_to_linear() * mat->get_emission_energy_multiplier();
 		}
 	}
+	s.thickness_scale = 1.0f / (4.18879f * screen_space_radius * screen_space_radius * screen_space_radius);
 	s.smoothing = MAX(particle_size * screen_space_smoothing, 0.0001f);
 	s.depth_threshold = MAX(radius * 2.0f, 0.0001f);
 	s.fade_thickness = MAX(radius * 3.0f, 0.0001f);
 	s.resolution_divisor = screen_space_resolution == SCREEN_SPACE_RESOLUTION_FULL ? 1 : (screen_space_resolution == SCREEN_SPACE_RESOLUTION_HALF ? 2 : 4);
 	s.center = get_global_position();
-	// The scene's sun, for the highlight (found once, like PhysXFlow3D's).
-	DirectionalLight3D *light = Object::cast_to<DirectionalLight3D>(ObjectDB::get_instance(screen_space_light));
-	if (light == nullptr && is_inside_tree()) {
-		TypedArray<Node> lights = get_tree()->get_root()->find_children("*", "DirectionalLight3D", true, false);
-		for (int i = 0; i < lights.size() && light == nullptr; i++) {
-			DirectionalLight3D *l = Object::cast_to<DirectionalLight3D>(lights[i]);
-			if (l != nullptr && l->is_visible_in_tree()) {
-				light = l;
-			}
-		}
-		screen_space_light = light != nullptr ? light->get_instance_id() : ObjectID();
-	}
-	if (light != nullptr) {
-		s.light_direction = -light->get_global_transform().basis.get_column(2).normalized();
-		s.light_color = light->get_color();
-		s.light_color.a = light->get_param(Light3D::PARAM_ENERGY);
-	} else {
-		s.light_color.a = 0.0f;
-	}
 	PhysXFluidRenderEffect::set_fluid(get_instance_id(), s);
 }
 
@@ -2014,10 +1996,8 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_screen_space_smoothing"), &PhysXParticleFluid3D::get_screen_space_smoothing);
 	ClassDB::bind_method(D_METHOD("set_screen_space_refraction", "refraction"), &PhysXParticleFluid3D::set_screen_space_refraction);
 	ClassDB::bind_method(D_METHOD("get_screen_space_refraction"), &PhysXParticleFluid3D::get_screen_space_refraction);
-	ClassDB::bind_method(D_METHOD("set_screen_space_absorption", "absorption"), &PhysXParticleFluid3D::set_screen_space_absorption);
-	ClassDB::bind_method(D_METHOD("get_screen_space_absorption"), &PhysXParticleFluid3D::get_screen_space_absorption);
-	ClassDB::bind_method(D_METHOD("set_screen_space_sky", "sky"), &PhysXParticleFluid3D::set_screen_space_sky);
-	ClassDB::bind_method(D_METHOD("get_screen_space_sky"), &PhysXParticleFluid3D::get_screen_space_sky);
+	ClassDB::bind_method(D_METHOD("set_screen_space_tint", "tint"), &PhysXParticleFluid3D::set_screen_space_tint);
+	ClassDB::bind_method(D_METHOD("get_screen_space_tint"), &PhysXParticleFluid3D::get_screen_space_tint);
 	ClassDB::bind_method(D_METHOD("set_surface_anisotropy", "enabled"), &PhysXParticleFluid3D::set_surface_anisotropy);
 	ClassDB::bind_method(D_METHOD("is_surface_anisotropy"), &PhysXParticleFluid3D::is_surface_anisotropy);
 
@@ -2073,8 +2053,7 @@ void PhysXParticleFluid3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_radius", PROPERTY_HINT_RANGE, "0.25,4,0.01"), "set_screen_space_radius", "get_screen_space_radius");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_smoothing", PROPERTY_HINT_RANGE, "0,8,0.01"), "set_screen_space_smoothing", "get_screen_space_smoothing");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "screen_space_refraction", PROPERTY_HINT_RANGE, "0,0.3,0.001"), "set_screen_space_refraction", "get_screen_space_refraction");
-	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "screen_space_absorption", PROPERTY_HINT_COLOR_NO_ALPHA), "set_screen_space_absorption", "get_screen_space_absorption");
-	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "screen_space_sky", PROPERTY_HINT_COLOR_NO_ALPHA), "set_screen_space_sky", "get_screen_space_sky");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "screen_space_tint", PROPERTY_HINT_COLOR_NO_ALPHA), "set_screen_space_tint", "get_screen_space_tint");
 	ADD_GROUP("Foam", "foam_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "foam_enabled"), "set_foam_enabled", "is_foam_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "foam_particle_count", PROPERTY_HINT_RANGE, "1,262144,1"), "set_foam_particle_count", "get_foam_particle_count");

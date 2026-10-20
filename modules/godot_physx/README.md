@@ -354,25 +354,29 @@ editor — press Play to see the fluid.
   Isosurface.)
 - **Screen Space** — the surface is built on the screen each frame instead: the
   particles are splatted as spheres into a depth and thickness buffer, the depth
-  is smoothed, and the surface is shaded straight into the frame (refraction,
-  absorption by thickness, fresnel against `screen_space_sky`, a highlight from
-  the scene's sun). The cost follows the pixels the fluid covers, not its volume,
+  is smoothed, and the scene lights the result: a quad drawn first in Godot's
+  transparent pass puts the surface where the particles are (`LIGHT_VERTEX`,
+  `NORMAL`), so every light and its shadows, ambient light, sky and probe
+  reflections light it like any surface -- it darkens in shadow and at night
+  instead of glowing. What's behind shows through it refracted, tinted by
+  `screen_space_tint` over its thickness. The cost follows the pixels the fluid covers, not its volume,
   and nothing is read back — on the debris showcase (30k particles, 1080p, RTX
   5070) a physics frame costs 1.5 ms on MPM and 4.6 ms on PBD, against 4.0 and
   13.5 ms for Isosurface. `screen_space_resolution` (Full / Half / Quarter,
   default Half) is the splat and smoothing resolution; the shading and the edge
   against geometry stay full resolution. A `StandardMaterial3D`
-  `material_override` sets the look (albedo → tint, alpha → how opaque thick fluid
-  gets, roughness → highlight, refraction, emission); any other material falls
-  back to the `screen_space_*` settings. PBD foam draws as soft white flecks over
+  `material_override` sets the look as it does on a mesh (albedo and alpha: the
+  fluid's own lit colour, mixed with what's behind -- 5 cm of fluid reaches the
+  material's alpha; roughness, metallic, refraction, emission); any other
+  material falls back to the `screen_space_*` settings. PBD foam draws as soft white flecks over
   the surface, fading with depth below it.
 
   It draws just before transparent geometry, in the camera that renders it, and
   writes the liquid's depth into the frame: transparent objects in front of the
   liquid draw over it, those behind it are hidden where it's solid (they aren't
   seen through clear liquid), and Flow's smoke and fire sort against it the
-  same way. It casts no shadow, isn't seen in reflections, and a material that
-  reads the screen (refractive glass) doesn't see it; all screen-space fluids in
+  same way. It casts no shadow, isn't fogged, isn't seen in reflections, and a
+  material that reads the screen (refractive glass) doesn't see it; all screen-space fluids in
   view merge into one surface (shaded with the nearest one's look). It installs
   itself as a compositor effect the same way `PhysXFlow3D` does (see below).
 

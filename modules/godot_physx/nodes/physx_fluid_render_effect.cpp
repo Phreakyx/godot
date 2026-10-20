@@ -34,7 +34,11 @@
 
 #include "core/object/callable_mp.h"
 #include "scene/3d/camera_3d.h"
+#include "scene/resources/3d/primitive_meshes.h"
 #include "scene/resources/3d/world_3d.h"
+#include "scene/resources/material.h"
+#include "scene/resources/shader.h"
+#include "scene/resources/texture_rd.h"
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
@@ -46,6 +50,14 @@
 Mutex PhysXFluidRenderEffect::mutex;
 HashMap<ObjectID, PhysXFluidRenderEffect::Snapshot> PhysXFluidRenderEffect::fluids;
 HashMap<ObjectID, int> PhysXFluidRenderEffect::worlds;
+HashMap<ObjectID, RID> PhysXFluidRenderEffect::proxies;
+Ref<QuadMesh> PhysXFluidRenderEffect::proxy_mesh;
+Ref<ShaderMaterial> PhysXFluidRenderEffect::proxy_material;
+Ref<Shader> PhysXFluidRenderEffect::proxy_shader;
+Ref<Texture2DRD> PhysXFluidRenderEffect::surf_a_texture;
+Ref<Texture2DRD> PhysXFluidRenderEffect::surf_b_texture;
+RID PhysXFluidRenderEffect::published_a;
+RID PhysXFluidRenderEffect::published_b;
 
 namespace {
 
@@ -57,7 +69,6 @@ enum Pass {
 	PASS_FOAM,
 	PASS_RESOLVE,
 	PASS_FILTER,
-	PASS_COPY,
 	PASS_COMPOSITE,
 	PASS_MAX,
 };
@@ -69,14 +80,14 @@ layout(set = 0, binding = 0, std140) uniform Params {
 	mat4 proj; // view -> clip, as the scene's depth was drawn
 	mat4 inv_proj;
 	vec4 absorption; // rgb: per meter of fluid; a: the depth jump the smoothing keeps (m)
-	vec4 sky; // rgb: what the surface reflects
-	vec4 light_dir; // xyz: view space, toward the light
-	vec4 light_color; // a: the thickness (m) under which the fluid fades out
+	vec4 unused_a;
+	vec4 unused_b;
+	vec4 light_color; // a: the (splatted) thickness under which the fluid fades out
 	vec4 misc; // x: refraction, y: smoothing radius (m), z: max splat / filter radius (px), w: thickness units per meter
 	ivec4 size; // xy: the surface buffers (the frame / frame.z), z: particles
 	ivec4 frame; // xy: the frame, z: frame pixels per surface texel, each way
 	vec4 surface; // rgb: the body colour (linear), a: opacity per meter of fluid (0: clear)
-	vec4 shading; // x: highlight power, y: highlight strength
+	vec4 shading; // z: splatted thickness -> the fluid's own
 	vec4 emission; // rgb, added
 	vec4 foam; // rgb: foam colour (linear), a: the most a foam patch covers
 	ivec4 foam_n; // x: foam particles
@@ -296,29 +307,12 @@ void main() {
 	imageStore(dst, px, vec4(sum / max(wsum, 1e-6)));
 }
 )",
-	// PASS_COPY: the frame as it is, for the refraction to read while the
-	// composite writes.
-	R"(
-#[compute]
-#version 450
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-@PARAMS@
-layout(set = 0, binding = 1, rgba16f) uniform restrict readonly image2D src;
-layout(set = 0, binding = 2, rgba16f) uniform restrict writeonly image2D dst;
-void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(px, p.frame.xy))) {
-		return;
-	}
-	imageStore(dst, px, imageLoad(src, px));
-}
-)",
-	// PASS_COMPOSITE (full resolution): shade the smoothed surface into the
-	// frame. At a reduced resolution each frame pixel blends the 2x2 surface
-	// texels around it that hold fluid -- the share that do is its coverage,
-	// a soft edge against the background -- and is tested against the scene's
-	// own full-resolution depth, so where the fluid meets geometry the edge
-	// stays sharp.
+	// PASS_COMPOSITE (full resolution): the smoothed surface, for the proxy
+	// material to shade (see PROXY_SHADER). At a reduced resolution each frame
+	// pixel blends the 2x2 surface texels around it that hold fluid -- the share
+	// that do is its coverage, a soft edge against the background -- and is
+	// tested against the scene's own full-resolution depth, so where the fluid
+	// meets geometry the edge stays sharp.
 	R"(
 #[compute]
 #version 450
@@ -326,8 +320,8 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 @PARAMS@
 layout(set = 0, binding = 1, r32f) uniform restrict readonly image2D zimg;
 layout(set = 0, binding = 2, r32ui) uniform restrict readonly uimage2D thick_img;
-layout(set = 0, binding = 3) uniform sampler2D scene_color;
-layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D liquid_img; // a: drawn here
+layout(set = 0, binding = 3, rgba16f) uniform restrict writeonly image2D surf_a; // view-space normal, thickness (m)
+layout(set = 0, binding = 4, rgba16f) uniform restrict writeonly image2D surf_b; // eye depth (m), cover, foam, -
 layout(set = 0, binding = 5) uniform sampler2D scene_depth;
 layout(set = 0, binding = 6, r32ui) uniform restrict readonly uimage2D foam_depth_img;
 layout(set = 0, binding = 7, r32ui) uniform restrict readonly uimage2D foam_img;
@@ -350,9 +344,11 @@ void main() {
 	float scene_z = -sv.z / sv.w;
 	float out_depth = sd; // goes into the depth buffer: what later passes test against
 	float surface_z = 1e30; // the fluid's surface, where it draws solid enough
-	vec3 base = textureLod(scene_color, uv, 0.0).rgb;
-	vec3 col = base;
-	bool drawn = false;
+	vec3 n = vec3(0.0, 0.0, 1.0);
+	float z_out = 0.0;
+	float T = 0.0;
+	float a = 0.0;
+	float fa = 0.0;
 
 	vec2 l = (vec2(fpx) + 0.5) / float(p.frame.z) - 0.5;
 	ivec2 b = ivec2(floor(l));
@@ -361,7 +357,6 @@ void main() {
 	float ws[4] = float[]((1.0 - t.x) * (1.0 - t.y), t.x * (1.0 - t.y), (1.0 - t.x) * t.y, t.x * t.y);
 	float coverage = 0.0;
 	float z = 0.0;
-	float T = 0.0;
 	float best = -1.0;
 	ivec2 px = b;
 	float foam = 0.0;
@@ -399,27 +394,14 @@ void main() {
 		float zd = zat(px - ivec2(0, 1), zc);
 		vec3 ddx = abs(zr - zc) < abs(zc - zl) ? view_pos(vec2(px + ivec2(1, 0)), zr) - P : P - view_pos(vec2(px - ivec2(1, 0)), zl);
 		vec3 ddy = abs(zu - zc) < abs(zc - zd) ? view_pos(vec2(px + ivec2(0, 1)), zu) - P : P - view_pos(vec2(px - ivec2(0, 1)), zd);
-		vec3 n = normalize(cross(ddx, ddy));
-		vec3 V = normalize(-P);
-		if (dot(n, V) < 0.0) {
+		n = normalize(cross(ddx, ddy));
+		if (dot(n, normalize(-P)) < 0.0) {
 			n = -n;
 		}
-		vec2 ruv = clamp(uv + n.xy * p.misc.x * min(T, 1.0), vec2(0.0), vec2(1.0));
-		vec3 refracted = textureLod(scene_color, ruv, 0.0).rgb * exp(-p.absorption.rgb * T);
-		vec3 L = normalize(p.light_dir.xyz);
-		// An opaque-ish fluid (the material's alpha) shows its own lit colour more
-		// the thicker it is.
-		float body = 1.0 - exp(-p.surface.a * T);
-		vec3 lit = p.surface.rgb * (0.3 + 0.7 * max(dot(n, L), 0.0) * p.light_dir.w * p.light_color.rgb);
-		refracted = mix(refracted, lit, body);
-		float F = 0.02 + 0.98 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
-		float spec = pow(max(dot(n, normalize(L + V)), 0.0), p.shading.x) * p.shading.y * p.light_dir.w;
-		vec3 shaded = mix(refracted, p.sky.rgb, F) + spec * p.light_color.rgb + p.emission.rgb;
 		// Thin fluid (a lone droplet, a sheet's edge) fades into the scene rather
 		// than drawing as a hard bubble; so does the edge of the coverage.
-		float a = smoothstep(0.0, p.light_color.a, T) * coverage;
-		col = mix(base, shaded, a);
-		drawn = true;
+		a = smoothstep(0.0, p.light_color.a, T) * coverage;
+		z_out = z;
 		if (a > 0.5) {
 			// The surface, on this pixel's ray, as the depth buffer stores it.
 			vec4 v = p.inv_proj * vec4(uv * 2.0 - 1.0, 0.5, 1.0);
@@ -432,22 +414,24 @@ void main() {
 	// Foam over the surface; foam under it fades with how deep it is.
 	if (foam > 0.0 && foam_z <= scene_z) {
 		float under = max(foam_z - surface_z, 0.0);
-		float fa = p.foam.a * (1.0 - exp(-foam * 1.5)) * exp(-under * 12.0);
-		col = mix(col, p.foam.rgb * (0.65 + 0.35 * min(p.light_dir.w, 1.0)), fa);
-		drawn = true;
+		fa = (1.0 - exp(-foam * 1.5)) * exp(-under * 12.0);
+		if (a <= 0.0) {
+			z_out = foam_z; // spray in the open: lit where the foam is
+		}
 	}
-	imageStore(liquid_img, fpx, vec4(col, drawn ? 1.0 : 0.0));
+	imageStore(surf_a, fpx, vec4(n, T * p.shading.z));
+	imageStore(surf_b, fpx, vec4(z_out, a, fa, 0.0));
 	imageStore(liquid_depth, fpx, vec4(out_depth));
 }
 )",
 };
 
-const char *PASS_NAMES[PASS_MAX] = { "clear", "splat", "foam", "resolve", "filter", "copy", "composite" };
+const char *PASS_NAMES[PASS_MAX] = { "clear", "splat", "foam", "resolve", "filter", "composite" };
 
-// Draws the composited liquid into the frame's own colour and depth targets
-// (the multisampled ones with MSAA), before the transparent pass: its depth
-// then sorts transparent geometry against the liquid. A compute pass can't
-// write a depth attachment; a fullscreen triangle with gl_FragDepth can.
+// Writes the liquid's depth into the frame's own depth target (the
+// multisampled one with MSAA) before the transparent pass, where it's solid:
+// transparent geometry then sorts against it. A compute pass can't write a
+// depth attachment; a fullscreen triangle with gl_FragDepth can.
 const char *WRITE_SHADER = R"(
 #[vertex]
 #version 450
@@ -457,17 +441,75 @@ void main() {
 }
 #[fragment]
 #version 450
-layout(set = 0, binding = 0) uniform sampler2D liquid;
+layout(set = 0, binding = 0) uniform sampler2D surf_b;
 layout(set = 0, binding = 1) uniform sampler2D liquid_depth;
 layout(location = 0) out vec4 frag_color;
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
-	vec4 c = texelFetch(liquid, px, 0);
-	if (c.a < 0.5) {
+	if (texelFetch(surf_b, px, 0).g <= 0.5) {
 		discard;
 	}
-	frag_color = vec4(c.rgb, 1.0);
+	frag_color = vec4(0.0); // not written (colour write mask off)
 	gl_FragDepth = texelFetch(liquid_depth, px, 0).r;
+}
+)";
+
+// The material that shades the surface in Godot's own transparent pass (drawn
+// first there), on a quad covering the screen: it puts the surface where the
+// compute passes found it (LIGHT_VERTEX, NORMAL), so the scene's lights,
+// shadows, ambient light, reflections and sky light it like any other
+// surface. What shows through it is the screen behind (opaque geometry and
+// sky) refracted and absorbed by the fluid's thickness; the fluid's own colour
+// (opaque-ish materials) and its foam are lit.
+const char *PROXY_SHADER = R"(
+shader_type spatial;
+render_mode blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, skip_vertex_transform;
+
+uniform sampler2D surf_a : filter_nearest, repeat_disable;
+uniform sampler2D surf_b : filter_nearest, repeat_disable;
+uniform sampler2D screen : hint_screen_texture, filter_linear, repeat_disable;
+uniform vec3 absorption = vec3(0.45, 0.12, 0.06);
+uniform vec4 body = vec4(0.0); // rgb: colour, a: opacity per meter of fluid
+uniform float refraction = 0.04;
+uniform float surface_roughness = 0.05;
+uniform float surface_metallic = 0.0;
+uniform vec3 emission_color = vec3(0.0);
+uniform vec4 foam_color = vec4(1.0, 1.0, 1.0, 0.85);
+
+void vertex() {
+	// The quad's corners on the camera's frustum: each pixel's VERTEX (and so
+	// VIEW, which reflections and highlights use) then lies on its own ray.
+	vec4 v = INV_PROJECTION_MATRIX * vec4(VERTEX.xy, 0.5, 1.0);
+	VERTEX = v.xyz / v.w;
+	POSITION = PROJECTION_MATRIX * vec4(VERTEX, 1.0);
+}
+
+void fragment() {
+	vec4 b = texture(surf_b, SCREEN_UV);
+	float cover = b.y;
+	float foam = b.z * foam_color.a;
+	if (cover <= 0.001 && foam <= 0.001) {
+		discard;
+	}
+	vec4 a = texture(surf_a, SCREEN_UV);
+	vec4 ray = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, 0.5, 1.0);
+	vec3 dir = ray.xyz / ray.w;
+	vec3 P = dir * (b.x / -dir.z);
+	LIGHT_VERTEX = P;
+	vec3 n = normalize(a.xyz);
+	NORMAL = n;
+	float T = a.w;
+	float own = 1.0 - exp(-body.a * T);
+	vec2 ruv = clamp(SCREEN_UV + n.xy * refraction * min(T / 0.07, 1.0), vec2(0.0), vec2(1.0));
+	vec3 through = textureLod(screen, ruv, 0.0).rgb * exp(-absorption * T);
+	ALBEDO = mix(body.rgb * own, foam_color.rgb, foam);
+	// (Godot's own specular adds the reflection on top; it doesn't take the
+	// grazing-angle share out of what shows through, so neither does this.)
+	EMISSION = through * (1.0 - own) * (1.0 - foam) + emission_color;
+	ROUGHNESS = mix(surface_roughness, 1.0, foam);
+	SPECULAR = 0.25 * (1.0 - foam); // F0 ~ 0.02: water
+	METALLIC = surface_metallic * (1.0 - foam);
+	ALPHA = clamp(max(cover, foam), 0.0, 1.0);
 }
 )";
 
@@ -501,7 +543,29 @@ void PhysXFluidRenderEffect::remove_fluid(const ObjectID &p_fluid) {
 
 void PhysXFluidRenderEffect::attach_world(World3D *p_world) {
 	ERR_FAIL_NULL(p_world);
-	worlds[p_world->get_instance_id()]++;
+	if (worlds[p_world->get_instance_id()]++ > 0) {
+		return;
+	}
+	if (proxy_material.is_null()) {
+		proxy_shader.instantiate();
+		proxy_shader->set_code(PROXY_SHADER);
+		surf_a_texture.instantiate();
+		surf_b_texture.instantiate();
+		proxy_material.instantiate();
+		proxy_material->set_shader(proxy_shader);
+		proxy_material->set_shader_parameter("surf_a", surf_a_texture);
+		proxy_material->set_shader_parameter("surf_b", surf_b_texture);
+		proxy_material->set_render_priority(Material::RENDER_PRIORITY_MIN); // first among transparent geometry
+		proxy_mesh.instantiate();
+		proxy_mesh->set_size(Size2(2, 2));
+		proxy_mesh->set_material(proxy_material);
+	}
+	RenderingServer *rs = RenderingServer::get_singleton();
+	const RID instance = rs->instance_create2(proxy_mesh->get_rid(), p_world->get_scenario());
+	rs->instance_set_custom_aabb(instance, AABB(Vector3(-1e6, -1e6, -1e6), Vector3(2e6, 2e6, 2e6)));
+	rs->instance_geometry_set_cast_shadows_setting(instance, RSE::SHADOW_CASTING_SETTING_OFF);
+	rs->instance_set_ignore_culling(instance, true);
+	proxies[p_world->get_instance_id()] = instance;
 }
 
 void PhysXFluidRenderEffect::detach_world(const ObjectID &p_world) {
@@ -511,12 +575,59 @@ void PhysXFluidRenderEffect::detach_world(const ObjectID &p_world) {
 	}
 	worlds.erase(p_world);
 	PhysXCompositorEffects::uninstall(p_world, get_shared());
+	if (proxies.has(p_world)) {
+		RenderingServer::get_singleton()->free_rid(proxies[p_world]);
+		proxies.erase(p_world);
+	}
 }
 
 void PhysXFluidRenderEffect::install(World3D *p_world, Camera3D *p_camera) {
 	ERR_FAIL_NULL(p_world);
 	ERR_FAIL_COND(!worlds.has(p_world->get_instance_id()));
 	PhysXCompositorEffects::install(p_world, p_camera, get_shared(), PhysXCompositorEffects::ORDER_FLUID);
+	_update_proxy(p_camera);
+}
+
+void PhysXFluidRenderEffect::_update_proxy(Camera3D *p_camera) {
+	if (proxy_material.is_null()) {
+		return;
+	}
+	RID a, b;
+	Snapshot look;
+	bool found = false;
+	{
+		MutexLock lock(mutex);
+		a = published_a;
+		b = published_b;
+		// The look of the fluid nearest the camera.
+		const Vector3 eye = p_camera != nullptr ? p_camera->get_global_position() : Vector3();
+		real_t best = 1e30;
+		for (const KeyValue<ObjectID, Snapshot> &kv : fluids) {
+			const real_t d = eye.distance_squared_to(kv.value.center);
+			if (d < best) {
+				best = d;
+				look = kv.value;
+				found = true;
+			}
+		}
+	}
+	if (a.is_valid() && surf_a_texture->get_texture_rd_rid() != a) {
+		surf_a_texture->set_texture_rd_rid(a);
+	}
+	if (b.is_valid() && surf_b_texture->get_texture_rd_rid() != b) {
+		surf_b_texture->set_texture_rd_rid(b);
+	}
+	if (!found) {
+		return;
+	}
+	proxy_material->set_shader_parameter("absorption", Vector3(look.absorption.r, look.absorption.g, look.absorption.b));
+	// As Vector4, not Color: a Color would be converted to linear again.
+	proxy_material->set_shader_parameter("body", Vector4(look.surface.r, look.surface.g, look.surface.b, look.surface.a));
+	proxy_material->set_shader_parameter("refraction", look.refraction);
+	proxy_material->set_shader_parameter("surface_roughness", look.roughness);
+	proxy_material->set_shader_parameter("surface_metallic", look.metallic);
+	proxy_material->set_shader_parameter("emission_color", Vector3(look.emission.r, look.emission.g, look.emission.b));
+	proxy_material->set_shader_parameter("foam_color", Vector4(look.foam_color.r, look.foam_color.g, look.foam_color.b, look.foam_color.a));
 }
 
 Ref<PhysXFluidRenderEffect> PhysXFluidRenderEffect::get_shared() {
@@ -527,6 +638,15 @@ Ref<PhysXFluidRenderEffect> PhysXFluidRenderEffect::get_shared() {
 }
 
 void PhysXFluidRenderEffect::free_shared() {
+	for (const KeyValue<ObjectID, RID> &kv : proxies) {
+		RenderingServer::get_singleton()->free_rid(kv.value);
+	}
+	proxies.clear();
+	proxy_mesh.unref();
+	proxy_material.unref();
+	proxy_shader.unref();
+	surf_a_texture.unref();
+	surf_b_texture.unref();
 	shared_effect.unref();
 }
 
@@ -544,7 +664,10 @@ PhysXFluidRenderEffect::~PhysXFluidRenderEffect() {
 	if (rd == nullptr) {
 		return;
 	}
-	_free_targets(rd);
+	_free_targets(rd, true);
+	for (const Retired &r : retired) {
+		rd->free_rid(r.rid);
+	}
 	for (int i = 0; i < PASS_MAX; i++) {
 		if (pipelines[i].is_valid()) {
 			rd->free_rid(pipelines[i]);
@@ -611,10 +734,16 @@ bool PhysXFluidRenderEffect::_ensure(RenderingDevice *p_rd) {
 	return true;
 }
 
-void PhysXFluidRenderEffect::_free_targets(RenderingDevice *p_rd) {
-	for (RID *r : { &depth_u, &thick_u, &foam_depth_u, &foam_u, &smooth_a, &smooth_b, &scene_copy, &liquid, &liquid_depth }) {
+void PhysXFluidRenderEffect::_free_targets(RenderingDevice *p_rd, bool p_now) {
+	for (RID *r : { &depth_u, &thick_u, &foam_depth_u, &foam_u, &smooth_a, &smooth_b, &surf_a, &surf_b, &liquid_depth }) {
 		if (r->is_valid()) {
-			p_rd->free_rid(*r);
+			if (p_now) {
+				p_rd->free_rid(*r);
+			} else {
+				// The proxy material may still point at it until the main thread
+				// catches up: free it a few frames later.
+				retired.push_back(Retired{ *r, p_rd->get_frames_drawn() });
+			}
 			*r = RID();
 		}
 	}
@@ -626,7 +755,7 @@ void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i
 	if (p_size == size && p_frame == frame_size && depth_u.is_valid()) {
 		return;
 	}
-	_free_targets(p_rd);
+	_free_targets(p_rd, false);
 	size = p_size;
 	frame_size = p_frame;
 	RD::TextureFormat tf;
@@ -646,10 +775,13 @@ void PhysXFluidRenderEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i
 	tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
 	tf.width = p_frame.x;
 	tf.height = p_frame.y;
-	scene_copy = p_rd->texture_create(tf, RD::TextureView());
-	liquid = p_rd->texture_create(tf, RD::TextureView());
+	surf_a = p_rd->texture_create(tf, RD::TextureView());
+	surf_b = p_rd->texture_create(tf, RD::TextureView());
 	tf.format = RD::DATA_FORMAT_R32_SFLOAT;
 	liquid_depth = p_rd->texture_create(tf, RD::TextureView());
+	MutexLock lock(mutex);
+	published_a = surf_a;
+	published_b = surf_b;
 }
 
 void PhysXFluidRenderEffect::_dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, uint32_t p_x, uint32_t p_y, const void *p_push, uint32_t p_push_size) {
@@ -766,17 +898,6 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 	f[49] = look.absorption.g;
 	f[50] = look.absorption.b;
 	f[51] = look.depth_threshold;
-	f[52] = look.sky.r;
-	f[53] = look.sky.g;
-	f[54] = look.sky.b;
-	const Vector3 to_light = (cam.basis.inverse().xform(-look.light_direction)).normalized();
-	f[56] = to_light.x;
-	f[57] = to_light.y;
-	f[58] = to_light.z;
-	f[59] = look.light_color.a;
-	f[60] = look.light_color.r;
-	f[61] = look.light_color.g;
-	f[62] = look.light_color.b;
 	f[63] = look.fade_thickness;
 	f[64] = look.refraction;
 	f[65] = look.smoothing;
@@ -788,8 +909,7 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 	f[77] = look.surface.g;
 	f[78] = look.surface.b;
 	f[79] = look.surface.a;
-	f[80] = look.highlight_power;
-	f[81] = look.highlight_strength;
+	f[82] = look.thickness_scale;
 	f[84] = look.emission.r;
 	f[85] = look.emission.g;
 	f[86] = look.emission.b;
@@ -820,9 +940,17 @@ void PhysXFluidRenderEffect::_render(int p_callback_type, const RenderData *p_re
 		const RID to = (i % 2 == 0) ? smooth_a : smooth_b;
 		_dispatch(rd, PASS_FILTER, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, to) }, gx, gy, no_dir, sizeof(no_dir));
 	}
-	_dispatch(rd, PASS_COPY, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, color), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, scene_copy) }, fx, fy, nullptr, 0);
-	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, scene_copy })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, liquid), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, liquid_depth) }, fx, fy, nullptr, 0);
+	_dispatch(rd, PASS_COMPOSITE, { params, RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, smooth_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, thick_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 3, surf_a), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, surf_b), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 5, Vector<RID>({ point_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 6, foam_depth_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 7, foam_u), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 8, liquid_depth) }, fx, fy, nullptr, 0);
 	_write(rd, buffers, color, depth);
+	// Retired targets the proxy can no longer be reading.
+	for (uint32_t i = 0; i < retired.size();) {
+		if (rd->get_frames_drawn() > retired[i].frame + 4) {
+			rd->free_rid(retired[i].rid);
+			retired.remove_at_unordered(i);
+		} else {
+			i++;
+		}
+	}
 }
 
 void PhysXFluidRenderEffect::_write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_color, const RID &p_depth) {
@@ -843,12 +971,17 @@ void PhysXFluidRenderEffect::_write(RenderingDevice *p_rd, RenderSceneBuffersRD 
 		depth_state.enable_depth_test = true;
 		depth_state.enable_depth_write = true;
 		depth_state.depth_compare_operator = RD::COMPARE_OP_ALWAYS; // the composite already kept the nearer
-		const RID created = p_rd->render_pipeline_create(write_shader, format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, depth_state, RD::PipelineColorBlendState::create_disabled(1));
+		RD::PipelineColorBlendState blend = RD::PipelineColorBlendState::create_disabled(1);
+		blend.attachments.write[0].write_r = false; // depth only: the proxy draws the colour
+		blend.attachments.write[0].write_g = false;
+		blend.attachments.write[0].write_b = false;
+		blend.attachments.write[0].write_a = false;
+		const RID created = p_rd->render_pipeline_create(write_shader, format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, depth_state, blend);
 		ERR_FAIL_COND(!created.is_valid());
 		pipeline = &write_pipelines.insert(format, created)->value;
 	}
 	Vector<RD::Uniform> uniforms;
-	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ point_sampler, liquid })));
+	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ point_sampler, surf_b })));
 	uniforms.push_back(RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ point_sampler, liquid_depth })));
 	const RID set = p_rd->uniform_set_create(uniforms, write_shader, 0);
 	ERR_FAIL_COND(!set.is_valid());

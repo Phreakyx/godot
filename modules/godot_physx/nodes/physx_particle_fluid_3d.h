@@ -169,10 +169,8 @@ private:
 	float screen_space_radius = 1.5f; // splat radius, in particle_size
 	float screen_space_smoothing = 3.0f; // depth smoothing radius, in particle_size
 	float screen_space_refraction = 0.04f;
-	Color screen_space_absorption = Color(0.45, 0.12, 0.06);
-	Color screen_space_sky = Color(0.55, 0.68, 0.8);
+	Color screen_space_tint = Color(0.53, 0.85, 0.92); // what 10 cm of fluid lets through
 	ObjectID screen_space_world;
-	ObjectID screen_space_light;
 	// The isosurface mesh is on (surface_mesh, unless screen_space draws the fluid instead).
 	bool _iso() const { return surface_mesh && !screen_space; }
 	void _screen_space_attach();
@@ -306,10 +304,8 @@ public:
 	float get_screen_space_smoothing() const { return screen_space_smoothing; }
 	void set_screen_space_refraction(float p_refraction) { screen_space_refraction = p_refraction; }
 	float get_screen_space_refraction() const { return screen_space_refraction; }
-	void set_screen_space_absorption(const Color &p_absorption) { screen_space_absorption = p_absorption; }
-	Color get_screen_space_absorption() const { return screen_space_absorption; }
-	void set_screen_space_sky(const Color &p_sky) { screen_space_sky = p_sky; }
-	Color get_screen_space_sky() const { return screen_space_sky; }
+	void set_screen_space_tint(const Color &p_tint) { screen_space_tint = p_tint; }
+	Color get_screen_space_tint() const { return screen_space_tint; }
 
 	void set_foam_enabled(bool p_enabled);
 	bool is_foam_enabled() const { return foam_enabled; }

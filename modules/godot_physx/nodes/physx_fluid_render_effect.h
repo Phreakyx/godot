@@ -38,6 +38,10 @@
 #include "servers/rendering/rendering_device.h"
 
 class Camera3D;
+class QuadMesh;
+class Shader;
+class ShaderMaterial;
+class Texture2DRD;
 class World3D;
 class RenderData;
 class RenderSceneBuffersRD;
@@ -63,19 +67,19 @@ public:
 		PackedFloat32Array points; // per particle: world x, y, z, splat radius
 		PackedFloat32Array foam; // per foam particle: world x, y, z, splat radius
 		Color foam_color = Color(1, 1, 1, 0.85); // a: the most a foam patch covers
-		Color absorption = Color(0.45, 0.12, 0.06); // per meter of fluid, per channel
-		Color sky = Color(0.55, 0.68, 0.8); // what the surface reflects
-		float refraction = 0.04f; // screen-space offset per meter of thickness
+		Color absorption = Color(6.3, 1.6, 0.8); // per meter of fluid, per channel
+		float refraction = 0.04f; // screen-space offset at full thickness (see PROXY_SHADER)
 		float smoothing = 0.04f; // world radius of the depth smoothing
 		float depth_threshold = 0.04f; // a depth jump larger than this is an edge the smoothing keeps
 		float fade_thickness = 0.06f; // fluid thinner than this fades into the scene
 		int resolution_divisor = 2; // frame pixels per surface texel, each way (1, 2 or 4)
 		Color surface = Color(0, 0, 0, 0); // body colour (linear); a: opacity per meter of fluid, 0 = clear
-		float highlight_power = 160.0f; // the sun highlight's tightness (Blinn-Phong exponent)
-		float highlight_strength = 1.0f;
+		float roughness = 0.05f; // of the surface, for Godot's lighting
+		// The splatted spheres overlap: their summed chords over this is the
+		// fluid's own thickness (a particle's volume over its sphere's).
+		float thickness_scale = 1.0f / 14.137f;
+		float metallic = 0.0f;
 		Color emission = Color(0, 0, 0);
-		Vector3 light_direction = Vector3(0, -1, 0); // world, toward the scene
-		Color light_color = Color(1, 1, 1);
 		Vector3 center;
 	};
 
@@ -97,12 +101,21 @@ private:
 	static HashMap<ObjectID, Snapshot> fluids;
 
 	static HashMap<ObjectID, int> worlds; // fluids in screen-space mode, per world
+	// The quad that shades the surface in each world (see PROXY_SHADER), its
+	// material, and the surface textures it reads (render thread -> main thread).
+	static HashMap<ObjectID, RID> proxies;
+	static Ref<QuadMesh> proxy_mesh;
+	static Ref<ShaderMaterial> proxy_material;
+	static Ref<Shader> proxy_shader;
+	static Ref<Texture2DRD> surf_a_texture, surf_b_texture;
+	static RID published_a, published_b;
+	static void _update_proxy(Camera3D *p_camera);
 
 	// GPU state (render thread only).
 	static constexpr uint32_t PARAMS_FLOATS = 96; // the shaders' Params block, std140
 	bool failed = false;
-	RID shaders[7];
-	RID pipelines[7];
+	RID shaders[6];
+	RID pipelines[6];
 	RID linear_sampler, point_sampler;
 	RID params_buffer;
 	RID points_buffer;
@@ -110,15 +123,20 @@ private:
 	RID foam_buffer;
 	uint32_t foam_capacity = 0;
 	Size2i size; // the surface buffers
-	Size2i frame_size; // the colour copy
-	RID depth_u, thick_u, foam_depth_u, foam_u, smooth_a, smooth_b, scene_copy;
-	RID liquid, liquid_depth; // the composite: colour (a: drawn) and the depth buffer's new value
+	Size2i frame_size; // the full-resolution targets
+	RID depth_u, thick_u, foam_depth_u, foam_u, smooth_a, smooth_b;
+	RID surf_a, surf_b, liquid_depth; // the composite: the surface for the proxy, and the depth buffer's new value
+	struct Retired {
+		RID rid;
+		uint64_t frame = 0;
+	};
+	LocalVector<Retired> retired;
 	RID write_shader;
 	HashMap<int64_t, RID> write_pipelines; // per framebuffer format
 
 	bool _ensure(RenderingDevice *p_rd);
 	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size, const Size2i &p_frame);
-	void _free_targets(RenderingDevice *p_rd);
+	void _free_targets(RenderingDevice *p_rd, bool p_now);
 	void _dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, uint32_t p_x, uint32_t p_y, const void *p_push, uint32_t p_push_size);
 	void _write(RenderingDevice *p_rd, RenderSceneBuffersRD *p_buffers, const RID &p_color, const RID &p_depth);
 	void _render(int p_callback_type, const RenderData *p_render_data);
