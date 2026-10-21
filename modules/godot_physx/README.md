@@ -472,6 +472,28 @@ Things worth knowing:
   cache folder; the editor's flows pause while the project runs from the
   editor.
 
+## Light shafts — `PhysXLightShafts3D`
+
+UE-style sun shafts ("god rays"): add a `PhysXLightShafts3D` as a child of the
+`DirectionalLight3D` and the sun's light streams outward through the gaps in
+whatever stands in front of it (bloom), with the frame darkened along the rays
+it blocks (occlusion). It works on the rendered frame, so no fog is needed and
+it costs the same at any distance (a few tenths of a millisecond at 1080p),
+unlike Godot's volumetric fog, whose shafts are soft, end at
+`volumetric_fog_length` and need fog across the whole scene.
+
+- `mode` picks bloom, occlusion or both; `bloom_threshold` is relative to the
+  light's energy, so only the sun and the sky right around it stream by
+  default; `ray_length` and `edge_fade` set how far the rays reach and how
+  fast they fade as the sun leaves the screen.
+- Geometry and a screen-space `PhysXParticleFluid3D` block the light; a
+  `PhysXFlow3D` gas dims the bloom where it covers the sky but casts no
+  occlusion (it isn't in the depth buffer).
+- Nothing is drawn with the sun behind the camera or an orthogonal camera.
+  One shafts node per frame is drawn.
+- Demo: `demo/editor/render/light_shafts.tscn` (keys to compare against
+  Godot's volumetric fog).
+
 ## Cloth — `PhysXCloth3D`
 
 A cloth patch: a generated grid or a supplied triangle mesh, simulated and drawn

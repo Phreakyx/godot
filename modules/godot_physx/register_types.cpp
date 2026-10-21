@@ -49,6 +49,8 @@
 #include "nodes/physx_cloth_3d.h"
 #include "nodes/physx_fluid_render_effect.h"
 #include "nodes/physx_granular_3d.h"
+#include "nodes/physx_light_shafts_3d.h"
+#include "nodes/physx_light_shafts_effect.h"
 #include "nodes/physx_particle_fluid_3d.h"
 #include "vehicle/godot_physx_motorcycle_probe.h"
 #include "vehicle/godot_physx_tank_probe.h"
@@ -112,6 +114,8 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 		GDREGISTER_CLASS(PhysXCloth3D);
 		GDREGISTER_CLASS(PhysXSkinnedCloth3D);
 		GDREGISTER_CLASS(PhysXChunkEmitter3D);
+		GDREGISTER_CLASS(PhysXLightShafts3D);
+		GDREGISTER_INTERNAL_CLASS(PhysXLightShaftsEffect);
 		// Runtime-bridge MVP probe, not public API yet -- see water/water_ripple_probe.h.
 		GDREGISTER_CLASS(WaterRippleProbe);
 		GDREGISTER_CLASS(PhysXWaterSurface3D);
@@ -156,6 +160,7 @@ void uninitialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		PhysXFluidRenderEffect::free_shared();
 		PhysXSkinnedCloth3D::free_shared();
+		PhysXLightShaftsEffect::free_shared();
 	}
 #ifdef GODOT_PHYSX_FLOW
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {

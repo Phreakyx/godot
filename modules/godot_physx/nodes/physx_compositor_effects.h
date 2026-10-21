@@ -39,7 +39,7 @@ class Camera3D;
 class World3D;
 
 // Puts the module's own compositor effects (the screen-space fluid, the Flow
-// ray marcher) into a world's frame and keeps them in a fixed order, whoever
+// ray marcher, the light shafts) into a world's frame and keeps them in a fixed order, whoever
 // installs first: a Compositor on the World3D when the world has none, or added
 // at the RenderingServer level to the user's own (their resource is never
 // changed or saved). Each effect injecting on its own would overwrite the
@@ -47,11 +47,12 @@ class World3D;
 class PhysXCompositorEffects {
 public:
 	// Lower runs first, among effects at the same callback point (the fluid
-	// runs before transparent geometry and Flow after it, so for them this is
-	// just a stable order).
+	// runs before transparent geometry, Flow and the light shafts after it:
+	// the shafts after Flow, so the gas is in the frame they read).
 	enum Order {
 		ORDER_FLUID = 0,
 		ORDER_FLOW = 1,
+		ORDER_SHAFTS = 2,
 	};
 
 	// Every frame (cheap when nothing changed): the world's compositor, and the
