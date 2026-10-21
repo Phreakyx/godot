@@ -237,19 +237,16 @@ void PhysXSkinnedCloth3D::_notification(int p_what) {
 			if (built && simulating) {
 				pending_delta += get_process_delta_time();
 				// Normally the step runs in skeleton_updated (the final pose, after IK / spring bones). A frame in
-				// which the skeleton didn't update (a still pose) steps here on the last capture, so the cloth
-				// still settles; with no capture yet, the pose as it reads now (no modifiers) starts it off.
-				const uint64_t frame = Engine::get_singleton()->get_process_frames();
-				if (frame > last_step_frame + 1 || !has_capture) {
-					if (!has_capture) {
-						Skeleton3D *skeleton = ObjectDB::get_instance<Skeleton3D>(skeleton_id);
-						if (skeleton != nullptr) {
-							_capture_pose(skeleton);
-						}
-					} else if (using_physical_bones) {
-						_pack_colliders(); // the shapes may have changed while the skeleton held still
+				// which the skeleton doesn't update (a still pose) steps late, once that's known; with no capture
+				// yet, the pose as it reads now (no modifiers) starts it off.
+				if (!has_capture) {
+					Skeleton3D *skeleton = ObjectDB::get_instance<Skeleton3D>(skeleton_id);
+					if (skeleton != nullptr) {
+						_capture_pose(skeleton);
 					}
 					_step();
+				} else {
+					callable_mp(this, &PhysXSkinnedCloth3D::_late_step).call_deferred();
 				}
 			}
 		} break;
@@ -997,24 +994,33 @@ void PhysXSkinnedCloth3D::_capture_pose(Skeleton3D *p_skeleton) {
 	// The skeleton where it's DRAWN: with physics interpolation the body moves on physics ticks and is drawn smoothly in
 	// between — the tick transform jumps once per tick (2.3 cm at a walk, 60 Hz) and sits still on the frames between,
 	// which yanked the cloth ~60 times a second against the smooth body you see (the jitter while moving).
-	const Transform3D skel_xform = p_skeleton->get_global_transform_interpolated();
-	captured_bones.resize(MAX(bind_bones.size(), 1) * 16);
-	float *bw = captured_bones.ptrw();
+	captured_poses.resize(bind_bones.size());
 	for (int j = 0; j < bind_bones.size(); j++) {
 		const int bone = bind_bones[j];
 		const Transform3D bone_pose = bone >= 0 ? p_skeleton->get_bone_global_pose(bone) : Transform3D();
-		put_mat4(bw + j * 16, skel_xform * bone_pose * bind_poses[j]);
+		captured_poses.write[j] = bone_pose * bind_poses[j];
 	}
 	// Where each collider's bone is this frame (the modifiers' pose is only
-	// readable now), then the colliders from it.
+	// readable now).
 	for (Capsule &c : capsules) {
-		c.bone_world = skel_xform * p_skeleton->get_bone_global_pose(c.bone_a);
+		c.bone_pose = p_skeleton->get_bone_global_pose(c.bone_a);
 		if (!c.from_shape) {
-			c.end_world = skel_xform.xform(p_skeleton->get_bone_global_pose(c.bone_b).origin);
+			c.end_pose = p_skeleton->get_bone_global_pose(c.bone_b).origin;
 		}
 	}
-	_pack_colliders();
+	_place_capture(p_skeleton);
 	has_capture = true;
+}
+
+// The captured pose where the skeleton is now, then the colliders from it.
+void PhysXSkinnedCloth3D::_place_capture(Skeleton3D *p_skeleton) {
+	skeleton_xform = p_skeleton->get_global_transform_interpolated();
+	captured_bones.resize(MAX(captured_poses.size(), 1) * 16);
+	float *bw = captured_bones.ptrw();
+	for (int j = 0; j < captured_poses.size(); j++) {
+		put_mat4(bw + j * 16, skeleton_xform * captured_poses[j]);
+	}
+	_pack_colliders();
 }
 
 // The colliders, from each one's bone as last captured and its shape as it is
@@ -1034,8 +1040,9 @@ void PhysXSkinnedCloth3D::_pack_colliders() {
 		if (c.from_shape) {
 			_read_shape(c);
 		}
+		const Transform3D bone_world = skeleton_xform * c.bone_pose;
 		// Where the PhysicalBone3D puts its shape: bone pose * body offset.
-		const Transform3D x = c.from_shape ? c.bone_world * c.shape_local : Transform3D();
+		const Transform3D x = c.from_shape ? bone_world * c.shape_local : Transform3D();
 		if (c.is_box) {
 			const Vector3 o = x.origin;
 			xw[0] = o.x;
@@ -1060,8 +1067,8 @@ void PhysXSkinnedCloth3D::_pack_colliders() {
 			b = x.xform(Vector3(0, c.half_length, 0));
 			scale = 1.0f; // authored shapes are used as they are
 		} else {
-			a = c.bone_world.origin;
-			b = c.end_world;
+			a = bone_world.origin;
+			b = skeleton_xform.xform(c.end_pose);
 		}
 		// A disabled shape: a radius that keeps nothing out.
 		const float off = c.active ? 0.0f : -1e6f;
@@ -1138,6 +1145,19 @@ void PhysXSkinnedCloth3D::_step() {
 		return;
 	}
 	_advance(dt);
+}
+
+// A frame the skeleton didn't update in (a still pose, possibly still moving through the world): one step on the last
+// capture, placed where the skeleton is now. Runs deferred, after any skeleton update this frame would have stepped.
+void PhysXSkinnedCloth3D::_late_step() {
+	if (!built || !simulating || last_step_frame == Engine::get_singleton()->get_process_frames()) {
+		return;
+	}
+	Skeleton3D *skeleton = ObjectDB::get_instance<Skeleton3D>(skeleton_id);
+	if (skeleton != nullptr) {
+		_place_capture(skeleton); // also re-reads the physical bones' shapes, which may have changed meanwhile
+	}
+	_step();
 }
 
 void PhysXSkinnedCloth3D::_on_skeleton_updated() {

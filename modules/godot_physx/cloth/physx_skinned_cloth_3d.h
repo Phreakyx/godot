@@ -116,8 +116,8 @@ private:
 		bool is_box = false;
 		Vector3 half_extents; // box, in its own (unscaled) space
 		bool active = true;
-		Transform3D bone_world; // bone_a's world transform at the last capture
-		Vector3 end_world; // automatic capsules: bone_b's head then
+		Transform3D bone_pose; // bone_a's pose (skeleton space) at the last capture
+		Vector3 end_pose; // automatic capsules: bone_b's head then
 	};
 	bool using_physical_bones = false;
 	Vector<Capsule> capsules;
@@ -137,14 +137,19 @@ private:
 	void _step();
 	// The skeleton's FINAL pose — after its modifiers (IK, spring bones, ...) — exists only while the skeleton
 	// updates: it emits skeleton_updated, skins, then restores the unmodified poses. So the pose is captured in
-	// skeleton_updated (and the cloth steps right there); a frame with no skeleton update reuses the last capture.
+	// skeleton_updated (and the cloth steps right there); a frame with no skeleton update reuses the last capture,
+	// placed where the skeleton is then (the pose holds still, the character may not).
 	void _capture_pose(Skeleton3D *p_skeleton);
+	void _place_capture(Skeleton3D *p_skeleton);
+	void _late_step();
 	void _advance(double p_delta);
 	void _on_skeleton_updated();
 	void _connect_skeleton(Skeleton3D *p_skeleton);
 	void _disconnect_skeleton();
 	ObjectID connected_skeleton_id;
-	PackedFloat32Array captured_bones; // per skin bind: skel_xform * global pose * bind pose (mat4)
+	Vector<Transform3D> captured_poses; // per skin bind: global pose * bind pose (skeleton space)
+	Transform3D skeleton_xform; // where the skeleton is drawn, as last placed
+	PackedFloat32Array captured_bones; // per skin bind: skeleton_xform * global pose * bind pose (mat4)
 	PackedFloat32Array captured_capsules; // per capsule: a.xyz ra, b.xyz rb (world)
 	PackedFloat32Array captured_boxes; // per box: centre.xyz active, half-axes x, y, z (world)
 	bool has_capture = false;
