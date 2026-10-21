@@ -33,6 +33,7 @@
 #include "skinned_cloth_solver.h"
 
 #include "scene/3d/node_3d.h"
+#include "scene/resources/material.h"
 
 class MeshInstance3D;
 class Skeleton3D;
@@ -81,6 +82,20 @@ class PhysXSkinnedCloth3D : public Node3D {
 	Ref<Texture2DRD> pos_texture;
 	Ref<Texture2DRD> nrm_texture;
 	ObjectID source_id;
+	// How the source's original surface was hidden: the whole node (a
+	// one-surface mesh), or just that surface, with an override material that
+	// draws nothing (the user's own override kept to put back).
+	bool hid_source_node = false;
+	int hidden_surface = -1;
+	Ref<Material> saved_surface_override;
+	static Ref<ShaderMaterial> hide_material;
+	void _hide_source(MeshInstance3D *p_source);
+	void _unhide_source(MeshInstance3D *p_source);
+
+public:
+	static void free_shared() { hide_material.unref(); }
+
+private:
 	ObjectID skeleton_id;
 	Vector<int> bind_bones; // skeleton bone index per skin bind
 	Vector<Transform3D> bind_poses;

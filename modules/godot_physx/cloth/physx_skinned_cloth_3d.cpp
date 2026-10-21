@@ -259,6 +259,48 @@ void PhysXSkinnedCloth3D::_notification(int p_what) {
 	}
 }
 
+Ref<ShaderMaterial> PhysXSkinnedCloth3D::hide_material;
+
+// The simulated surface is drawn by the render copy; the source's own copy of
+// it is hidden. With other surfaces on the mesh (a body and its skirt in one
+// MeshInstance3D, as imported characters often are), only that surface: an
+// override material that draws nothing (no shadow either). The user's own
+// override on it is put back when the cloth goes.
+void PhysXSkinnedCloth3D::_hide_source(MeshInstance3D *p_source) {
+	hid_source_node = false;
+	hidden_surface = -1;
+	saved_surface_override.unref();
+	if (p_source->get_mesh().is_null() || p_source->get_mesh()->get_surface_count() <= 1) {
+		p_source->set_visible(false);
+		hid_source_node = true;
+		return;
+	}
+	if (hide_material.is_null()) {
+		Ref<Shader> shader;
+		shader.instantiate();
+		shader->set_code("shader_type spatial;\nrender_mode unshaded, depth_draw_never, cull_disabled;\nvoid fragment() {\n\tdiscard;\n}\n");
+		hide_material.instantiate();
+		hide_material->set_shader(shader);
+	}
+	hidden_surface = surface;
+	saved_surface_override = p_source->get_surface_override_material(surface);
+	p_source->set_surface_override_material(surface, hide_material);
+}
+
+void PhysXSkinnedCloth3D::_unhide_source(MeshInstance3D *p_source) {
+	if (hid_source_node) {
+		p_source->set_visible(true);
+	} else if (hidden_surface >= 0 && p_source->get_mesh().is_valid() && hidden_surface < p_source->get_mesh()->get_surface_count()) {
+		// Only if it's still ours (the user may have set their own since).
+		if (p_source->get_surface_override_material(hidden_surface) == hide_material) {
+			p_source->set_surface_override_material(hidden_surface, saved_surface_override);
+		}
+	}
+	hid_source_node = false;
+	hidden_surface = -1;
+	saved_surface_override.unref();
+}
+
 void PhysXSkinnedCloth3D::_clear() {
 	_disconnect_skeleton();
 	MeshInstance3D *ri = ObjectDB::get_instance<MeshInstance3D>(render_instance_id);
@@ -269,7 +311,7 @@ void PhysXSkinnedCloth3D::_clear() {
 	render_instance_id = ObjectID();
 	MeshInstance3D *source = ObjectDB::get_instance<MeshInstance3D>(source_id);
 	if (source != nullptr) {
-		source->set_visible(true);
+		_unhide_source(source);
 	}
 	// Let go of the solver's textures before it frees them, or the material
 	// still binds them on its next update.
@@ -887,7 +929,7 @@ void PhysXSkinnedCloth3D::_try_build() {
 	}
 	render_instance->set_custom_aabb(source->get_aabb().grow(largest + 0.25f));
 	render_instance_id = render_instance->get_instance_id();
-	source->set_visible(false);
+	_hide_source(source);
 
 	source_id = source->get_instance_id();
 	skeleton_id = skeleton->get_instance_id();

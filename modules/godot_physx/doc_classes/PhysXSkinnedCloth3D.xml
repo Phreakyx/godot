@@ -112,7 +112,7 @@
 			Solver substeps per frame. More is stiffer and more stable under fast motion, at a proportional GPU cost.
 		</member>
 		<member name="surface" type="int" setter="set_surface" getter="get_surface" default="0">
-			Which surface of the mesh is the cloth.
+			Which surface of the mesh is the cloth. While the cloth runs, only that surface of the source [MeshInstance3D] is hidden (its simulated copy draws in its place), so a character imported as one mesh with the body, hair and garments as separate surfaces keeps the rest visible. The source surface's own material override is put back when the cloth stops. A one-surface mesh hides the whole node, as before.
 		</member>
 		<member name="thickness" type="float" setter="set_thickness" getter="get_thickness" default="0.012">
 			Extra distance (meters) the cloth keeps from the body capsules.

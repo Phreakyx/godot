@@ -155,6 +155,7 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 void uninitialize_godot_physx_module(ModuleInitializationLevel p_level) {
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
 		PhysXFluidRenderEffect::free_shared();
+		PhysXSkinnedCloth3D::free_shared();
 	}
 #ifdef GODOT_PHYSX_FLOW
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
