@@ -499,8 +499,9 @@ around the sun outward along lines from it (the two stack).
   where Godot has no volumetric fog, this is the way to get sun shafts.
 - Nothing is drawn with the sun behind the camera or an orthogonal camera.
   One shafts node per frame is drawn.
-- Demo: `demo/editor/render/light_shafts.tscn` (keys to compare against
-  Godot's volumetric fog).
+- Demos: `demo/editor/cpu/light_shafts.tscn` (keys to compare against
+  Godot's volumetric fog), and `demo/editor/flow/light_shafts.tscn`, the same
+  with a `PhysXFlow3D` fire in front of the sun.
 
 ## Cloth — `PhysXCloth3D`
 
