@@ -256,6 +256,19 @@ The standard `physics/3d/sleep_threshold_linear`, `sleep_threshold_angular` and
 `time_before_sleep` project settings also apply — they are mapped onto PhysX's
 sleep energy threshold and wake counter.
 
+## Characters on debris piles
+
+A `CharacterBody3D` rides the floor it stands on: the body's velocity at the
+character's origin, spin included (as on Jolt and Godot Physics). On a pile
+of loose boxes or rubble that reads as being shoved around whenever a box
+shifts or tips underfoot. Put the debris on its own collision layer, include
+that layer in the character's `collision_mask` and leave it out of its
+`platform_floor_layers`: the character stands on, walks over and kicks the
+debris, but doesn't ride its motion. Props and platforms on other layers
+still carry it. (Resting bodies' leftover solver spin, below ~3°/s, is never
+carried, on any layer.) The playground demo (`demo/cpu/physx_playground.tscn`)
+does this with a `debris` layer.
+
 ## Area3D overrides
 
 Areas detect rigid, kinematic and static bodies (`body_entered`,
