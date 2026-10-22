@@ -39,6 +39,7 @@
 #include "core/object/class_db.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/resources/3d/world_3d.h"
+#include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
@@ -60,12 +61,15 @@ const char *COPY_SHADER = R"(
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform restrict readonly image2D src;
+// The source is sampled, not loaded as an image: the Mobile renderer's color
+// buffer can't be a storage image.
+layout(set = 0, binding = 0) uniform sampler2D src;
 layout(set = 0, binding = 1, rgba16f) uniform restrict writeonly image2D dst;
 
 layout(push_constant, std430) uniform Params {
 	ivec2 size;
-	ivec2 pad;
+	float scale; // on rgb
+	float pad;
 } params;
 
 void main() {
@@ -73,7 +77,31 @@ void main() {
 	if (p.x >= params.size.x || p.y >= params.size.y) {
 		return;
 	}
-	imageStore(dst, p, imageLoad(src, p));
+	vec4 c = texelFetch(src, p, 0);
+	imageStore(dst, p, vec4(c.rgb * params.scale, c.a));
+}
+)";
+
+// Writes the gas, drawn on a copy of the frame, back into a frame that can't be
+// written from a compute pass (the Mobile renderer's): a fullscreen draw.
+const char *WRITE_BACK_SHADER = R"(
+#[vertex]
+#version 450
+void main() {
+	vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+	gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+#[fragment]
+#version 450
+layout(set = 0, binding = 0) uniform sampler2D src;
+layout(push_constant, std430) uniform Params {
+	float scale; // on rgb
+	float pad[3];
+} params;
+layout(location = 0) out vec4 frag;
+void main() {
+	vec4 c = texelFetch(src, ivec2(gl_FragCoord.xy), 0);
+	frag = vec4(c.rgb * params.scale, c.a);
 }
 )";
 
@@ -156,8 +184,13 @@ PhysXFlowRenderEffect::~PhysXFlowRenderEffect() {
 		if (copy_pipeline.is_valid()) {
 			rd->free_rid(copy_pipeline);
 		}
-		if (copy_shader.is_valid()) {
-			rd->free_rid(copy_shader);
+		for (const KeyValue<int64_t, RID> &kv : write_back_pipelines) {
+			rd->free_rid(kv.value);
+		}
+		for (RID r : { copy_shader, copy_sampler, write_back_shader, work }) {
+			if (r.is_valid()) {
+				rd->free_rid(r);
+			}
 		}
 		scatter.free(rd);
 	}
@@ -180,28 +213,61 @@ bool PhysXFlowRenderEffect::_ensure_copy_pipeline(RenderingDevice *p_rd) {
 	if (copy_shader.is_valid()) {
 		copy_pipeline = p_rd->compute_pipeline_create(copy_shader);
 	}
-	copy_failed = !copy_pipeline.is_valid();
-	return !copy_failed;
+	Ref<RDShaderFile> write_file;
+	write_file.instantiate();
+	if (write_file->parse_versions_from_text(WRITE_BACK_SHADER) == OK) {
+		write_back_shader = p_rd->shader_create_from_spirv(write_file->get_spirv_stages());
+	}
+	copy_sampler = p_rd->sampler_create(RD::SamplerState());
+	copy_failed = !copy_pipeline.is_valid() || !write_back_shader.is_valid();
+	ERR_FAIL_COND_V_MSG(copy_failed, false, "PhysXFlowRenderEffect: copy shaders failed to compile.");
+	return true;
 }
 
-void PhysXFlowRenderEffect::copy_texture(RenderingDevice *p_rd, const RID &p_src, const RID &p_dst, const Size2i &p_size) {
+void PhysXFlowRenderEffect::copy_texture(RenderingDevice *p_rd, const RID &p_src, const RID &p_dst, const Size2i &p_size, float p_scale) {
 	if (!_ensure_copy_pipeline(p_rd)) {
 		return;
 	}
-	RD::Uniform src(RD::UNIFORM_TYPE_IMAGE, 0, p_src);
+	RD::Uniform src(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ copy_sampler, p_src }));
 	RD::Uniform dst(RD::UNIFORM_TYPE_IMAGE, 1, p_dst);
 	LocalVector<RD::Uniform> uniforms;
 	uniforms.push_back(src);
 	uniforms.push_back(dst);
 	const RID set = p_rd->uniform_set_create(uniforms, copy_shader, 0);
 	ERR_FAIL_COND(!set.is_valid());
-	const int32_t push[4] = { p_size.x, p_size.y, 0, 0 };
+	struct {
+		int32_t size[2];
+		float scale;
+		float pad;
+	} push = { { p_size.x, p_size.y }, p_scale, 0.0f };
 	const RD::ComputeListID list = p_rd->compute_list_begin();
 	p_rd->compute_list_bind_compute_pipeline(list, copy_pipeline);
 	p_rd->compute_list_bind_uniform_set(list, set, 0);
-	p_rd->compute_list_set_push_constant(list, push, sizeof(push));
+	p_rd->compute_list_set_push_constant(list, &push, sizeof(push));
 	p_rd->compute_list_dispatch(list, (p_size.x + 7) / 8, (p_size.y + 7) / 8, 1);
 	p_rd->compute_list_end();
+	p_rd->free_rid(set);
+}
+
+void PhysXFlowRenderEffect::_write_back(RenderingDevice *p_rd, const RID &p_src, const RID &p_color, float p_scale) {
+	const RID framebuffer = FramebufferCacheRD::get_singleton()->get_cache(p_color);
+	ERR_FAIL_COND(!framebuffer.is_valid());
+	const RD::FramebufferFormatID format = p_rd->framebuffer_get_format(framebuffer);
+	RID *pipeline = write_back_pipelines.getptr(format);
+	if (pipeline == nullptr) {
+		const RID created = p_rd->render_pipeline_create(write_back_shader, format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), RD::PipelineColorBlendState::create_disabled());
+		ERR_FAIL_COND(!created.is_valid());
+		pipeline = &write_back_pipelines.insert(format, created)->value;
+	}
+	const RID set = p_rd->uniform_set_create(Vector<RD::Uniform>({ RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ copy_sampler, p_src })) }), write_back_shader, 0);
+	ERR_FAIL_COND(!set.is_valid());
+	const float push[4] = { p_scale, 0.0f, 0.0f, 0.0f };
+	const RD::DrawListID list = p_rd->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL);
+	p_rd->draw_list_bind_render_pipeline(list, *pipeline);
+	p_rd->draw_list_bind_uniform_set(list, set, 0);
+	p_rd->draw_list_set_push_constant(list, push, sizeof(push));
+	p_rd->draw_list_draw(list, false, 1, 3);
+	p_rd->draw_list_end();
 	p_rd->free_rid(set);
 }
 
@@ -265,13 +331,42 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 			SWAP(sorted[j - 1], sorted[j]);
 		}
 	}
+	if (!_ensure_copy_pipeline(rd)) {
+		return;
+	}
+	// The gas is drawn straight into the frame when it can be written from a
+	// compute pass (Forward+). The Mobile renderer's can't, and holds color
+	// halved: the gas is drawn on a full-brightness RGBA16F copy then, written
+	// back after.
+	const bool direct = rd->texture_get_format(color).usage_bits & RD::TEXTURE_USAGE_STORAGE_BIT;
+	const float luminance = buffers->get_luminance_multiplier();
+	RID target = color;
+	if (!direct) {
+		if (!work.is_valid() || work_size != size) {
+			if (work.is_valid()) {
+				rd->free_rid(work);
+			}
+			RD::TextureFormat tf;
+			tf.width = size.x;
+			tf.height = size.y;
+			tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+			tf.usage_bits = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
+			work = rd->texture_create(tf, RD::TextureView());
+			work_size = size;
+		}
+		copy_texture(rd, color, work, size, luminance);
+		target = work;
+	}
 	// The light shafts (drawn next) take their light from the frame without the
-	// gas: glowing gas isn't the sun.
+	// gas: glowing gas isn't the sun. (As the frame holds it: halved on Mobile.)
 	const RID backdrop = PhysXLightShaftsEffect::gas_backdrop(rd, size);
 	if (backdrop.is_valid()) {
-		copy_texture(rd, color, backdrop, size);
+		copy_texture(rd, target, backdrop, size, direct ? 1.0f : 1.0f / luminance);
 	}
 	for (PhysXFlow3D *flow : sorted) {
-		flow->render_rd(this, rd, view_f, projection_f, size, depth, color, inv_view_projection, eye, render_data_rd != nullptr ? render_data_rd->lights : nullptr, render_data_rd != nullptr ? render_data_rd->shadow_atlas : RID());
+		flow->render_rd(this, rd, view_f, projection_f, size, depth, target, inv_view_projection, eye, render_data_rd != nullptr ? render_data_rd->lights : nullptr, render_data_rd != nullptr ? render_data_rd->shadow_atlas : RID());
+	}
+	if (!direct) {
+		_write_back(rd, work, color, 1.0f / luminance);
 	}
 }

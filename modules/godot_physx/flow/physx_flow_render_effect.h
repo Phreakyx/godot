@@ -63,8 +63,17 @@ class PhysXFlowRenderEffect : public CompositorEffect {
 	// compute pass can write.
 	RID copy_shader;
 	RID copy_pipeline;
+	RID copy_sampler;
 	bool copy_failed = false;
 	bool _ensure_copy_pipeline(RenderingDevice *p_rd);
+	// A frame that can't be written from a compute pass (the Mobile renderer's,
+	// also stored halved): the gas is drawn on this full-brightness copy, then
+	// written back by a fullscreen draw.
+	RID work;
+	Size2i work_size;
+	RID write_back_shader;
+	HashMap<int64_t, RID> write_back_pipelines; // per framebuffer format
+	void _write_back(RenderingDevice *p_rd, const RID &p_src, const RID &p_color, float p_scale);
 
 	// PhysXFlow3D.light_scattering's pass (shared by every flow).
 	FlowScatterRD scatter;
@@ -75,8 +84,9 @@ protected:
 	static void _bind_methods();
 
 public:
-	// Writes p_src over p_dst (both RGBA16F, p_size), on the render thread.
-	void copy_texture(RenderingDevice *p_rd, const RID &p_src, const RID &p_dst, const Size2i &p_size);
+	// Writes p_src (sampled) over p_dst (an RGBA16F storage image), rgb scaled
+	// by p_scale, on the render thread.
+	void copy_texture(RenderingDevice *p_rd, const RID &p_src, const RID &p_dst, const Size2i &p_size, float p_scale = 1.0f);
 	// Adds point / spot light scattering in a flow's gas onto p_color.
 	FlowScatterRD &get_scatter() { return scatter; }
 
