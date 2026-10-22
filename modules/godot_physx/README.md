@@ -474,14 +474,15 @@ Things worth knowing:
 
 ## Light shafts — `PhysXLightShafts3D`
 
-UE-style sun shafts ("god rays"): add a `PhysXLightShafts3D` as a child of the
+Screen-space sun shafts ("god rays"), the light shafts other engines offer
+as a post effect: add a `PhysXLightShafts3D` as a child of the
 `DirectionalLight3D` and the sun's light streams outward through the gaps in
 whatever stands in front of it (bloom), with the frame darkened along the rays
 it blocks (occlusion). It works on the rendered frame, so no fog is needed and
 it costs the same at any distance (a few tenths of a millisecond at 1080p),
 unlike Godot's volumetric fog, whose shafts are soft, end at
 `volumetric_fog_length` and need fog across the whole scene.
-Its "shaft bloom" is UE's Light Shaft Bloom, not the Environment's glow: glow
+Its "shaft bloom" isn't the Environment's glow: glow
 blurs every bright pixel into a halo, shaft bloom smears only the unblocked sky
 around the sun outward along lines from it (the two stack).
 

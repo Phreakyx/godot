@@ -34,7 +34,7 @@
 
 class DirectionalLight3D;
 
-// UE-style light shafts from a DirectionalLight3D (the sun), drawn in screen
+// Light shafts (god rays) from a DirectionalLight3D (the sun), drawn in screen
 // space: no fog needed, at any distance. Where the sky shows near the sun its
 // light streams outward in rays (bloom); where something blocks it, the frame
 // is darkened along the same rays (occlusion). Whatever is in the depth buffer
