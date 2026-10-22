@@ -34,6 +34,7 @@
 
 #include "core/io/image.h"
 #include "core/object/class_db.h"
+#include "core/templates/hash_map.h"
 #include "scene/resources/mesh.h"
 #include "scene/resources/texture.h"
 
@@ -254,6 +255,28 @@ bool cutout_pattern_has_floating_wall_island(const PackedByteArray &p_gray, uint
 	return false;
 }
 
+// Whether every edge (by vertex index, the way Blast sees it) is shared by exactly two triangles: a closed mesh
+// that doesn't need the mesh cleaner.
+bool is_closed(const LocalVector<uint32_t> &p_indices) {
+	HashMap<uint64_t, int> edges;
+	for (uint32_t t = 0; t + 2 < p_indices.size(); t += 3) {
+		for (int e = 0; e < 3; e++) {
+			const uint64_t a = p_indices[t + e];
+			const uint64_t b = p_indices[t + (e + 1) % 3];
+			if (a == b) {
+				return false; // a degenerate triangle
+			}
+			edges[MIN(a, b) << 32 | MAX(a, b)]++;
+		}
+	}
+	for (const KeyValue<uint64_t, int> &kv : edges) {
+		if (kv.value != 2) {
+			return false;
+		}
+	}
+	return !edges.is_empty();
+}
+
 } //namespace
 
 void PhysXBlastAuthoring::_bind_methods() {
@@ -270,6 +293,8 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 	PxPhysics *physics = GodotPhysXServer3D::get_singleton() ? GodotPhysXServer3D::get_singleton()->get_px_physics() : nullptr;
 	ERR_FAIL_NULL_V_MSG(physics, Ref<PhysXBlastAsset>(), "PhysXBlastAuthoring: PhysX not initialized.");
 
+	ERR_FAIL_COND_V_MSG(p_mesh->surface_get_primitive_type(0) != Mesh::PRIMITIVE_TRIANGLES, Ref<PhysXBlastAsset>(),
+			"PhysXBlastAuthoring: the mesh's first surface isn't a triangle list.");
 	const Array arrays = p_mesh->surface_get_arrays(0);
 	const PackedVector3Array verts = arrays[Mesh::ARRAY_VERTEX];
 	ERR_FAIL_COND_V_MSG(verts.size() < 4, Ref<PhysXBlastAsset>(), "PhysXBlastAuthoring: mesh has too few vertices.");
@@ -306,6 +331,24 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 		}
 	}
 
+	// Blast trusts its input: an index past the vertices was read out of bounds, a partial triangle crashed, and a
+	// NaN vertex or a mesh collapsed to a point spun the mesh cleaner forever. Checked here instead.
+	ERR_FAIL_COND_V_MSG(indices.size() < 3 || indices.size() % 3 != 0, Ref<PhysXBlastAsset>(),
+			vformat("PhysXBlastAuthoring: %d indices isn't a whole number of triangles.", (int)indices.size()));
+	for (uint32_t i = 0; i < indices.size(); i++) {
+		ERR_FAIL_COND_V_MSG(indices[i] >= (uint32_t)verts.size(), Ref<PhysXBlastAsset>(),
+				vformat("PhysXBlastAuthoring: index %d points past the mesh's %d vertices.", (int)indices[i], verts.size()));
+	}
+	AABB bounds(verts[0], Vector3());
+	for (int i = 0; i < verts.size(); i++) {
+		ERR_FAIL_COND_V_MSG(!verts[i].is_finite(), Ref<PhysXBlastAsset>(),
+				vformat("PhysXBlastAuthoring: vertex %d isn't a finite position.", i));
+		bounds.expand_to(verts[i]);
+	}
+	const real_t thinnest = bounds.size[bounds.get_shortest_axis_index()];
+	ERR_FAIL_COND_V_MSG(thinnest <= MAX(bounds.get_longest_axis_size(), (real_t)1.0) * (real_t)1e-5, Ref<PhysXBlastAsset>(),
+			vformat("PhysXBlastAuthoring: the mesh has no volume to fracture (its bounds are %s).", bounds.size));
+
 	Nv::Blast::Mesh *raw_mesh = NvBlastExtAuthoringCreateMesh(positions.ptr(), normals.ptr(), uvs.ptr(),
 			(uint32_t)positions.size(), indices.ptr(), (uint32_t)indices.size());
 	ERR_FAIL_NULL_V_MSG(raw_mesh, Ref<PhysXBlastAsset>(), "PhysXBlastAuthoring: NvBlastExtAuthoringCreateMesh failed.");
@@ -319,12 +362,33 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 	// result with "Not equal number of starting and ending vertices" until
 	// this was added) -- clean unconditionally rather than special-case it
 	// per pattern, since a strictly-valid mesh can only help the others too.
-	Nv::Blast::MeshCleaner *mesh_cleaner = NvBlastExtAuthoringCreateMeshCleaner();
-	Nv::Blast::Mesh *cleaned_mesh = mesh_cleaner->cleanMesh(raw_mesh);
-	Nv::Blast::Mesh *blast_mesh = cleaned_mesh ? cleaned_mesh : raw_mesh;
-	if (!cleaned_mesh) {
-		ERR_PRINT("PhysXBlastAuthoring: MeshCleaner::cleanMesh failed, fracturing the raw mesh as-is.");
+	// A mesh that's already closed (welded, every edge shared by two triangles) skips it: there's nothing to clean.
+	// What the cleaner returns is checked against the source: empty or reaching outside the source's bounds (it broke
+	// the shape), and the raw mesh is fractured instead; smaller than the source (it dropped pieces that weren't part
+	// of a closed solid, a stray triangle), and it's kept, with a warning.
+	Nv::Blast::MeshCleaner *mesh_cleaner = nullptr;
+	Nv::Blast::Mesh *cleaned_mesh = nullptr;
+	if (!is_closed(indices)) {
+		mesh_cleaner = NvBlastExtAuthoringCreateMeshCleaner();
+		cleaned_mesh = mesh_cleaner->cleanMesh(raw_mesh);
+		if (!cleaned_mesh) {
+			WARN_PRINT("PhysXBlastAuthoring: the mesh cleaner failed; fracturing the mesh as it is.");
+		} else {
+			const NvcBounds3 &cb = cleaned_mesh->getBoundingBox();
+			const AABB cleaned_bounds(Vector3(cb.minimum.x, cb.minimum.y, cb.minimum.z),
+					Vector3(cb.maximum.x - cb.minimum.x, cb.maximum.y - cb.minimum.y, cb.maximum.z - cb.minimum.z));
+			const real_t tolerance = bounds.get_longest_axis_size() * (real_t)0.01;
+			const AABB allowed = bounds.grow(tolerance);
+			if (cleaned_mesh->getFacetCount() == 0 || !allowed.encloses(cleaned_bounds)) {
+				WARN_PRINT(vformat("PhysXBlastAuthoring: the mesh cleaner broke the mesh (bounds %s, was %s); fracturing the mesh as it is.", cleaned_bounds, bounds));
+				cleaned_mesh->release();
+				cleaned_mesh = nullptr;
+			} else if (!cleaned_bounds.grow(tolerance).encloses(bounds)) {
+				WARN_PRINT(vformat("PhysXBlastAuthoring: the mesh cleaner dropped parts of the mesh that weren't a closed solid (bounds %s, was %s).", cleaned_bounds, bounds));
+			}
+		}
 	}
+	Nv::Blast::Mesh *blast_mesh = cleaned_mesh ? cleaned_mesh : raw_mesh;
 
 	Nv::Blast::FractureTool *fTool = NvBlastExtAuthoringCreateFractureTool();
 	const Nv::Blast::Mesh *src_meshes[1] = { blast_mesh };
@@ -501,6 +565,8 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 		cleaned_mesh->release();
 	}
 	raw_mesh->release();
-	mesh_cleaner->release();
+	if (mesh_cleaner) {
+		mesh_cleaner->release();
+	}
 	return result;
 }
