@@ -53,12 +53,12 @@ public:
 private:
 	NodePath light;
 	ShaftMode mode = SHAFTS_BLOOM_AND_OCCLUSION;
-	float bloom_scale = 4.0f;
-	float bloom_threshold = 0.75f;
-	Color bloom_tint = Color(1, 1, 1);
-	float bloom_max_brightness = 8.0f;
-	float occlusion_strength = 0.6f;
-	float occlusion_depth_range = 1000.0f;
+	float shaft_bloom_scale = 4.0f;
+	float shaft_bloom_threshold = 0.75f;
+	Color shaft_bloom_tint = Color(1, 1, 1);
+	float shaft_bloom_max_brightness = 8.0f;
+	float shaft_occlusion_strength = 0.6f;
+	float shaft_occlusion_depth_range = 1000.0f;
 	float ray_length = 0.6f;
 	float edge_fade = 0.3f;
 
@@ -78,18 +78,18 @@ public:
 	NodePath get_light() const { return light; }
 	void set_mode(ShaftMode p_mode);
 	ShaftMode get_mode() const { return mode; }
-	void set_bloom_scale(float p_scale);
-	float get_bloom_scale() const { return bloom_scale; }
-	void set_bloom_threshold(float p_threshold);
-	float get_bloom_threshold() const { return bloom_threshold; }
-	void set_bloom_tint(const Color &p_tint);
-	Color get_bloom_tint() const { return bloom_tint; }
-	void set_bloom_max_brightness(float p_brightness);
-	float get_bloom_max_brightness() const { return bloom_max_brightness; }
-	void set_occlusion_strength(float p_strength);
-	float get_occlusion_strength() const { return occlusion_strength; }
-	void set_occlusion_depth_range(float p_range);
-	float get_occlusion_depth_range() const { return occlusion_depth_range; }
+	void set_shaft_bloom_scale(float p_scale);
+	float get_shaft_bloom_scale() const { return shaft_bloom_scale; }
+	void set_shaft_bloom_threshold(float p_threshold);
+	float get_shaft_bloom_threshold() const { return shaft_bloom_threshold; }
+	void set_shaft_bloom_tint(const Color &p_tint);
+	Color get_shaft_bloom_tint() const { return shaft_bloom_tint; }
+	void set_shaft_bloom_max_brightness(float p_brightness);
+	float get_shaft_bloom_max_brightness() const { return shaft_bloom_max_brightness; }
+	void set_shaft_occlusion_strength(float p_strength);
+	float get_shaft_occlusion_strength() const { return shaft_occlusion_strength; }
+	void set_shaft_occlusion_depth_range(float p_range);
+	float get_shaft_occlusion_depth_range() const { return shaft_occlusion_depth_range; }
 	void set_ray_length(float p_length);
 	float get_ray_length() const { return ray_length; }
 	void set_edge_fade(float p_fade);

@@ -77,12 +77,12 @@ void PhysXLightShafts3D::_publish() {
 	s.light_direction = -sun->get_global_transform_interpolated().basis.get_column(2);
 	const bool bloom = mode != SHAFTS_OCCLUSION;
 	const bool occlusion = mode != SHAFTS_BLOOM;
-	s.bloom_color = bloom ? bloom_tint * bloom_scale : Color(0, 0, 0);
+	s.bloom_color = bloom ? shaft_bloom_tint * shaft_bloom_scale : Color(0, 0, 0);
 	// Relative to the light: the sun's disk in the sky is about as bright as its energy.
-	s.bloom_threshold = bloom_threshold * sun->get_param(Light3D::PARAM_ENERGY);
-	s.bloom_max_brightness = bloom_max_brightness;
-	s.occlusion_strength = occlusion ? occlusion_strength : 0.0f;
-	s.occlusion_depth_range = occlusion_depth_range;
+	s.bloom_threshold = shaft_bloom_threshold * sun->get_param(Light3D::PARAM_ENERGY);
+	s.bloom_max_brightness = shaft_bloom_max_brightness;
+	s.occlusion_strength = occlusion ? shaft_occlusion_strength : 0.0f;
+	s.occlusion_depth_range = shaft_occlusion_depth_range;
 	s.ray_length = ray_length;
 	s.edge_fade = edge_fade;
 	PhysXLightShaftsEffect::set_shafts(get_instance_id(), s);
@@ -122,28 +122,28 @@ void PhysXLightShafts3D::set_mode(ShaftMode p_mode) {
 	mode = p_mode;
 }
 
-void PhysXLightShafts3D::set_bloom_scale(float p_scale) {
-	bloom_scale = MAX(p_scale, 0.0f);
+void PhysXLightShafts3D::set_shaft_bloom_scale(float p_scale) {
+	shaft_bloom_scale = MAX(p_scale, 0.0f);
 }
 
-void PhysXLightShafts3D::set_bloom_threshold(float p_threshold) {
-	bloom_threshold = MAX(p_threshold, 0.0f);
+void PhysXLightShafts3D::set_shaft_bloom_threshold(float p_threshold) {
+	shaft_bloom_threshold = MAX(p_threshold, 0.0f);
 }
 
-void PhysXLightShafts3D::set_bloom_tint(const Color &p_tint) {
-	bloom_tint = p_tint;
+void PhysXLightShafts3D::set_shaft_bloom_tint(const Color &p_tint) {
+	shaft_bloom_tint = p_tint;
 }
 
-void PhysXLightShafts3D::set_bloom_max_brightness(float p_brightness) {
-	bloom_max_brightness = MAX(p_brightness, 0.0f);
+void PhysXLightShafts3D::set_shaft_bloom_max_brightness(float p_brightness) {
+	shaft_bloom_max_brightness = MAX(p_brightness, 0.0f);
 }
 
-void PhysXLightShafts3D::set_occlusion_strength(float p_strength) {
-	occlusion_strength = CLAMP(p_strength, 0.0f, 1.0f);
+void PhysXLightShafts3D::set_shaft_occlusion_strength(float p_strength) {
+	shaft_occlusion_strength = CLAMP(p_strength, 0.0f, 1.0f);
 }
 
-void PhysXLightShafts3D::set_occlusion_depth_range(float p_range) {
-	occlusion_depth_range = MAX(p_range, 0.01f);
+void PhysXLightShafts3D::set_shaft_occlusion_depth_range(float p_range) {
+	shaft_occlusion_depth_range = MAX(p_range, 0.01f);
 }
 
 void PhysXLightShafts3D::set_ray_length(float p_length) {
@@ -167,35 +167,35 @@ void PhysXLightShafts3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_light"), &PhysXLightShafts3D::get_light);
 	ClassDB::bind_method(D_METHOD("set_mode", "mode"), &PhysXLightShafts3D::set_mode);
 	ClassDB::bind_method(D_METHOD("get_mode"), &PhysXLightShafts3D::get_mode);
-	ClassDB::bind_method(D_METHOD("set_bloom_scale", "scale"), &PhysXLightShafts3D::set_bloom_scale);
-	ClassDB::bind_method(D_METHOD("get_bloom_scale"), &PhysXLightShafts3D::get_bloom_scale);
-	ClassDB::bind_method(D_METHOD("set_bloom_threshold", "threshold"), &PhysXLightShafts3D::set_bloom_threshold);
-	ClassDB::bind_method(D_METHOD("get_bloom_threshold"), &PhysXLightShafts3D::get_bloom_threshold);
-	ClassDB::bind_method(D_METHOD("set_bloom_tint", "tint"), &PhysXLightShafts3D::set_bloom_tint);
-	ClassDB::bind_method(D_METHOD("get_bloom_tint"), &PhysXLightShafts3D::get_bloom_tint);
-	ClassDB::bind_method(D_METHOD("set_bloom_max_brightness", "brightness"), &PhysXLightShafts3D::set_bloom_max_brightness);
-	ClassDB::bind_method(D_METHOD("get_bloom_max_brightness"), &PhysXLightShafts3D::get_bloom_max_brightness);
-	ClassDB::bind_method(D_METHOD("set_occlusion_strength", "strength"), &PhysXLightShafts3D::set_occlusion_strength);
-	ClassDB::bind_method(D_METHOD("get_occlusion_strength"), &PhysXLightShafts3D::get_occlusion_strength);
-	ClassDB::bind_method(D_METHOD("set_occlusion_depth_range", "range"), &PhysXLightShafts3D::set_occlusion_depth_range);
-	ClassDB::bind_method(D_METHOD("get_occlusion_depth_range"), &PhysXLightShafts3D::get_occlusion_depth_range);
+	ClassDB::bind_method(D_METHOD("set_shaft_bloom_scale", "scale"), &PhysXLightShafts3D::set_shaft_bloom_scale);
+	ClassDB::bind_method(D_METHOD("get_shaft_bloom_scale"), &PhysXLightShafts3D::get_shaft_bloom_scale);
+	ClassDB::bind_method(D_METHOD("set_shaft_bloom_threshold", "threshold"), &PhysXLightShafts3D::set_shaft_bloom_threshold);
+	ClassDB::bind_method(D_METHOD("get_shaft_bloom_threshold"), &PhysXLightShafts3D::get_shaft_bloom_threshold);
+	ClassDB::bind_method(D_METHOD("set_shaft_bloom_tint", "tint"), &PhysXLightShafts3D::set_shaft_bloom_tint);
+	ClassDB::bind_method(D_METHOD("get_shaft_bloom_tint"), &PhysXLightShafts3D::get_shaft_bloom_tint);
+	ClassDB::bind_method(D_METHOD("set_shaft_bloom_max_brightness", "brightness"), &PhysXLightShafts3D::set_shaft_bloom_max_brightness);
+	ClassDB::bind_method(D_METHOD("get_shaft_bloom_max_brightness"), &PhysXLightShafts3D::get_shaft_bloom_max_brightness);
+	ClassDB::bind_method(D_METHOD("set_shaft_occlusion_strength", "strength"), &PhysXLightShafts3D::set_shaft_occlusion_strength);
+	ClassDB::bind_method(D_METHOD("get_shaft_occlusion_strength"), &PhysXLightShafts3D::get_shaft_occlusion_strength);
+	ClassDB::bind_method(D_METHOD("set_shaft_occlusion_depth_range", "range"), &PhysXLightShafts3D::set_shaft_occlusion_depth_range);
+	ClassDB::bind_method(D_METHOD("get_shaft_occlusion_depth_range"), &PhysXLightShafts3D::get_shaft_occlusion_depth_range);
 	ClassDB::bind_method(D_METHOD("set_ray_length", "length"), &PhysXLightShafts3D::set_ray_length);
 	ClassDB::bind_method(D_METHOD("get_ray_length"), &PhysXLightShafts3D::get_ray_length);
 	ClassDB::bind_method(D_METHOD("set_edge_fade", "fade"), &PhysXLightShafts3D::set_edge_fade);
 	ClassDB::bind_method(D_METHOD("get_edge_fade"), &PhysXLightShafts3D::get_edge_fade);
 
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "light", PROPERTY_HINT_NODE_PATH_VALID_TYPES, "DirectionalLight3D"), "set_light", "get_light");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "mode", PROPERTY_HINT_ENUM, "Bloom and Occlusion,Bloom,Occlusion"), "set_mode", "get_mode");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "mode", PROPERTY_HINT_ENUM, "Shaft Bloom and Occlusion,Shaft Bloom,Shaft Occlusion"), "set_mode", "get_mode");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ray_length", PROPERTY_HINT_RANGE, "0,2,0.01"), "set_ray_length", "get_ray_length");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "edge_fade", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_edge_fade", "get_edge_fade");
-	ADD_GROUP("Bloom", "bloom_");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bloom_scale", PROPERTY_HINT_RANGE, "0,4,0.01,or_greater"), "set_bloom_scale", "get_bloom_scale");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bloom_threshold", PROPERTY_HINT_RANGE, "0,2,0.01,or_greater"), "set_bloom_threshold", "get_bloom_threshold");
-	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "bloom_tint", PROPERTY_HINT_COLOR_NO_ALPHA), "set_bloom_tint", "get_bloom_tint");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bloom_max_brightness", PROPERTY_HINT_RANGE, "0,32,0.1,or_greater"), "set_bloom_max_brightness", "get_bloom_max_brightness");
-	ADD_GROUP("Occlusion", "occlusion_");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occlusion_strength", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_occlusion_strength", "get_occlusion_strength");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "occlusion_depth_range", PROPERTY_HINT_RANGE, "1,10000,1,or_greater,exp,suffix:m"), "set_occlusion_depth_range", "get_occlusion_depth_range");
+	ADD_GROUP("Shaft Bloom", "shaft_bloom_");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "shaft_bloom_scale", PROPERTY_HINT_RANGE, "0,4,0.01,or_greater"), "set_shaft_bloom_scale", "get_shaft_bloom_scale");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "shaft_bloom_threshold", PROPERTY_HINT_RANGE, "0,2,0.01,or_greater"), "set_shaft_bloom_threshold", "get_shaft_bloom_threshold");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "shaft_bloom_tint", PROPERTY_HINT_COLOR_NO_ALPHA), "set_shaft_bloom_tint", "get_shaft_bloom_tint");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "shaft_bloom_max_brightness", PROPERTY_HINT_RANGE, "0,32,0.1,or_greater"), "set_shaft_bloom_max_brightness", "get_shaft_bloom_max_brightness");
+	ADD_GROUP("Shaft Occlusion", "shaft_occlusion_");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "shaft_occlusion_strength", PROPERTY_HINT_RANGE, "0,1,0.01"), "set_shaft_occlusion_strength", "get_shaft_occlusion_strength");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "shaft_occlusion_depth_range", PROPERTY_HINT_RANGE, "1,10000,1,or_greater,exp,suffix:m"), "set_shaft_occlusion_depth_range", "get_shaft_occlusion_depth_range");
 
 	BIND_ENUM_CONSTANT(SHAFTS_BLOOM_AND_OCCLUSION);
 	BIND_ENUM_CONSTANT(SHAFTS_BLOOM);
