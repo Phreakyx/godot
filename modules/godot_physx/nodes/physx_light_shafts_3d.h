@@ -39,7 +39,7 @@ class DirectionalLight3D;
 // light streams outward in rays (bloom); where something blocks it, the frame
 // is darkened along the same rays (occlusion). Whatever is in the depth buffer
 // blocks the light (geometry, a PhysXParticleFluid3D's screen-space liquid);
-// PhysXFlow3D's gas only dims the bloom, by darkening the sky it covers.
+// PhysXFlow3D's gas by how much it darkens what's behind it.
 class PhysXLightShafts3D : public Node3D {
 	GDCLASS(PhysXLightShafts3D, Node3D);
 

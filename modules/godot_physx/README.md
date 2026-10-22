@@ -491,8 +491,9 @@ around the sun outward along lines from it (the two stack).
   default; `ray_length` and `edge_fade` set how far the rays reach and how
   fast they fade as the sun leaves the screen.
 - Geometry and a screen-space `PhysXParticleFluid3D` block the light; a
-  `PhysXFlow3D` gas dims the bloom where it covers the sky but casts no
-  occlusion (it isn't in the depth buffer).
+  `PhysXFlow3D` gas blocks it by how much it darkens what's behind it (smoke
+  does, fire doesn't), and glowing gas never streams like the sun (the light
+  comes from the frame before the gas was drawn).
 - Forward+ and Mobile renderers (the same look and cost, ~0.1 ms at 1080p on
   an RTX 5070); not Compatibility, which has no compositor effects.
 - Nothing is drawn with the sun behind the camera or an orthogonal camera.

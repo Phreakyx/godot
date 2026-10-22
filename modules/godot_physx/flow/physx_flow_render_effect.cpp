@@ -31,6 +31,7 @@
 #include "physx_flow_render_effect.h"
 
 #include "../nodes/physx_compositor_effects.h"
+#include "../nodes/physx_light_shafts_effect.h"
 #include "flow_backend.h"
 #include "physx_flow_3d.h"
 
@@ -263,6 +264,12 @@ void PhysXFlowRenderEffect::_render(int p_callback_type, const RenderData *p_ren
 			SWAP(distance[j - 1], distance[j]);
 			SWAP(sorted[j - 1], sorted[j]);
 		}
+	}
+	// The light shafts (drawn next) take their light from the frame without the
+	// gas: glowing gas isn't the sun.
+	const RID backdrop = PhysXLightShaftsEffect::gas_backdrop(rd, size);
+	if (backdrop.is_valid()) {
+		copy_texture(rd, color, backdrop, size);
 	}
 	for (PhysXFlow3D *flow : sorted) {
 		flow->render_rd(this, rd, view_f, projection_f, size, depth, color, inv_view_projection, eye, render_data_rd != nullptr ? render_data_rd->lights : nullptr, render_data_rd != nullptr ? render_data_rd->shadow_atlas : RID());

@@ -42,8 +42,9 @@ class World3D;
 class RenderData;
 
 // Draws PhysXLightShafts3D's sun shafts into the frame, after transparent
-// geometry and after Flow's gas (the liquid is in the depth by then, the gas in
-// the color): where the sky shows, its
+// geometry and after Flow's gas (the liquid is in the depth by then; the gas
+// is measured against the frame from before it, see gas_backdrop()): where
+// the sky shows, its
 // light is smeared outward from the sun's place on screen (bloom), and where
 // it's blocked the frame is darkened along the same rays (occlusion).
 // Installed like the module's other effects (see PhysXCompositorEffects).
@@ -84,6 +85,10 @@ private:
 	RID half_a;
 	RID half_b;
 	Size2i half_size;
+	// The frame as it was before PhysXFlow3D drew its gas (see gas_backdrop()).
+	RID backdrop;
+	Size2i backdrop_size;
+	static bool backdrop_ready; // copied this frame
 
 	bool _ensure(RenderingDevice *p_rd);
 	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size);
@@ -96,6 +101,12 @@ protected:
 	static void _bind_methods() {}
 
 public:
+	// For PhysXFlowRenderEffect, before it draws its gas: a texture of p_size
+	// to copy the frame into (the shafts take their light from the frame
+	// without the gas, dimmed by how much the gas covers), or an invalid RID
+	// when there are no shafts to draw.
+	static RID gas_backdrop(RenderingDevice *p_rd, const Size2i &p_size);
+
 	static void set_shafts(const ObjectID &p_node, const Snapshot &p_snapshot);
 	static void remove_shafts(const ObjectID &p_node);
 

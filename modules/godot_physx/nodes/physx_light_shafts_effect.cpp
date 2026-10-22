@@ -43,6 +43,7 @@
 #include "servers/rendering/storage/render_data.h"
 
 Mutex PhysXLightShaftsEffect::mutex;
+bool PhysXLightShaftsEffect::backdrop_ready = false;
 HashMap<ObjectID, PhysXLightShaftsEffect::Snapshot> PhysXLightShaftsEffect::shafts;
 HashMap<ObjectID, int> PhysXLightShaftsEffect::worlds;
 
@@ -84,6 +85,11 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0) uniform sampler2D color_tex;
 layout(set = 0, binding = 1) uniform sampler2D depth_tex;
 layout(set = 0, binding = 2, rgba16f) uniform restrict writeonly image2D dst;
+// The frame before PhysXFlow3D drew its gas (the frame itself without gas).
+layout(set = 0, binding = 3) uniform sampler2D backdrop_tex;
+float luma(vec3 c) {
+	return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (any(greaterThanEqual(px, p.size.xy))) {
@@ -104,8 +110,15 @@ void main() {
 		float dist = z <= 0.0 ? 1e30 : length(v.xyz / v.w);
 		open = min(open, clamp(dist / max(p.misc.w, 1e-3), 0.0, 1.0));
 	}
-	vec3 c = texture(color_tex, uv).rgb * p.misc.y; // the Mobile renderer stores color halved
-	float lum = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+	// The light comes from the frame without the gas (glowing gas isn't the
+	// sun, so it doesn't stream), dimmed by how much the gas lets through:
+	// the frame's brightness with the gas over without, at most 1 (smoke
+	// darkens; fire brightens, so it blocks nothing). The Mobile renderer
+	// stores color halved.
+	vec3 c = texture(backdrop_tex, uv).rgb * p.misc.y;
+	float lum = max(luma(c), 1e-5);
+	float through = clamp(luma(texture(color_tex, uv).rgb * p.misc.y) / lum, 0.0, 1.0);
+	open *= through;
 	vec3 bright = c * (clamp(lum - p.bloom.a, 0.0, p.misc.z) / lum);
 	// Only the light near the sun streams, and not from the screen's very
 	// edges (it would smear in as if from off screen).
@@ -177,6 +190,30 @@ static_assert(sizeof(Push) == 128);
 
 } // namespace
 
+RID PhysXLightShaftsEffect::gas_backdrop(RenderingDevice *p_rd, const Size2i &p_size) {
+	{
+		MutexLock lock(mutex);
+		if (shafts.is_empty()) {
+			return RID();
+		}
+	}
+	Ref<PhysXLightShaftsEffect> effect = get_shared();
+	if (effect->backdrop.is_null() || effect->backdrop_size != p_size) {
+		if (effect->backdrop.is_valid()) {
+			p_rd->free_rid(effect->backdrop);
+		}
+		RD::TextureFormat tf;
+		tf.width = p_size.x;
+		tf.height = p_size.y;
+		tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+		tf.usage_bits = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
+		effect->backdrop = p_rd->texture_create(tf, RD::TextureView());
+		effect->backdrop_size = p_size;
+	}
+	backdrop_ready = true;
+	return effect->backdrop;
+}
+
 void PhysXLightShaftsEffect::set_shafts(const ObjectID &p_node, const Snapshot &p_snapshot) {
 	MutexLock lock(mutex);
 	shafts[p_node] = p_snapshot;
@@ -231,6 +268,9 @@ PhysXLightShaftsEffect::~PhysXLightShaftsEffect() {
 		return;
 	}
 	_free_targets(rd);
+	if (backdrop.is_valid()) {
+		rd->free_rid(backdrop);
+	}
 	for (const KeyValue<int64_t, RID> &kv : composite_pipelines) {
 		rd->free_rid(kv.value);
 	}
@@ -323,6 +363,9 @@ void PhysXLightShaftsEffect::_dispatch(RenderingDevice *p_rd, int p_pass, const 
 }
 
 void PhysXLightShaftsEffect::_render(int p_callback_type, const RenderData *p_render_data) {
+	// Flow copied the frame before its gas this frame (only for this frame).
+	const bool gas = backdrop_ready;
+	backdrop_ready = false;
 	Snapshot s;
 	{
 		MutexLock lock(mutex);
@@ -398,7 +441,7 @@ void PhysXLightShaftsEffect::_render(int p_callback_type, const RenderData *p_re
 	push.size[2] = frame.x;
 	push.size[3] = frame.y;
 
-	_dispatch(rd, PASS_PREPARE, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, half_a) }, half, &push, sizeof(push));
+	_dispatch(rd, PASS_PREPARE, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, half_a), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, gas && backdrop_size == frame ? backdrop : color })) }, half, &push, sizeof(push));
 	// Three passes, each reaching SAMPLES times further: the last reaches the
 	// full ray length.
 	RID src = half_a;
