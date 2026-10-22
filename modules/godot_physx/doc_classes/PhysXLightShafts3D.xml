@@ -8,7 +8,7 @@
 		Not the same as [member Environment.glow_enabled] (Godot's bloom): glow blurs every bright pixel evenly in all directions into a halo, wherever it is. Shaft bloom only takes the unblocked sky around the sun and smears it outward along lines from the sun, so the gaps in what blocks the sun become streaks of light. The two stack (glow runs after the shafts).
 		It works on the rendered frame, so it needs no fog, costs the same at any view distance, and reaches as far as the camera sees. Compare volumetric fog ([member Environment.volumetric_fog_enabled]), which lights real fog in a coarse 3D grid: its shafts are soft, limited to [member Environment.volumetric_fog_length], and need fog density across the whole scene. The two can be combined.
 		Geometry blocks the light, and so does the liquid of a [PhysXParticleFluid3D] in a screen-space render mode (it writes the depth buffer). The gas of [PhysXFlow3D] blocks the light by how much it darkens what's behind it (smoke blocks, fire doesn't), and glowing gas isn't taken for the sun: the light comes from the frame as it was before the gas was drawn.
-		Works with the Forward+ and Mobile renderers, not Compatibility (which has no compositor effects).
+		Works with the Forward+ and Mobile renderers, not Compatibility (which has no compositor effects). Volumetric fog is Forward+ only, so on Mobile this is the way to get sun shafts.
 		The rays only show while the sun is on screen or near it: they fade out over [member edge_fade] as the sun leaves the screen, and nothing is drawn while it is behind the camera, with an orthogonal [Camera3D], or while this node or its light is hidden. Only one [PhysXLightShafts3D] is drawn per frame; with several, which one is unspecified.
 	</description>
 	<tutorials>

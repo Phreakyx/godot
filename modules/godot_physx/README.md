@@ -495,7 +495,8 @@ around the sun outward along lines from it (the two stack).
   does, fire doesn't), and glowing gas never streams like the sun (the light
   comes from the frame before the gas was drawn).
 - Forward+ and Mobile renderers (the same look and cost, ~0.1 ms at 1080p on
-  an RTX 5070); not Compatibility, which has no compositor effects.
+  an RTX 5070); not Compatibility, which has no compositor effects. On Mobile,
+  where Godot has no volumetric fog, this is the way to get sun shafts.
 - Nothing is drawn with the sun behind the camera or an orthogonal camera.
   One shafts node per frame is drawn.
 - Demo: `demo/editor/render/light_shafts.tscn` (keys to compare against
