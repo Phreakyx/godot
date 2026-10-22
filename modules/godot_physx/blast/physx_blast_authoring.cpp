@@ -75,7 +75,7 @@ void blast_authoring_log(int32_t p_type, const char *p_msg, const char *p_file, 
 // actually consumed downstream" reasoning as the prototype: PhysXDestructible3D
 // cooks its own PhysX convex hulls from each chunk's render-mesh points, not
 // from Blast's authored CollisionHull data.
-class GodotConvexMeshBuilder : public Nv::Blast::ConvexMeshBuilder {
+class GodotConvexMeshBuilder final : public Nv::Blast::ConvexMeshBuilder {
 public:
 	explicit GodotConvexMeshBuilder(PxPhysics *p_physics) :
 			physics(p_physics) {}
