@@ -35,6 +35,7 @@
 #include "core/object/callable_mp.h"
 #include "scene/3d/camera_3d.h"
 #include "scene/resources/3d/world_3d.h"
+#include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
 #include "servers/rendering/rendering_device_binds.h"
@@ -59,7 +60,7 @@ layout(push_constant, std430) uniform Params {
 	mat4 inv_proj; // clip -> view, as the scene's depth was drawn
 	vec4 sun; // xy: the sun on screen (uv, may be off it), z: fade, w: width / height
 	vec4 bloom; // rgb: tint * scale (black: no bloom), a: threshold
-	vec4 misc; // x: occlusion strength, y: this blur pass's reach (uv), z: max brightness, w: occlusion depth range (m)
+	vec4 misc; // x: occlusion strength, y: the blur: this pass's reach (uv); prepare / composite: the frame's luminance multiplier, z: max brightness, w: occlusion depth range (m)
 	ivec4 size; // xy: the half-resolution buffers, zw: the frame
 } p;
 
@@ -103,7 +104,7 @@ void main() {
 		float dist = z <= 0.0 ? 1e30 : length(v.xyz / v.w);
 		open = min(open, clamp(dist / max(p.misc.w, 1e-3), 0.0, 1.0));
 	}
-	vec3 c = texture(color_tex, uv).rgb;
+	vec3 c = texture(color_tex, uv).rgb * p.misc.y; // the Mobile renderer stores color halved
 	float lum = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
 	vec3 bright = c * (clamp(lum - p.bloom.a, 0.0, p.misc.z) / lum);
 	// Only the light near the sun streams, and not from the screen's very
@@ -137,27 +138,28 @@ void main() {
 	imageStore(dst, px, sum / float(@SAMPLES@));
 }
 )",
-	// PASS_COMPOSITE: the rays onto the frame.
+	// PASS_COMPOSITE: the rays onto the frame, drawn (blended) rather than
+	// written from a compute pass: the Mobile renderer's color buffer can't be
+	// a storage image. The blend makes it frame * shade + rays.
 	R"(
-#[compute]
+#[vertex]
 #version 450
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+void main() {
+	vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+	gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+#[fragment]
+#version 450
 @PARAMS@
 layout(set = 0, binding = 0) uniform sampler2D shafts;
-layout(set = 0, binding = 1, rgba16f) uniform restrict image2D color;
+layout(location = 0) out vec4 frag;
 void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(px, p.size.zw))) {
-		return;
-	}
-	vec2 uv = (vec2(px) + 0.5) / vec2(p.size.zw);
+	vec2 uv = gl_FragCoord.xy / vec2(p.size.zw);
 	vec4 s = texture(shafts, uv);
-	vec4 c = imageLoad(color, px);
 	// Darkened where the way to the sun is blocked, near the sun only (further
 	// out the rays have spread too thin to show).
 	float shade = mix(1.0, mix(1.0 - p.misc.x, 1.0, s.a), near_sun(uv) * p.sun.z);
-	c.rgb = c.rgb * shade + s.rgb * p.bloom.rgb * p.sun.z;
-	imageStore(color, px, c);
+	frag = vec4(s.rgb * p.bloom.rgb * p.sun.z / p.misc.y, shade);
 }
 )",
 };
@@ -229,6 +231,9 @@ PhysXLightShaftsEffect::~PhysXLightShaftsEffect() {
 		return;
 	}
 	_free_targets(rd);
+	for (const KeyValue<int64_t, RID> &kv : composite_pipelines) {
+		rd->free_rid(kv.value);
+	}
 	for (int i = 0; i < PASS_MAX; i++) {
 		if (pipelines[i].is_valid()) {
 			rd->free_rid(pipelines[i]);
@@ -243,7 +248,7 @@ PhysXLightShaftsEffect::~PhysXLightShaftsEffect() {
 }
 
 bool PhysXLightShaftsEffect::_ensure(RenderingDevice *p_rd) {
-	if (pipelines[PASS_COMPOSITE].is_valid()) {
+	if (shaders[PASS_COMPOSITE].is_valid()) {
 		return true;
 	}
 	if (failed) {
@@ -257,12 +262,17 @@ bool PhysXLightShaftsEffect::_ensure(RenderingDevice *p_rd) {
 		ERR_FAIL_COND_V_MSG(file->parse_versions_from_text(source) != OK, false, vformat("PhysXLightShafts3D: %s shader failed to compile.", PASS_NAMES[i]));
 		Ref<RDShaderSPIRV> spirv = file->get_spirv();
 		ERR_FAIL_COND_V(spirv.is_null(), false);
-		const String err = spirv->get_stage_compile_error(RD::SHADER_STAGE_COMPUTE);
-		ERR_FAIL_COND_V_MSG(!err.is_empty(), false, vformat("PhysXLightShafts3D: %s shader: %s", PASS_NAMES[i], err));
+		const bool raster = i == PASS_COMPOSITE;
+		for (RD::ShaderStage stage : raster ? Vector<RD::ShaderStage>({ RD::SHADER_STAGE_VERTEX, RD::SHADER_STAGE_FRAGMENT }) : Vector<RD::ShaderStage>({ RD::SHADER_STAGE_COMPUTE })) {
+			const String err = spirv->get_stage_compile_error(stage);
+			ERR_FAIL_COND_V_MSG(!err.is_empty(), false, vformat("PhysXLightShafts3D: %s shader: %s", PASS_NAMES[i], err));
+		}
 		shaders[i] = p_rd->shader_create_from_spirv(file->get_spirv_stages());
 		ERR_FAIL_COND_V(!shaders[i].is_valid(), false);
-		pipelines[i] = p_rd->compute_pipeline_create(shaders[i]);
-		ERR_FAIL_COND_V(!pipelines[i].is_valid(), false);
+		if (!raster) {
+			pipelines[i] = p_rd->compute_pipeline_create(shaders[i]);
+			ERR_FAIL_COND_V(!pipelines[i].is_valid(), false);
+		}
 	}
 	RD::SamplerState linear;
 	linear.mag_filter = RD::SAMPLER_FILTER_LINEAR;
@@ -374,6 +384,13 @@ void PhysXLightShaftsEffect::_render(int p_callback_type, const RenderData *p_re
 	push.bloom[2] = s.bloom_color.b;
 	push.bloom[3] = s.bloom_threshold;
 	push.misc[0] = s.occlusion_strength;
+	// The Mobile renderer (without HDR 2D) stores color halved, so 0..2 fits its
+	// buffer: read it back up, and keep the threshold under what it can hold.
+	const float luminance = buffers->get_luminance_multiplier();
+	push.misc[1] = luminance;
+	if (luminance > 1.0f) {
+		push.bloom[3] = MIN(push.bloom[3], 0.75f * luminance);
+	}
 	push.misc[2] = s.bloom_max_brightness;
 	push.misc[3] = s.occlusion_depth_range;
 	push.size[0] = half.x;
@@ -391,5 +408,41 @@ void PhysXLightShaftsEffect::_render(int p_callback_type, const RenderData *p_re
 		_dispatch(rd, PASS_BLUR, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, src })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, dst) }, half, &push, sizeof(push));
 		SWAP(src, dst);
 	}
-	_dispatch(rd, PASS_COMPOSITE, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, src })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, color) }, frame, &push, sizeof(push));
+	push.misc[1] = luminance;
+	_composite(rd, color, src, &push, sizeof(push));
+}
+
+void PhysXLightShaftsEffect::_composite(RenderingDevice *p_rd, const RID &p_color, const RID &p_shafts, const void *p_push, uint32_t p_push_size) {
+	const RID framebuffer = FramebufferCacheRD::get_singleton()->get_cache(p_color);
+	ERR_FAIL_COND(!framebuffer.is_valid());
+	const RD::FramebufferFormatID format = p_rd->framebuffer_get_format(framebuffer);
+	RID *pipeline = composite_pipelines.getptr(format);
+	if (pipeline == nullptr) {
+		// frame * shade (the fragment's alpha) + rays (its color); the frame's
+		// own alpha kept.
+		RD::PipelineColorBlendState blend;
+		RD::PipelineColorBlendState::Attachment attachment;
+		attachment.enable_blend = true;
+		attachment.src_color_blend_factor = RD::BLEND_FACTOR_ONE;
+		attachment.dst_color_blend_factor = RD::BLEND_FACTOR_SRC_ALPHA;
+		attachment.color_blend_op = RD::BLEND_OP_ADD;
+		attachment.src_alpha_blend_factor = RD::BLEND_FACTOR_ZERO;
+		attachment.dst_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
+		attachment.alpha_blend_op = RD::BLEND_OP_ADD;
+		blend.attachments.push_back(attachment);
+		RD::PipelineMultisampleState multisample;
+		multisample.sample_count = p_rd->framebuffer_format_get_texture_samples(format);
+		const RID created = p_rd->render_pipeline_create(shaders[PASS_COMPOSITE], format, RD::INVALID_ID, RD::RENDER_PRIMITIVE_TRIANGLES, RD::PipelineRasterizationState(), multisample, RD::PipelineDepthStencilState(), blend);
+		ERR_FAIL_COND(!created.is_valid());
+		pipeline = &composite_pipelines.insert(format, created)->value;
+	}
+	const RID set = p_rd->uniform_set_create({ RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, p_shafts })) }, shaders[PASS_COMPOSITE], 0);
+	ERR_FAIL_COND(!set.is_valid());
+	const RD::DrawListID list = p_rd->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL);
+	p_rd->draw_list_bind_render_pipeline(list, *pipeline);
+	p_rd->draw_list_bind_uniform_set(list, set, 0);
+	p_rd->draw_list_set_push_constant(list, p_push, p_push_size);
+	p_rd->draw_list_draw(list, false, 1, 3);
+	p_rd->draw_list_end();
+	p_rd->free_rid(set);
 }
