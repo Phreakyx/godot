@@ -74,8 +74,9 @@ public:
 
 	// physics/physx_3d/simulation/max_depenetration_velocity
 	// How fast (m/s) overlapping dynamic bodies are pushed apart at most. PhysX's default is unbounded -- bodies that
-	// start overlapping (spawns, crowds, a capsule growing) pop apart in one step. 0 = unbounded.
-	inline static float max_depenetration_velocity = 4.0f;
+	// start overlapping (spawns, crowds, a capsule growing) pop apart in one step. 0 = unbounded, the default: a cap
+	// lets stacks and piles sink into each other and slump (a tall wall of loose boxes no longer holds).
+	inline static float max_depenetration_velocity = 0.0f;
 
 	// physics/physx_3d/soft_body/mode
 	//
