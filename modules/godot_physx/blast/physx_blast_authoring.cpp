@@ -365,19 +365,35 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 	}
 	for (uint32_t i = 0; i < indices.size(); i++) {
 		if (indices[i] >= (uint32_t)verts.size()) {
-		return _fail(vformat("PhysXBlastAuthoring: index %d points past the mesh's %d vertices.", (int)indices[i], verts.size()));
-	}
+			return _fail(vformat("PhysXBlastAuthoring: index %d points past the mesh's %d vertices.", (int)indices[i], verts.size()));
+		}
 	}
 	AABB bounds(verts[0], Vector3());
 	for (int i = 0; i < verts.size(); i++) {
 		if (!verts[i].is_finite()) {
-		return _fail(vformat("PhysXBlastAuthoring: vertex %d isn't a finite position.", i));
-	}
+			return _fail(vformat("PhysXBlastAuthoring: vertex %d isn't a finite position.", i));
+		}
 		bounds.expand_to(verts[i]);
 	}
 	const real_t thinnest = bounds.size[bounds.get_shortest_axis_index()];
 	if (thinnest <= MAX(bounds.get_longest_axis_size(), (real_t)1.0) * (real_t)1e-5) {
 		return _fail(vformat("PhysXBlastAuthoring: the mesh has no volume to fracture (its bounds are %s).", bounds.size));
+	}
+
+	// Inside out (its triangles face inward: a negative volume, Godot's front faces being clockwise): Blast keeps the
+	// winding it's given, so every piece's outer faces would face in, culled -- the pieces look hollow. Flipped.
+	real_t signed_volume = 0.0;
+	for (uint32_t t = 0; t < indices.size(); t += 3) {
+		const Vector3 &a = verts[indices[t]];
+		const Vector3 &b = verts[indices[t + 1]];
+		const Vector3 &c = verts[indices[t + 2]];
+		signed_volume += a.dot(c.cross(b));
+	}
+	if (signed_volume < 0.0) {
+		for (uint32_t t = 0; t < indices.size(); t += 3) {
+			SWAP(indices[t + 1], indices[t + 2]);
+		}
+		_warn("PhysXBlastAuthoring: the mesh was inside out (its triangles faced inward); fractured with its triangles flipped.");
 	}
 
 	Nv::Blast::Mesh *raw_mesh = NvBlastExtAuthoringCreateMesh(positions.ptr(), normals.ptr(), uvs.ptr(),
@@ -508,10 +524,10 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 				// this has to be ruled out before ever calling cutout().
 				if (cutout_pattern_has_floating_wall_island(gray, pw, ph)) {
 					_error("PhysXBlastAuthoring: cutout_pattern rejected -- it has a crack/wall shape that "
-							  "doesn't reach the image edge (a 'floating island'). Every crack line needs to "
-							  "reach the pattern's boundary, the same way a real broken pane's cracks do -- "
-							  "otherwise the fill region wraps around it with a hole in the middle, which is "
-							  "known to crash the underlying Blast SDK's Cutout code rather than fail cleanly.");
+						   "doesn't reach the image edge (a 'floating island'). Every crack line needs to "
+						   "reach the pattern's boundary, the same way a real broken pane's cracks do -- "
+						   "otherwise the fill region wraps around it with a hole in the middle, which is "
+						   "known to crash the underlying Blast SDK's Cutout code rather than fail cleanly.");
 					frac_result = -1;
 				} else {
 					Nv::Blast::CutoutSet *cutout_set = NvBlastExtAuthoringCreateCutoutSet();
