@@ -48,6 +48,7 @@ def get_doc_classes():
         "PhysXFlow3D",
         "PhysXFlowEmitter3D",
         "PhysXFlowRenderEffect",
+        "PhysXLensDirt3D",
         "PhysXLightShafts3D",
         "PhysXVehicle3D",
         "PhysXVehicleWheel3D",

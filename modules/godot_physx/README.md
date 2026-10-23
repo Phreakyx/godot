@@ -256,6 +256,24 @@ The standard `physics/3d/sleep_threshold_linear`, `sleep_threshold_angular` and
 `time_before_sleep` project settings also apply — they are mapped onto PhysX's
 sleep energy threshold and wake counter.
 
+## Lens dirt — `PhysXLensDirt3D`
+
+Dust, smudges and droplet marks on the lens that light up where bright light
+reaches it, the way other engines' bloom dirt masks do: the frame's bright
+light, spread wide as a lens scatters it, multiplies a dirt texture and is
+added on top. Any bright light lights it (sky, sun, fire, headlights, the
+light shafts, Flow flames); clean (black) parts of the texture and dark parts
+of the frame stay untouched. Add the node, give it a dirt texture (bright on
+black, at the screen's aspect ratio: it's stretched to fit).
+
+- `threshold` `0` (default): all light counts, brighter light more. Godot's
+  default sky sits around `0.5` and only the sun's disk goes past `1`, so a
+  threshold near `1` keeps the dirt to the brightest sources.
+- Unlike `Environment.glow_map`, which multiplies Godot's glow by a texture
+  (dimming it where the texture is dark), this only adds light.
+- Forward+ and Mobile, about 0.05 ms at 1080p. Demo: the light shafts demos,
+  key `3`; example texture `demo/common/textures/lens_dirt.png`.
+
 ## Characters on debris piles
 
 A `CharacterBody3D` rides the floor it stands on: the body's velocity at the
