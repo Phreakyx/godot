@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="PhysXLensFlareSettings" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		How a [PhysXLensFlare3D] looks, provided by the PhysX module.
+	</brief_description>
+	<description>
+		A [PhysXLensFlare3D]'s look, as a resource, so it can be saved as a preset and shared between scenes. The defaults are a warm, eight-ghost camera flare.
+		Each ghost is a copy of the frame's bright light reflected about the screen's centre, given by a color in [member ghost_colors] and a scale at the same index in [member ghost_scales]. A light at some distance from the centre shows up at that distance divided by the scale, drawn [code]1 / |scale|[/code] times its size: [code]-1[/code] mirrors it through the centre at its own size, [code]2[/code] draws it half as large, halfway to the centre on the same side, [code]-0.5[/code] twice as large and twice as far out on the opposite side (a ghost drawn larger spreads the same light thinner, so it's dimmer). Up to 8 ghosts.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="ghost_chroma_shift" type="float" setter="set_ghost_chroma_shift" getter="get_ghost_chroma_shift" default="0.015">
+			How far apart a ghost's red, green and blue are drawn, as a fraction of its distance from the screen's centre: the colored fringes of a real lens's reflections. [code]0[/code] for none; negative swaps red and blue.
+		</member>
+		<member name="ghost_colors" type="PackedColorArray" setter="set_ghost_colors" getter="get_ghost_colors" default="PackedColorArray(1, 0.8, 0.4, 1, 1, 1, 0.6, 1, 0.8, 0.8, 1, 1, 0.5, 1, 0.4, 1, 0.5, 0.8, 1, 1, 0.9, 1, 0.8, 1, 1, 0.8, 0.4, 1, 0.9, 0.7, 0.7, 1)">
+			Each ghost's color; its alpha scales its brightness. Paired by index with [member ghost_scales]: only as many ghosts are drawn as both arrays have entries (8 at most).
+		</member>
+		<member name="ghost_intensity" type="float" setter="set_ghost_intensity" getter="get_ghost_intensity" default="1.0">
+			How bright all the ghosts are.
+		</member>
+		<member name="ghost_scales" type="PackedFloat32Array" setter="set_ghost_scales" getter="get_ghost_scales" default="PackedFloat32Array(-1.5, 2.5, -5, 10, 0.7, -0.4, -0.2, -0.1)">
+			Each ghost's scale about the screen's centre (see the class description): negative mirrors the light through the centre, magnitudes above [code]1[/code] draw it smaller and nearer the centre, below [code]1[/code] larger and further out.
+		</member>
+		<member name="halo_chroma_shift" type="float" setter="set_halo_chroma_shift" getter="get_halo_chroma_shift" default="0.015">
+			How far apart the halo's red, green and blue are drawn: a rainbow edge on the ring.
+		</member>
+		<member name="halo_compression" type="float" setter="set_halo_compression" getter="get_halo_compression" default="0.65">
+			Bends the screen like a fisheye before the ring is drawn, so the ring stays round and closer to the light near the screen's edges. [code]0[/code] for a plain ring.
+		</member>
+		<member name="halo_intensity" type="float" setter="set_halo_intensity" getter="get_halo_intensity" default="1.0">
+			How bright the halo is: a faint ring around the screen's centre, which a bright light lights as an arc on the far side of it.
+		</member>
+		<member name="halo_mask" type="float" setter="set_halo_mask" getter="get_halo_mask" default="0.5">
+			How much of the ring toward the screen's centre is faded out: at [code]0.5[/code] it fades in from the centre to the screen's edge; nearer [code]1[/code] only the outermost part shows.
+		</member>
+		<member name="halo_width" type="float" setter="set_halo_width" getter="get_halo_width" default="0.6">
+			The ring's diameter, as a fraction of the screen's height.
+		</member>
+		<member name="intensity" type="float" setter="set_intensity" getter="get_intensity" default="1.0">
+			How bright the whole flare is. [code]0[/code] draws nothing.
+		</member>
+		<member name="threshold" type="float" setter="set_threshold" getter="get_threshold" default="0.8">
+			How bright (linear HDR luminance) a part of the frame must be before it flares. In Godot's default scenes the sky is around [code]0.5[/code] and the sun's disk well above [code]1[/code].
+		</member>
+		<member name="threshold_range" type="float" setter="set_threshold_range" getter="get_threshold_range" default="0.5">
+			How far above [member threshold] a light must be to flare fully; it eases in over this range, so lights crossing the threshold don't pop.
+		</member>
+		<member name="tint" type="Color" setter="set_tint" getter="get_tint" default="Color(1, 0.85, 0.7, 1)">
+			Multiplies the whole flare's color.
+		</member>
+	</members>
+</class>

@@ -51,6 +51,9 @@
 #include "nodes/physx_granular_3d.h"
 #include "nodes/physx_lens_dirt_3d.h"
 #include "nodes/physx_lens_dirt_effect.h"
+#include "nodes/physx_lens_flare_3d.h"
+#include "nodes/physx_lens_flare_effect.h"
+#include "nodes/physx_lens_flare_settings.h"
 #include "nodes/physx_light_shafts_3d.h"
 #include "nodes/physx_light_shafts_effect.h"
 #include "nodes/physx_particle_fluid_3d.h"
@@ -120,6 +123,9 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 		GDREGISTER_INTERNAL_CLASS(PhysXLightShaftsEffect);
 		GDREGISTER_CLASS(PhysXLensDirt3D);
 		GDREGISTER_INTERNAL_CLASS(PhysXLensDirtEffect);
+		GDREGISTER_CLASS(PhysXLensFlareSettings);
+		GDREGISTER_CLASS(PhysXLensFlare3D);
+		GDREGISTER_INTERNAL_CLASS(PhysXLensFlareEffect);
 		// Runtime-bridge MVP probe, not public API yet -- see water/water_ripple_probe.h.
 		GDREGISTER_CLASS(WaterRippleProbe);
 		GDREGISTER_CLASS(PhysXWaterSurface3D);
@@ -166,6 +172,7 @@ void uninitialize_godot_physx_module(ModuleInitializationLevel p_level) {
 		PhysXSkinnedCloth3D::free_shared();
 		PhysXLightShaftsEffect::free_shared();
 		PhysXLensDirtEffect::free_shared();
+		PhysXLensFlareEffect::free_shared();
 	}
 #ifdef GODOT_PHYSX_FLOW
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {

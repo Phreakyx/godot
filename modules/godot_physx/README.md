@@ -274,6 +274,23 @@ black, at the screen's aspect ratio: it's stretched to fit).
 - Forward+ and Mobile, about 0.05 ms at 1080p. Demo: the light shafts demos,
   key `3`; example texture `demo/common/textures/lens_dirt.png`.
 
+## Lens flare — `PhysXLensFlare3D`
+
+A camera lens flare: every bright part of the frame (sun, fire, headlights,
+Flow flames) is reflected back over the screen as a row of soft, tinted
+ghosts through the screen's centre, plus a faint halo ring. It's image-based,
+so no light needs tagging, and a light that's covered or leaves the frame
+stops flaring. Add the node; that's all.
+
+- The look is a `PhysXLensFlareSettings` resource (`settings`): ghost colors
+  and scales (up to 8), chroma split, halo width / mask / fisheye
+  compression, threshold, tint. Save it from the Inspector to reuse a look as
+  a preset; with none, the node draws the default warm eight-ghost flare.
+- Drawn after the light shafts and before `PhysXLensDirt3D`, so the flare
+  lights a dirty lens too.
+- Forward+ and Mobile, about 0.05 ms at 1080p. Demo: the light shafts demos,
+  key `4`.
+
 ## Characters on debris piles
 
 A `CharacterBody3D` rides the floor it stands on: the body's velocity at the
