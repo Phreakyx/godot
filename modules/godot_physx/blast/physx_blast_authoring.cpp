@@ -282,22 +282,49 @@ bool is_closed(const LocalVector<uint32_t> &p_indices) {
 void PhysXBlastAuthoring::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("fracture_mesh", "mesh", "site_count", "seed", "pattern", "cutout_pattern"), &PhysXBlastAuthoring::fracture_mesh, DEFVAL(PATTERN_VORONOI), DEFVAL(Ref<Texture2D>()));
 
+	ClassDB::bind_method(D_METHOD("get_last_error"), &PhysXBlastAuthoring::get_last_error);
+	ClassDB::bind_method(D_METHOD("get_last_warnings"), &PhysXBlastAuthoring::get_last_warnings);
+
 	BIND_ENUM_CONSTANT(PATTERN_VORONOI);
 	BIND_ENUM_CONSTANT(PATTERN_SLICING);
 	BIND_ENUM_CONSTANT(PATTERN_CUTOUT);
 }
 
-Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh, int p_site_count, int p_seed, FracturePattern p_pattern, const Ref<Texture2D> &p_cutout_pattern) {
-	ERR_FAIL_COND_V_MSG(p_mesh.is_null() || p_mesh->get_surface_count() < 1, Ref<PhysXBlastAsset>(),
-			"PhysXBlastAuthoring: mesh is null or has no surfaces.");
-	PxPhysics *physics = GodotPhysXServer3D::get_singleton() ? GodotPhysXServer3D::get_singleton()->get_px_physics() : nullptr;
-	ERR_FAIL_NULL_V_MSG(physics, Ref<PhysXBlastAsset>(), "PhysXBlastAuthoring: PhysX not initialized.");
+// Printed as before, and kept for get_last_error() / get_last_warnings() (the fracture dialog shows them).
+Ref<PhysXBlastAsset> PhysXBlastAuthoring::_fail(const String &p_message) {
+	_error(p_message);
+	return Ref<PhysXBlastAsset>();
+}
 
-	ERR_FAIL_COND_V_MSG(p_mesh->surface_get_primitive_type(0) != Mesh::PRIMITIVE_TRIANGLES, Ref<PhysXBlastAsset>(),
-			"PhysXBlastAuthoring: the mesh's first surface isn't a triangle list.");
+void PhysXBlastAuthoring::_error(const String &p_message) {
+	ERR_PRINT(p_message);
+	last_error = p_message.trim_prefix("PhysXBlastAuthoring: ");
+}
+
+void PhysXBlastAuthoring::_warn(const String &p_message) {
+	WARN_PRINT(p_message);
+	last_warnings.push_back(p_message.trim_prefix("PhysXBlastAuthoring: "));
+}
+
+Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh, int p_site_count, int p_seed, FracturePattern p_pattern, const Ref<Texture2D> &p_cutout_pattern) {
+	last_error = String();
+	last_warnings.clear();
+	if (p_mesh.is_null() || p_mesh->get_surface_count() < 1) {
+		return _fail("PhysXBlastAuthoring: mesh is null or has no surfaces.");
+	}
+	PxPhysics *physics = GodotPhysXServer3D::get_singleton() ? GodotPhysXServer3D::get_singleton()->get_px_physics() : nullptr;
+	if (!physics) {
+		return _fail("PhysXBlastAuthoring: PhysX not initialized.");
+	}
+
+	if (p_mesh->surface_get_primitive_type(0) != Mesh::PRIMITIVE_TRIANGLES) {
+		return _fail("PhysXBlastAuthoring: the mesh's first surface isn't a triangle list.");
+	}
 	const Array arrays = p_mesh->surface_get_arrays(0);
 	const PackedVector3Array verts = arrays[Mesh::ARRAY_VERTEX];
-	ERR_FAIL_COND_V_MSG(verts.size() < 4, Ref<PhysXBlastAsset>(), "PhysXBlastAuthoring: mesh has too few vertices.");
+	if (verts.size() < 4) {
+		return _fail("PhysXBlastAuthoring: mesh has too few vertices.");
+	}
 	PackedVector3Array src_normals = arrays[Mesh::ARRAY_NORMAL];
 	PackedInt32Array src_indices = arrays[Mesh::ARRAY_INDEX];
 
@@ -333,25 +360,31 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 
 	// Blast trusts its input: an index past the vertices was read out of bounds, a partial triangle crashed, and a
 	// NaN vertex or a mesh collapsed to a point spun the mesh cleaner forever. Checked here instead.
-	ERR_FAIL_COND_V_MSG(indices.size() < 3 || indices.size() % 3 != 0, Ref<PhysXBlastAsset>(),
-			vformat("PhysXBlastAuthoring: %d indices isn't a whole number of triangles.", (int)indices.size()));
+	if (indices.size() < 3 || indices.size() % 3 != 0) {
+		return _fail(vformat("PhysXBlastAuthoring: %d indices isn't a whole number of triangles.", (int)indices.size()));
+	}
 	for (uint32_t i = 0; i < indices.size(); i++) {
-		ERR_FAIL_COND_V_MSG(indices[i] >= (uint32_t)verts.size(), Ref<PhysXBlastAsset>(),
-				vformat("PhysXBlastAuthoring: index %d points past the mesh's %d vertices.", (int)indices[i], verts.size()));
+		if (indices[i] >= (uint32_t)verts.size()) {
+		return _fail(vformat("PhysXBlastAuthoring: index %d points past the mesh's %d vertices.", (int)indices[i], verts.size()));
+	}
 	}
 	AABB bounds(verts[0], Vector3());
 	for (int i = 0; i < verts.size(); i++) {
-		ERR_FAIL_COND_V_MSG(!verts[i].is_finite(), Ref<PhysXBlastAsset>(),
-				vformat("PhysXBlastAuthoring: vertex %d isn't a finite position.", i));
+		if (!verts[i].is_finite()) {
+		return _fail(vformat("PhysXBlastAuthoring: vertex %d isn't a finite position.", i));
+	}
 		bounds.expand_to(verts[i]);
 	}
 	const real_t thinnest = bounds.size[bounds.get_shortest_axis_index()];
-	ERR_FAIL_COND_V_MSG(thinnest <= MAX(bounds.get_longest_axis_size(), (real_t)1.0) * (real_t)1e-5, Ref<PhysXBlastAsset>(),
-			vformat("PhysXBlastAuthoring: the mesh has no volume to fracture (its bounds are %s).", bounds.size));
+	if (thinnest <= MAX(bounds.get_longest_axis_size(), (real_t)1.0) * (real_t)1e-5) {
+		return _fail(vformat("PhysXBlastAuthoring: the mesh has no volume to fracture (its bounds are %s).", bounds.size));
+	}
 
 	Nv::Blast::Mesh *raw_mesh = NvBlastExtAuthoringCreateMesh(positions.ptr(), normals.ptr(), uvs.ptr(),
 			(uint32_t)positions.size(), indices.ptr(), (uint32_t)indices.size());
-	ERR_FAIL_NULL_V_MSG(raw_mesh, Ref<PhysXBlastAsset>(), "PhysXBlastAuthoring: NvBlastExtAuthoringCreateMesh failed.");
+	if (!raw_mesh) {
+		return _fail("PhysXBlastAuthoring: NvBlastExtAuthoringCreateMesh failed.");
+	}
 
 	// FractureTool requires a closed (watertight), self-intersection-free,
 	// open-edge-free mesh (NvBlastExtAuthoringMeshCleaner.h) -- a Godot
@@ -372,7 +405,7 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 		mesh_cleaner = NvBlastExtAuthoringCreateMeshCleaner();
 		cleaned_mesh = mesh_cleaner->cleanMesh(raw_mesh);
 		if (!cleaned_mesh) {
-			WARN_PRINT("PhysXBlastAuthoring: the mesh cleaner failed; fracturing the mesh as it is.");
+			_warn("PhysXBlastAuthoring: the mesh cleaner failed; fracturing the mesh as it is.");
 		} else {
 			const NvcBounds3 &cb = cleaned_mesh->getBoundingBox();
 			const AABB cleaned_bounds(Vector3(cb.minimum.x, cb.minimum.y, cb.minimum.z),
@@ -380,11 +413,11 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 			const real_t tolerance = bounds.get_longest_axis_size() * (real_t)0.01;
 			const AABB allowed = bounds.grow(tolerance);
 			if (cleaned_mesh->getFacetCount() == 0 || !allowed.encloses(cleaned_bounds)) {
-				WARN_PRINT(vformat("PhysXBlastAuthoring: the mesh cleaner broke the mesh (bounds %s, was %s); fracturing the mesh as it is.", cleaned_bounds, bounds));
+				_warn(vformat("PhysXBlastAuthoring: the mesh cleaner broke the mesh (bounds %s, was %s); fracturing the mesh as it is.", cleaned_bounds, bounds));
 				cleaned_mesh->release();
 				cleaned_mesh = nullptr;
 			} else if (!cleaned_bounds.grow(tolerance).encloses(bounds)) {
-				WARN_PRINT(vformat("PhysXBlastAuthoring: the mesh cleaner dropped parts of the mesh that weren't a closed solid (bounds %s, was %s).", cleaned_bounds, bounds));
+				_warn(vformat("PhysXBlastAuthoring: the mesh cleaner dropped parts of the mesh that weren't a closed solid (bounds %s, was %s).", cleaned_bounds, bounds));
 			}
 		}
 	}
@@ -420,7 +453,7 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 		conf.angle_variations = 0.2f;
 		frac_result = fTool->slicing(0, conf, false, &rng);
 		if (frac_result != 0) {
-			ERR_PRINT(vformat("PhysXBlastAuthoring: slicing failed, code=%d.", frac_result));
+			_error(vformat("PhysXBlastAuthoring: slicing failed, code=%d.", frac_result));
 		}
 	} else if (p_pattern == PATTERN_CUTOUT) {
 		// Unlike Voronoi/Slicing, NvBlast doesn't generate this pattern itself
@@ -428,12 +461,12 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 		// grayscale bitmap (see this class's header for why) and
 		// NvBlastExtAuthoringBuildCutoutSet segments it into per-region loops.
 		if (p_cutout_pattern.is_null()) {
-			ERR_PRINT("PhysXBlastAuthoring: PATTERN_CUTOUT requires a cutout_pattern texture.");
+			_error("PhysXBlastAuthoring: PATTERN_CUTOUT requires a cutout_pattern texture.");
 			frac_result = -1;
 		} else {
 			Ref<Image> pattern_img = p_cutout_pattern->get_image();
 			if (pattern_img.is_null() || pattern_img->is_empty()) {
-				ERR_PRINT("PhysXBlastAuthoring: cutout_pattern texture has no image data.");
+				_error("PhysXBlastAuthoring: cutout_pattern texture has no image data.");
 				frac_result = -1;
 			} else {
 				if (pattern_img->is_compressed()) {
@@ -474,7 +507,7 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 				// be caught from here (it takes the whole process down), so
 				// this has to be ruled out before ever calling cutout().
 				if (cutout_pattern_has_floating_wall_island(gray, pw, ph)) {
-					ERR_PRINT("PhysXBlastAuthoring: cutout_pattern rejected -- it has a crack/wall shape that "
+					_error("PhysXBlastAuthoring: cutout_pattern rejected -- it has a crack/wall shape that "
 							  "doesn't reach the image edge (a 'floating island'). Every crack line needs to "
 							  "reach the pattern's boundary, the same way a real broken pane's cracks do -- "
 							  "otherwise the fill region wraps around it with a hole in the middle, which is "
@@ -494,7 +527,7 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 					// first pass wants without per-mesh sizing math of our own.
 					frac_result = fTool->cutout(0, conf, false, &rng);
 					if (frac_result != 0) {
-						ERR_PRINT(vformat("PhysXBlastAuthoring: cutout failed, code=%d.", frac_result));
+						_error(vformat("PhysXBlastAuthoring: cutout failed, code=%d.", frac_result));
 					}
 					cutout_set->release();
 				}
@@ -507,7 +540,7 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 		const uint32_t site_count = sites_gen->getVoronoiSites(sites);
 		frac_result = fTool->voronoiFracturing(0, site_count, sites, false);
 		if (frac_result != 0) {
-			ERR_PRINT(vformat("PhysXBlastAuthoring: voronoiFracturing failed, code=%d.", frac_result));
+			_error(vformat("PhysXBlastAuthoring: voronoiFracturing failed, code=%d.", frac_result));
 		}
 	}
 
@@ -525,7 +558,7 @@ Ref<PhysXBlastAsset> PhysXBlastAuthoring::fracture_mesh(const Ref<Mesh> &p_mesh,
 
 		Nv::Blast::AuthoringResult *ares = NvBlastExtAuthoringProcessFracture(*fTool, *bond_gen, collision_builder, cparams);
 		if (!ares) {
-			ERR_PRINT("PhysXBlastAuthoring: NvBlastExtAuthoringProcessFracture failed.");
+			_error("PhysXBlastAuthoring: NvBlastExtAuthoringProcessFracture failed.");
 		} else {
 			const uint32_t asset_size = NvBlastAssetGetSize(ares->asset, blast_authoring_log);
 			PackedByteArray asset_bytes;

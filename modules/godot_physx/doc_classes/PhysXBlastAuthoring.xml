@@ -18,9 +18,22 @@
 			<param index="3" name="pattern" type="int" default="0" />
 			<param index="4" name="cutout_pattern" type="Texture2D" default="null" />
 			<description>
-				Fractures [param mesh] and returns the finished [PhysXBlastAsset], or a null reference on failure (null mesh, a mesh whose triangles don't form a closed watertight surface after the automatic cleanup pass, or [constant PATTERN_CUTOUT] without a usable [param cutout_pattern]).
+				Fractures [param mesh] and returns the finished [PhysXBlastAsset], or a null reference on failure: a null mesh; a first surface that isn't a valid triangle list (indices that aren't whole triangles or point past the vertices, a NaN or infinite vertex); a mesh with no volume (flat, or collapsed to a point); a mesh whose triangles don't form a closed watertight surface after the automatic cleanup pass; or [constant PATTERN_CUTOUT] without a usable [param cutout_pattern]. [method get_last_error] says which.
+				A mesh that is already closed (every edge shared by two triangles) skips the cleanup pass. If the cleanup returns nothing or reshapes the mesh beyond its bounds, the mesh is fractured as it was; if it only drops loose parts that weren't a closed solid, the cleaned mesh is used. Either way it warns (see [method get_last_warnings]).
 				[param site_count] is the cell/slice count: for [constant PATTERN_VORONOI] it is the number of random cells the mesh is split into; for [constant PATTERN_SLICING] it is cut into roughly that many brick-like pieces on the longest axis; it is ignored for [constant PATTERN_CUTOUT] (the pattern texture alone defines the pieces). [param seed] makes [constant PATTERN_VORONOI] reproducible -- the same mesh, count and seed always produce the same asset.
 				Note the mesh is authored as-is: a source [MeshInstance3D]'s node transform (including scale) is not baked in.
+			</description>
+		</method>
+		<method name="get_last_error" qualifiers="const">
+			<return type="String" />
+			<description>
+				Why the last [method fracture_mesh] call failed, the same text it printed as an error (for example "index 500 points past the mesh's 8 vertices."). Empty if it succeeded.
+			</description>
+		</method>
+		<method name="get_last_warnings" qualifiers="const">
+			<return type="PackedStringArray" />
+			<description>
+				What the last [method fracture_mesh] call warned about, the same text it printed as warnings: for example, that the mesh cleaner dropped parts of the mesh that weren't a closed solid. Empty if it warned about nothing.
 			</description>
 		</method>
 	</methods>
