@@ -89,11 +89,15 @@ private:
 	RID ghost_buffer; // the ghosts' colours and scales
 	bool failed = false;
 	RID bright; // quarter size: the bright light
-	RID small; // an eighth: blurred on the way down
+	// Blurred well past the light's own shape on the way down and back up, the way a real lens's reflections are
+	// out of focus: a ghost is then a soft round blob, not a copy of whatever shape the light has.
+	static constexpr int BLUR_LEVELS = 2;
+	RID down[BLUR_LEVELS]; // an eighth, a sixteenth
+	RID up[BLUR_LEVELS - 1]; // an eighth
+	Size2i down_size[BLUR_LEVELS];
 	RID soft; // quarter size again: the softened bright light the ghosts copy
 	RID flare; // quarter size: ghosts and halo
 	Size2i quarter;
-	Size2i eighth;
 	Size2i targets_for;
 
 	bool _ensure(RenderingDevice *p_rd);

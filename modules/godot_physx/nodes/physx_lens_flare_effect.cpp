@@ -142,11 +142,19 @@ layout(set = 0, binding = 2, std140) uniform Ghosts {
 	vec4 scales[2];
 } g;
 
+// The bright light at uv, faded out toward the frame's edges: what's past the edge isn't in the frame, so without
+// the fade a light cut by the edge copies over as a shape with a hard straight side.
+vec3 edged(vec2 uv) {
+	vec2 e = smoothstep(vec2(0.0), vec2(0.2), uv) * smoothstep(vec2(0.0), vec2(0.2), 1.0 - uv);
+	return texture(src, uv).rgb * (e.x * e.y);
+}
+
 // The bright light at uv, red and blue from slightly larger / smaller copies about the centre: the colour fringing
-// a real lens gives its reflections.
+// a real lens gives its reflections. Each channel fades by where it samples, so a shifted channel doesn't run into
+// the frame's edge.
 vec3 split(vec2 uv, float shift) {
 	vec2 o = uv - 0.5;
-	return vec3(texture(src, o * (1.0 + shift) + 0.5).r, texture(src, uv).g, texture(src, o * (1.0 - shift) + 0.5).b);
+	return vec3(edged(o * (1.0 + shift) + 0.5).r, edged(uv).g, edged(o * (1.0 - shift) + 0.5).b);
 }
 
 void main() {
@@ -159,17 +167,13 @@ void main() {
 	vec2 from_centre = uv - 0.5;
 
 	// Each ghost: this pixel shows the bright light at its own offset from the centre times the ghost's scale (a
-	// negative scale mirrors it through the centre). It fades as the place it copies from nears the frame's edge, so
-	// a ghost never ends in a hard line where the frame does. A ghost drawn larger than the light spreads the same
-	// light over more of the screen, so it's dimmer by its area.
+	// negative scale mirrors it through the centre). A ghost drawn larger than the light spreads the same light over
+	// more of the screen, so it's dimmer by its area.
 	vec3 ghosts = vec3(0.0);
 	int count = int(p.ghost.z);
 	for (int i = 0; i < count; i++) {
 		float scale = g.scales[i / 4][i % 4];
-		vec2 at = from_centre * scale;
-		float edge = clamp(length(at * aspect) / (0.5 * p.misc.w), 0.0, 1.0);
-		float fade = (1.0 - smoothstep(0.55, 1.0, edge)) * min(scale * scale, 1.0);
-		ghosts += split(at + 0.5, p.ghost.y) * g.colors[i].rgb * fade;
+		ghosts += split(from_centre * scale + 0.5, p.ghost.y) * g.colors[i].rgb * min(scale * scale, 1.0);
 	}
 
 	// The halo: a ring around the centre, the bright light a fixed step from each pixel toward the centre, so a light
@@ -345,7 +349,7 @@ bool PhysXLensFlareEffect::_ensure(RenderingDevice *p_rd) {
 }
 
 void PhysXLensFlareEffect::_free_targets(RenderingDevice *p_rd) {
-	for (RID *r : { &bright, &small, &soft, &flare }) {
+	for (RID *r : { &bright, &soft, &flare, &down[0], &down[1], &up[0] }) {
 		if (r->is_valid()) {
 			p_rd->free_rid(*r);
 			*r = RID();
@@ -361,7 +365,6 @@ void PhysXLensFlareEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i &
 	_free_targets(p_rd);
 	targets_for = p_frame;
 	quarter = halved(halved(p_frame));
-	eighth = halved(quarter);
 	RD::TextureFormat tf;
 	tf.format = RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
 	tf.usage_bits = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
@@ -370,9 +373,17 @@ void PhysXLensFlareEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i &
 	bright = p_rd->texture_create(tf, RD::TextureView());
 	soft = p_rd->texture_create(tf, RD::TextureView());
 	flare = p_rd->texture_create(tf, RD::TextureView());
-	tf.width = eighth.x;
-	tf.height = eighth.y;
-	small = p_rd->texture_create(tf, RD::TextureView());
+	Size2i size = quarter;
+	for (int i = 0; i < BLUR_LEVELS; i++) {
+		size = halved(size);
+		down_size[i] = size;
+		tf.width = size.x;
+		tf.height = size.y;
+		down[i] = p_rd->texture_create(tf, RD::TextureView());
+		if (i < BLUR_LEVELS - 1) {
+			up[i] = p_rd->texture_create(tf, RD::TextureView());
+		}
+	}
 }
 
 void PhysXLensFlareEffect::_dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, const Size2i &p_size, const void *p_push, uint32_t p_push_size) {
@@ -483,10 +494,26 @@ void PhysXLensFlareEffect::_render(int p_callback_type, const RenderData *p_rend
 	};
 	sized(quarter, frame);
 	_dispatch(rd, PASS_PREPARE, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, bright) }, quarter, &push, sizeof(push));
-	sized(eighth, quarter);
-	_dispatch(rd, PASS_DOWN, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, bright })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, small) }, eighth, &push, sizeof(push));
-	sized(quarter, eighth);
-	_dispatch(rd, PASS_UP, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, small })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, soft) }, quarter, &push, sizeof(push));
+	// Down to a sixteenth of the frame, then back up to a quarter.
+	auto sampled = [&](const RID &p_texture) {
+		return RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, p_texture }));
+	};
+	RID from = bright;
+	Size2i from_size = quarter;
+	for (int i = 0; i < BLUR_LEVELS; i++) {
+		sized(down_size[i], from_size);
+		_dispatch(rd, PASS_DOWN, { sampled(from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, down[i]) }, down_size[i], &push, sizeof(push));
+		from = down[i];
+		from_size = down_size[i];
+	}
+	for (int i = BLUR_LEVELS - 2; i >= -1; i--) {
+		const RID to = i >= 0 ? up[i] : soft;
+		const Size2i to_size = i >= 0 ? down_size[i] : quarter;
+		sized(to_size, from_size);
+		_dispatch(rd, PASS_UP, { sampled(from), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, to) }, to_size, &push, sizeof(push));
+		from = to;
+		from_size = to_size;
+	}
 	sized(quarter, quarter);
 	_dispatch(rd, PASS_GHOSTS, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ border_sampler, soft })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 1, flare), RD::Uniform(RD::UNIFORM_TYPE_UNIFORM_BUFFER, 2, ghost_buffer) }, quarter, &push, sizeof(push));
 	sized(frame, quarter);
