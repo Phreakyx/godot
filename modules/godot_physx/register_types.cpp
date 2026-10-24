@@ -48,6 +48,7 @@
 #include "nodes/physx_chunk_emitter_3d.h"
 #include "nodes/physx_cloth_3d.h"
 #include "nodes/physx_fluid_render_effect.h"
+#include "nodes/physx_gi_effect.h"
 #include "nodes/physx_granular_3d.h"
 #include "nodes/physx_lens_dirt_3d.h"
 #include "nodes/physx_lens_dirt_effect.h"
@@ -57,6 +58,7 @@
 #include "nodes/physx_light_shafts_3d.h"
 #include "nodes/physx_light_shafts_effect.h"
 #include "nodes/physx_particle_fluid_3d.h"
+#include "nodes/pxtgi_3d.h"
 #include "vehicle/godot_physx_motorcycle_probe.h"
 #include "vehicle/godot_physx_tank_probe.h"
 #include "vehicle/godot_physx_vehicle_probe.h"
@@ -121,6 +123,8 @@ void initialize_godot_physx_module(ModuleInitializationLevel p_level) {
 		GDREGISTER_CLASS(PhysXChunkEmitter3D);
 		GDREGISTER_CLASS(PhysXLightShafts3D);
 		GDREGISTER_INTERNAL_CLASS(PhysXLightShaftsEffect);
+		GDREGISTER_CLASS(PXTGI3D);
+		GDREGISTER_INTERNAL_CLASS(PhysXGIEffect);
 		GDREGISTER_CLASS(PhysXLensDirt3D);
 		GDREGISTER_INTERNAL_CLASS(PhysXLensDirtEffect);
 		GDREGISTER_CLASS(PhysXLensFlareSettings);
@@ -173,6 +177,8 @@ void uninitialize_godot_physx_module(ModuleInitializationLevel p_level) {
 		PhysXLightShaftsEffect::free_shared();
 		PhysXLensDirtEffect::free_shared();
 		PhysXLensFlareEffect::free_shared();
+		PhysXGIEffect::free_shared();
+		PXTGI3D::free_shared();
 	}
 #ifdef GODOT_PHYSX_FLOW
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
