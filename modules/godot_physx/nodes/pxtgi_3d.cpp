@@ -435,22 +435,121 @@ struct BuildItem {
 	AABB bounds;
 	Vector3 center;
 	int index = 0;
+	Vector3 lo; // the bounds' corners, for the SAH binning's plain min / max
+	Vector3 hi;
 };
 
-// Median split along the longest axis of the centres, leaves of up to four; appends nodes depth first (an inner node's
-// left child right after it) and the primitives in leaf order.
-int build_bvh(LocalVector<BuildItem> &p_items, uint32_t p_from, uint32_t p_to, const float *p_source, LocalVector<float> &r_nodes, LocalVector<float> &r_primitives, LocalVector<int> &r_order) {
-	AABB bounds = p_items[p_from].bounds;
-	AABB centres(p_items[p_from].center, Vector3());
-	for (uint32_t i = p_from + 1; i < p_to; i++) {
-		bounds.merge_with(p_items[i].bounds);
-		centres.expand_to(p_items[i].center);
+// The binned SAH split of p_items[p_from, p_to): 12 bins per axis over the centres, the split that minimises both
+// sides' surface area times shape count; returns the split point (items partitioned), or p_from when the centres all
+// fall in one bin.
+uint32_t sah_split(LocalVector<BuildItem> &p_items, uint32_t p_from, uint32_t p_to, const AABB &p_centres) {
+	constexpr int BINS = 12;
+	auto area = [](const float *lo, const float *hi) {
+		const float x = hi[0] - lo[0];
+		const float y = hi[1] - lo[1];
+		const float z = hi[2] - lo[2];
+		return 2.0f * (x * y + y * z + z * x);
+	};
+	const float inf = Math::INF;
+	float best_cost = inf;
+	int best_axis = -1;
+	int best_bin = 0;
+	for (int axis = 0; axis < 3; axis++) {
+		const float lo = p_centres.position[axis];
+		const float extent = p_centres.size[axis];
+		if (extent <= 1e-6f) {
+			continue;
+		}
+		const float scale = BINS / extent;
+		float bin_lo[BINS][3];
+		float bin_hi[BINS][3];
+		uint32_t bin_count[BINS] = {};
+		for (int b = 0; b < BINS; b++) {
+			for (int k = 0; k < 3; k++) {
+				bin_lo[b][k] = inf;
+				bin_hi[b][k] = -inf;
+			}
+		}
+		for (uint32_t i = p_from; i < p_to; i++) {
+			const BuildItem &it = p_items[i];
+			const int b = MIN(int((it.center[axis] - lo) * scale), BINS - 1);
+			bin_count[b]++;
+			for (int k = 0; k < 3; k++) {
+				bin_lo[b][k] = MIN(bin_lo[b][k], it.lo[k]);
+				bin_hi[b][k] = MAX(bin_hi[b][k], it.hi[k]);
+			}
+		}
+		// Sweep: the left side's area x count for each split, then the right side's.
+		float left_cost[BINS - 1];
+		float acc_lo[3] = { inf, inf, inf };
+		float acc_hi[3] = { -inf, -inf, -inf };
+		uint32_t n = 0;
+		for (int b = 0; b < BINS - 1; b++) {
+			if (bin_count[b]) {
+				for (int k = 0; k < 3; k++) {
+					acc_lo[k] = MIN(acc_lo[k], bin_lo[b][k]);
+					acc_hi[k] = MAX(acc_hi[k], bin_hi[b][k]);
+				}
+				n += bin_count[b];
+			}
+			left_cost[b] = n ? area(acc_lo, acc_hi) * n : 0.0f;
+		}
+		for (int k = 0; k < 3; k++) {
+			acc_lo[k] = inf;
+			acc_hi[k] = -inf;
+		}
+		n = 0;
+		for (int b = BINS - 1; b > 0; b--) {
+			if (bin_count[b]) {
+				for (int k = 0; k < 3; k++) {
+					acc_lo[k] = MIN(acc_lo[k], bin_lo[b][k]);
+					acc_hi[k] = MAX(acc_hi[k], bin_hi[b][k]);
+				}
+				n += bin_count[b];
+			}
+			const uint32_t left_n = (p_to - p_from) - n;
+			if (n == 0 || left_n == 0) {
+				continue;
+			}
+			const float cost = left_cost[b - 1] + area(acc_lo, acc_hi) * n;
+			if (cost < best_cost) {
+				best_cost = cost;
+				best_axis = axis;
+				best_bin = b;
+			}
+		}
 	}
+	if (best_axis < 0) {
+		return p_from;
+	}
+	const float lo = p_centres.position[best_axis];
+	const float scale = BINS / p_centres.size[best_axis];
+	BuildItem *mid = std::partition(p_items.ptr() + p_from, p_items.ptr() + p_to, [&](const BuildItem &it) {
+		return MIN(int((it.center[best_axis] - lo) * scale), BINS - 1) < best_bin;
+	});
+	return uint32_t(mid - p_items.ptr());
+}
+
+// The tree: binned SAH splits (median where SAH finds none), leaves of up to four, depth first (an inner node's left
+// child right after it), the primitives in leaf order. Never deeper than 15 levels (the shader's walk keeps a 16-entry
+// stack): a node that deep is a leaf.
+int build_bvh(LocalVector<BuildItem> &p_items, uint32_t p_from, uint32_t p_to, const float *p_source, LocalVector<float> &r_nodes, LocalVector<float> &r_primitives, LocalVector<int> &r_order, int p_depth = 0) {
+	// The node's bounds and its shapes' centres' bounds, by plain min / max.
+	Vector3 lo = p_items[p_from].lo;
+	Vector3 hi = p_items[p_from].hi;
+	Vector3 c_lo = p_items[p_from].center;
+	Vector3 c_hi = c_lo;
+	for (uint32_t i = p_from + 1; i < p_to; i++) {
+		const BuildItem &it = p_items[i];
+		lo = lo.min(it.lo);
+		hi = hi.max(it.hi);
+		c_lo = c_lo.min(it.center);
+		c_hi = c_hi.max(it.center);
+	}
+	const AABB centres(c_lo, c_hi - c_lo);
 	const int node = r_nodes.size() / PhysXGIEffect::NODE_FLOATS;
 	r_nodes.resize(r_nodes.size() + PhysXGIEffect::NODE_FLOATS);
 	float *out = &r_nodes[node * PhysXGIEffect::NODE_FLOATS];
-	const Vector3 lo = bounds.position;
-	const Vector3 hi = bounds.position + bounds.size;
 	out[0] = lo.x;
 	out[1] = lo.y;
 	out[2] = lo.z;
@@ -458,7 +557,18 @@ int build_bvh(LocalVector<BuildItem> &p_items, uint32_t p_from, uint32_t p_to, c
 	out[5] = hi.y;
 	out[6] = hi.z;
 	const uint32_t count = p_to - p_from;
-	if (count <= 4) {
+	uint32_t mid = p_from;
+	if (count > 4 && p_depth < 15) {
+		mid = sah_split(p_items, p_from, p_to, centres);
+		if (mid == p_from || mid == p_to) {
+			const int axis = centres.get_longest_axis_index();
+			mid = p_from + count / 2;
+			std::nth_element(p_items.ptr() + p_from, p_items.ptr() + mid, p_items.ptr() + p_to, [axis](const BuildItem &a, const BuildItem &b) {
+				return a.center[axis] < b.center[axis];
+			});
+		}
+	}
+	if (mid == p_from) {
 		const int first = r_primitives.size() / PhysXGIEffect::PRIMITIVE_FLOATS;
 		for (uint32_t i = p_from; i < p_to; i++) {
 			const float *src = p_source + p_items[i].index * PhysXGIEffect::PRIMITIVE_FLOATS;
@@ -472,13 +582,8 @@ int build_bvh(LocalVector<BuildItem> &p_items, uint32_t p_from, uint32_t p_to, c
 		memcpy(&out[7], &leaf_count, sizeof(int));
 		return node;
 	}
-	const int axis = centres.get_longest_axis_index();
-	const uint32_t mid = p_from + count / 2;
-	std::nth_element(p_items.ptr() + p_from, p_items.ptr() + mid, p_items.ptr() + p_to, [axis](const BuildItem &a, const BuildItem &b) {
-		return a.center[axis] < b.center[axis];
-	});
-	build_bvh(p_items, p_from, mid, p_source, r_nodes, r_primitives, r_order);
-	const int right = build_bvh(p_items, mid, p_to, p_source, r_nodes, r_primitives, r_order);
+	build_bvh(p_items, p_from, mid, p_source, r_nodes, r_primitives, r_order, p_depth + 1);
+	const int right = build_bvh(p_items, mid, p_to, p_source, r_nodes, r_primitives, r_order, p_depth + 1);
 	out = &r_nodes[node * PhysXGIEffect::NODE_FLOATS];
 	memcpy(&out[3], &right, sizeof(int));
 	const int zero = 0;
@@ -577,10 +682,10 @@ const PXTGI3D::GeometryBlock *PXTGI3D::_geometry_for(const Ref<Shape3D> &p_shape
 		// Godot's height map: a grid one unit apart, centred on the shape's origin.
 		const int w = height->get_map_width();
 		const int d = height->get_map_depth();
-		const Vector<real_t> data = height->get_map_data();
-		if (w >= 2 && d >= 2 && data.size() >= w * d) {
+		const Vector<real_t> heights = height->get_map_data();
+		if (w >= 2 && d >= 2 && heights.size() >= w * d) {
 			auto corner = [&](int x, int z) {
-				return Vector3(x - (w - 1) * 0.5f, data[z * w + x], z - (d - 1) * 0.5f);
+				return Vector3(x - (w - 1) * 0.5f, heights[z * w + x], z - (d - 1) * 0.5f);
 			};
 			corners.resize((w - 1) * (d - 1) * 6);
 			Vector3 *c = corners.ptrw();
@@ -949,7 +1054,8 @@ void PXTGI3D::_update_primitives(PhysXGIEffect::Snapshot &r_snapshot) {
 		LocalVector<BuildItem> items;
 		for (int i = 0; i < n; i++) {
 			if (entry_valid[i]) {
-				items.push_back({ entry_bounds[i], entry_bounds[i].get_center(), i });
+				const AABB &b = entry_bounds[i];
+				items.push_back({ b, b.get_center(), i, b.position, b.position + b.size });
 			}
 		}
 		ordered_floats.clear();
