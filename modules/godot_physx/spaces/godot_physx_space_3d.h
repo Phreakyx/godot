@@ -94,6 +94,9 @@ class GodotPhysXSpace3D {
 	HashSet<GodotPhysXBody3D *> area_damped_bodies;
 
 public:
+	// The bodies PhysX reported moving in the last step (eENABLE_ACTIVE_ACTORS): what the module's GI refreshes.
+	const HashSet<GodotPhysXBody3D *> &get_awake_bodies() const { return awake_bodies; }
+
 	// A body's PxMaterial is released here, not on the spot: the release waits for the start of the next step (just
 	// before PxScene::simulate). PhysX hands a released material's handle to the very next createMaterial(), but a GPU
 	// scene learns of the removal only at its next simulate -- a shape made in between maps the reused handle onto the
