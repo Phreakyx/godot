@@ -291,6 +291,38 @@ stops flaring. Add the node; that's all.
 - Forward+ and Mobile, about 0.05 ms at 1080p. Demo: the light shafts demos,
   key `4`.
 
+## Global illumination — `PXTGI3D` (experimental)
+
+PXTGI: real-time bounce light with nothing to bake. Light from the sun, omni
+and spot lights and emissive surfaces bounces off what it reaches, every
+frame, and moving bodies take part as they move. Add the node anywhere in the
+scene; hide it to turn it off (Godot's own lighting comes back).
+
+Rays from the visible surfaces first follow what's on screen; where they
+leave it, they continue against the scene's collision shapes, which stand in
+for the geometry (a body's color comes from its mesh's material). Light
+reaching off-screen surfaces is kept in a radiance cache, which also gives
+multiple bounces.
+
+- Only what has collision shapes bounces light off screen: box, sphere,
+  capsule, cylinder, convex, concave (trimesh) and heightmap shapes.
+  Emissive meshes without a body count as their bounding box.
+  `WorldBoundaryShape3D` and Blast chunks (`PhysXDestructible3D`) don't take
+  part yet, except as what's on screen.
+- Forward+ only. It uses SDFGI as its switch: while visible it turns SDFGI on
+  in the scene's `Environment` at its cheapest settings and replaces its
+  light; hidden or removed, the environment's own SDFGI settings are back.
+  The scene needs an `Environment`.
+- Reflections: surfaces at or below `reflection_roughness_cutoff` (`0.5`)
+  get traced reflections, rougher ones keep Godot's (probes, sky). Raising
+  the cutoff into common materials' roughness costs a lot.
+- Cost (RTX 5070, 1920×1080): about 0.5–0.8 ms in the demo rooms; in the
+  physics playground (2,000 boxes being blown apart) about 2 ms with
+  `rays_per_texel` `2`. `rays_per_texel` and `world_ray_distance` trade
+  quality for speed.
+- Demos: `demo/editor/rendering/gi_courtyard.tscn`, `gi_courtyard_night.tscn`,
+  `gi_cornell_box.tscn`, `demo/cpu/physx_playground_gi.tscn` (key `G`).
+
 ## Characters on debris piles
 
 A `CharacterBody3D` rides the floor it stands on: the body's velocity at the
