@@ -94,7 +94,7 @@ private:
 	void _ensure_targets(RenderingDevice *p_rd, const Size2i &p_size);
 	void _free_targets(RenderingDevice *p_rd);
 	void _dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, const Size2i &p_size, const void *p_push, uint32_t p_push_size);
-	void _composite(RenderingDevice *p_rd, const RID &p_color, const RID &p_shafts, const void *p_push, uint32_t p_push_size);
+	void _composite(RenderingDevice *p_rd, const RID &p_color, const RID &p_shafts, const RID &p_depth, const void *p_push, uint32_t p_push_size);
 	void _render(int p_callback_type, const RenderData *p_render_data);
 
 protected:

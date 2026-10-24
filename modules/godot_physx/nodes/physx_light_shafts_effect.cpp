@@ -165,13 +165,25 @@ void main() {
 #version 450
 @PARAMS@
 layout(set = 0, binding = 0) uniform sampler2D shafts;
+layout(set = 0, binding = 1) uniform sampler2D depth_tex;
 layout(location = 0) out vec4 frag;
 void main() {
 	vec2 uv = gl_FragCoord.xy / vec2(p.size.zw);
 	vec4 s = texture(shafts, uv);
-	// Darkened where the way to the sun is blocked, near the sun only (further
+	// How much open air this pixel itself shows, as the prepare pass measures it
+	// (the sky: all of it; geometry: by its distance, out to the depth range).
+	// The sky's own sun glow doesn't know the sun is blocked, so open air on the
+	// way to a blocked sun is darkened -- the shadows between the shafts; an
+	// occluder's own surface isn't (a wall in front of the sun is no darker for
+	// it).
+	ivec2 q = min(ivec2(gl_FragCoord.xy), p.size.zw - 1);
+	float z = texelFetch(depth_tex, q, 0).r;
+	vec2 ndc = (vec2(q) + 0.5) / vec2(p.size.zw) * 2.0 - 1.0;
+	vec4 v = p.inv_proj * vec4(ndc, z, 1.0);
+	float air = z <= 0.0 ? 1.0 : clamp(length(v.xyz / v.w) / max(p.misc.w, 1e-3), 0.0, 1.0);
+	// Darkened by how blocked the way to the sun is, near the sun only (further
 	// out the rays have spread too thin to show).
-	float shade = mix(1.0, mix(1.0 - p.misc.x, 1.0, s.a), near_sun(uv) * p.sun.z);
+	float shade = 1.0 - p.misc.x * air * (1.0 - s.a) * near_sun(uv) * p.sun.z;
 	frag = vec4(s.rgb * p.bloom.rgb * p.sun.z / p.misc.y, shade);
 }
 )",
@@ -452,10 +464,10 @@ void PhysXLightShaftsEffect::_render(int p_callback_type, const RenderData *p_re
 		SWAP(src, dst);
 	}
 	push.misc[1] = luminance;
-	_composite(rd, color, src, &push, sizeof(push));
+	_composite(rd, color, src, depth, &push, sizeof(push));
 }
 
-void PhysXLightShaftsEffect::_composite(RenderingDevice *p_rd, const RID &p_color, const RID &p_shafts, const void *p_push, uint32_t p_push_size) {
+void PhysXLightShaftsEffect::_composite(RenderingDevice *p_rd, const RID &p_color, const RID &p_shafts, const RID &p_depth, const void *p_push, uint32_t p_push_size) {
 	const RID framebuffer = FramebufferCacheRD::get_singleton()->get_cache(p_color);
 	ERR_FAIL_COND(!framebuffer.is_valid());
 	const RD::FramebufferFormatID format = p_rd->framebuffer_get_format(framebuffer);
@@ -479,7 +491,7 @@ void PhysXLightShaftsEffect::_composite(RenderingDevice *p_rd, const RID &p_colo
 		ERR_FAIL_COND(!created.is_valid());
 		pipeline = &composite_pipelines.insert(format, created)->value;
 	}
-	const RID set = p_rd->uniform_set_create({ RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, p_shafts })) }, shaders[PASS_COMPOSITE], 0);
+	const RID set = p_rd->uniform_set_create(Vector<RD::Uniform>({ RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, p_shafts })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, p_depth })) }), shaders[PASS_COMPOSITE], 0);
 	ERR_FAIL_COND(!set.is_valid());
 	const RD::DrawListID list = p_rd->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL);
 	p_rd->draw_list_bind_render_pipeline(list, *pipeline);

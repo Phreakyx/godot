@@ -557,8 +557,9 @@ Things worth knowing:
 Screen-space sun shafts ("god rays"), the light shafts other engines offer
 as a post effect: add a `PhysXLightShafts3D` as a child of the
 `DirectionalLight3D` and the sun's light streams outward through the gaps in
-whatever stands in front of it (bloom), with the frame darkened along the rays
-it blocks (occlusion). It works on the rendered frame, so no fog is needed and
+whatever stands in front of it (bloom), with the open air darkened along the
+rays it blocks (occlusion; the blockers themselves aren't, so a wall hiding
+the sun is no darker for it). It works on the rendered frame, so no fog is needed and
 it costs the same at any distance (a few tenths of a millisecond at 1080p),
 unlike Godot's volumetric fog, whose shafts are soft, end at
 `volumetric_fog_length` and need fog across the whole scene.
