@@ -84,6 +84,7 @@ private:
 	// unblocked the light is.
 	RID half_a;
 	RID half_b;
+	RID gas_cover; // half size: how much of each pixel is gas (written by the prepare pass)
 	Size2i half_size;
 	// The frame as it was before PhysXFlow3D drew its gas (see gas_backdrop()).
 	RID backdrop;

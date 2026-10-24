@@ -87,6 +87,9 @@ layout(set = 0, binding = 1) uniform sampler2D depth_tex;
 layout(set = 0, binding = 2, rgba16f) uniform restrict writeonly image2D dst;
 // The frame before PhysXFlow3D drew its gas (the frame itself without gas).
 layout(set = 0, binding = 3) uniform sampler2D backdrop_tex;
+// How much of each pixel is gas in front of what's behind it, for the
+// composite: gas is open air whatever lies behind it.
+layout(set = 0, binding = 4, r16f) uniform restrict writeonly image2D gas_dst;
 float luma(vec3 c) {
 	return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
@@ -119,6 +122,13 @@ void main() {
 	float lum = max(luma(c), 1e-5);
 	float through = clamp(luma(texture(color_tex, uv).rgb * p.misc.y) / lum, 0.0, 1.0);
 	open *= through;
+	// Gas wherever it visibly changes the frame (by color, not just darkening:
+	// grey smoke over a grey wall barely darkens it, and where it doesn't
+	// change the frame at all it can't be seen either way).
+	vec3 with_gas = texture(color_tex, uv).rgb * p.misc.y;
+	vec3 diff = abs(with_gas - c);
+	float change = max(diff.r, max(diff.g, diff.b)) / max(lum, 0.05);
+	imageStore(gas_dst, px, vec4(smoothstep(0.03, 0.25, change)));
 	vec3 bright = c * (clamp(lum - p.bloom.a, 0.0, p.misc.z) / lum);
 	// Only the light near the sun streams, and not from the screen's very
 	// edges (it would smear in as if from off screen).
@@ -166,6 +176,7 @@ void main() {
 @PARAMS@
 layout(set = 0, binding = 0) uniform sampler2D shafts;
 layout(set = 0, binding = 1) uniform sampler2D depth_tex;
+layout(set = 0, binding = 2) uniform sampler2D gas_tex;
 layout(location = 0) out vec4 frag;
 void main() {
 	vec2 uv = gl_FragCoord.xy / vec2(p.size.zw);
@@ -181,6 +192,9 @@ void main() {
 	vec2 ndc = (vec2(q) + 0.5) / vec2(p.size.zw) * 2.0 - 1.0;
 	vec4 v = p.inv_proj * vec4(ndc, z, 1.0);
 	float air = z <= 0.0 ? 1.0 : clamp(length(v.xyz / v.w) / max(p.misc.w, 1e-3), 0.0, 1.0);
+	// Gas (PhysXFlow3D smoke) is open air too, wherever it hangs: its depth is
+	// what's behind it.
+	air = max(air, texture(gas_tex, uv).r);
 	// Darkened by how blocked the way to the sun is, near the sun only (further
 	// out the rays have spread too thin to show).
 	float shade = 1.0 - p.misc.x * air * (1.0 - s.a) * near_sun(uv) * p.sun.z;
@@ -337,7 +351,7 @@ bool PhysXLightShaftsEffect::_ensure(RenderingDevice *p_rd) {
 }
 
 void PhysXLightShaftsEffect::_free_targets(RenderingDevice *p_rd) {
-	for (RID *r : { &half_a, &half_b }) {
+	for (RID *r : { &half_a, &half_b, &gas_cover }) {
 		if (r->is_valid()) {
 			p_rd->free_rid(*r);
 			*r = RID();
@@ -359,6 +373,8 @@ void PhysXLightShaftsEffect::_ensure_targets(RenderingDevice *p_rd, const Size2i
 	tf.usage_bits = RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
 	half_a = p_rd->texture_create(tf, RD::TextureView());
 	half_b = p_rd->texture_create(tf, RD::TextureView());
+	tf.format = RD::DATA_FORMAT_R16_SFLOAT;
+	gas_cover = p_rd->texture_create(tf, RD::TextureView());
 }
 
 void PhysXLightShaftsEffect::_dispatch(RenderingDevice *p_rd, int p_pass, const Vector<RD::Uniform> &p_uniforms, const Size2i &p_size, const void *p_push, uint32_t p_push_size) {
@@ -453,7 +469,7 @@ void PhysXLightShaftsEffect::_render(int p_callback_type, const RenderData *p_re
 	push.size[2] = frame.x;
 	push.size[3] = frame.y;
 
-	_dispatch(rd, PASS_PREPARE, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, half_a), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, gas && backdrop_size == frame ? backdrop : color })) }, half, &push, sizeof(push));
+	_dispatch(rd, PASS_PREPARE, { RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, color })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, depth })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 2, half_a), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 3, Vector<RID>({ linear_sampler, gas && backdrop_size == frame ? backdrop : color })), RD::Uniform(RD::UNIFORM_TYPE_IMAGE, 4, gas_cover) }, half, &push, sizeof(push));
 	// Three passes, each reaching SAMPLES times further: the last reaches the
 	// full ray length.
 	RID src = half_a;
@@ -491,7 +507,7 @@ void PhysXLightShaftsEffect::_composite(RenderingDevice *p_rd, const RID &p_colo
 		ERR_FAIL_COND(!created.is_valid());
 		pipeline = &composite_pipelines.insert(format, created)->value;
 	}
-	const RID set = p_rd->uniform_set_create(Vector<RD::Uniform>({ RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, p_shafts })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, p_depth })) }), shaders[PASS_COMPOSITE], 0);
+	const RID set = p_rd->uniform_set_create(Vector<RD::Uniform>({ RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ linear_sampler, p_shafts })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 1, Vector<RID>({ linear_sampler, p_depth })), RD::Uniform(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 2, Vector<RID>({ linear_sampler, gas_cover })) }), shaders[PASS_COMPOSITE], 0);
 	ERR_FAIL_COND(!set.is_valid());
 	const RD::DrawListID list = p_rd->draw_list_begin(framebuffer, RD::DRAW_DEFAULT_ALL);
 	p_rd->draw_list_bind_render_pipeline(list, *pipeline);
