@@ -94,6 +94,35 @@ def main():
         sys.exit("missing preset: " + preset_file)
     if args.gpu and not (os.environ.get("CUDA_PATH") or shutil.which("nvcc")):
         sys.exit("--gpu needs the CUDA Toolkit (set CUDA_PATH or put nvcc on PATH)")
+    # vc18 + GPU is accepted by the preset check because vc18win64-godot-gpu.xml
+    # exists, and the CUDA guard above only tests that a toolkit is present, not
+    # which one. CUDA 12.x's crt/host_config.h accepts _MSC_VER in [1910, 1950)
+    # and MSVC 14.5x reports 1951, so nvcc refuses it -- and not cleanly:
+    # cudafe++ dies with 0xC0000005 tens of minutes into the build, and
+    # -allow-unsupported-compiler does not help. Only block on a version we
+    # actually read, so a working CUDA 13+ host is not locked out.
+    if args.gpu and args.vc == "18" and args.platform == "windows":
+        nvcc = shutil.which("nvcc") or os.path.join(os.environ.get("CUDA_PATH", ""), "bin", "nvcc")
+        out = ""
+        try:
+            out = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout
+        except OSError:
+            pass
+        # "Cuda compilation tools, release 12.8, V12.8.93"
+        release = out.split("release ", 1)[1].split(",", 1)[0].strip() if "release " in out else ""
+        major = release.split(".")[0]
+        if major.isdigit() and int(major) < 13:
+            sys.exit(
+                "--vc 18 --gpu needs CUDA 13 or newer: CUDA %s rejects MSVC 14.5x (_MSC_VER 1951 is "
+                "outside its accepted range) and cudafe++ crashes part way through the build. Build "
+                "the GPU SDK with --vc 15, or see BUILD-NOTES-WINDOWS-VS2026.md." % release
+            )
+        if not major.isdigit():
+            print(
+                "warning: could not read a CUDA version from nvcc. --vc 18 --gpu needs CUDA 13 or "
+                "newer; under CUDA 12.x cudafe++ crashes part way through the build. See "
+                "BUILD-NOTES-WINDOWS-VS2026.md."
+            )
     # --vc 15 selects a preset with generator="ninja", and PhysX only passes
     # -DCMAKE_MAKE_PROGRAM on its Linux ninja branch, so ninja has to be on PATH
     # here. Without this the failure is a CMake error buried in
