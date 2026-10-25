@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from misc.utility.scons_hints import *
 
+import glob
 import os
 
 Import("env")
@@ -42,7 +43,15 @@ physx_static_libs = [
 
 if env["platform"] == "windows":
     # TODO: parameterize for target/arch/config.
-    physx_lib = os.path.join(physx_sdk, "bin", "win.x86_64.vc143.mt", "release")
+    # PhysX names this directory after the MSVC toolset it was built with --
+    # vc141 / vc142 / vc143 from MSVC_VERSION, see its GetCompilerAndPlatform.cmake
+    # (14.3x and everything newer, 14.5x included, all report vc143). Match whichever
+    # one the configured SDK actually shipped instead of assuming a single toolset.
+    _physx_bin_dirs = sorted(glob.glob(os.path.join(physx_sdk, "bin", "win.x86_64.vc*.mt")), reverse=True)
+    physx_lib = os.path.join(
+        _physx_bin_dirs[0] if _physx_bin_dirs else os.path.join(physx_sdk, "bin", "win.x86_64.vc143.mt"),
+        "release",
+    )
     physx_libs = list(physx_static_libs)
     if physx_gpu:
         physx_libs.append("PhysXGpu_64")  # import lib for PhysXGpu_64.dll
