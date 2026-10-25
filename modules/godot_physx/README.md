@@ -26,6 +26,12 @@ The PhysX 5 SDK is **not vendored** — it is built out of tree and linked in. T
 module is skipped (with a one-line notice) unless an SDK is configured, so a
 stock Godot build is unaffected.
 
+If the only Visual Studio on the machine is **2026** (no VS 2022), see
+[BUILD-NOTES-WINDOWS-VS2026.md](BUILD-NOTES-WINDOWS-VS2026.md) first: the CUDA
+toolkit's host-compiler check makes that case differ from the steps below.
+It also covers the case where `winget install Nvidia.CUDA` fails with exit 8
+because a newer display driver is already present.
+
 ### Prerequisites
 
 On top of everything a normal Godot Windows editor build needs (Python, SCons,
@@ -66,6 +72,31 @@ python modules/godot_physx/misc/build_physx.py --gpu      # + GPU dynamics / flu
 `--platform` defaults to the host OS (`windows` on Windows, `linuxbsd`
 elsewhere) — pass it explicitly to be sure, e.g. `--platform linuxbsd --gpu`.
 Run it on the machine you're building for.
+
+`--vc` picks the MSVC toolchain for the Windows presets. The value goes
+straight into the preset filename — `--vc 15` selects
+`misc/physx_presets/vc15win64-godot.xml` — so a value with no preset file on
+disk stops the script with `missing preset: <path>`. It is ignored unless
+`--platform windows`, because the Linux branch always uses `linux64-godot`.
+
+| `--vc` | Preset | With `--gpu` | Toolset / generator | GPU build |
+| --- | --- | --- | --- | --- |
+| `15` | `vc15win64-godot` | `vc15win64-godot-gpu` | MSVC 14.16 (VS 2017), Ninja | Yes — MSVC 14.16 reports `_MSC_VER 1916`, inside CUDA 12.8's accepted range |
+| `17` (default) | `vc17win64-godot` | `vc17win64-godot-gpu` | MSVC 14.3x (VS 2022), MSBuild | Not verified here — VS 2022 is not installed on the machine this was written on |
+| `18` | `vc18win64-godot` | `vc18win64-godot-gpu` | MSVC 14.5x (VS 2026), MSBuild | No, CPU only under CUDA 12.8 |
+
+The SDK is therefore built with an older compiler than Godot itself, for one
+reason: CUDA 12.8's `include/crt/host_config.h` accepts `_MSC_VER` in the
+half-open range [1910, 1950), MSVC 14.51 reports 1951, so nvcc refuses it —
+and `-allow-unsupported-compiler` does not help, `cudafe++` dies parsing the
+14.51 headers. Blast's packman step already downloads MSVC 14.16 (`_MSC_VER`
+1916), which is inside that range, so `--vc 15` builds the GPU SDK with no
+extra toolchain to install, and its `/MT` static libraries link cleanly into
+a Godot built by the system 14.51 — verified, and consistent with Microsoft's
+binary-compatibility guarantee.
+
+`--vc 17` is the default, so every command in this document and every
+previously published invocation builds exactly as before.
 
 This clones NVIDIA's PhysX repo (pinned) into a `physx-sdk/` folder next to the
 Godot repo, applies the Godot-tuned preset, builds and installs it, then prints
