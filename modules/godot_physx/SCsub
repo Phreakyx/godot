@@ -54,6 +54,17 @@ if env["platform"] == "windows":
     _physx_bin_dirs = sorted(
         d for d in glob.glob(os.path.join(glob.escape(physx_sdk), "bin", "win.x86_64.vc*.mt")) if os.path.isdir(d)
     )
+    # One install prefix normally holds one toolset tree, but rebuilding the same
+    # preset after an MSVC upgrade leaves vc141 and vc143 side by side and the
+    # sort order has nothing to do with which build is current. Keep the pick
+    # deterministic (highest toolset) and say which one won, rather than linking
+    # one toolset's libraries while the user believes they configured the other.
+    if len(_physx_bin_dirs) > 1:
+        print(
+            "godot_physx: %d PhysX toolset trees in %s, linking %s. Remove the stale tree if that "
+            "is not the build you configured."
+            % (len(_physx_bin_dirs), os.path.join(physx_sdk, "bin"), os.path.basename(_physx_bin_dirs[-1]))
+        )
     physx_lib = os.path.join(
         _physx_bin_dirs[-1] if _physx_bin_dirs else os.path.join(physx_sdk, "bin", "win.x86_64.vc143.mt"),
         "release",
