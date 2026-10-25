@@ -108,13 +108,23 @@ versus pulling in Nsight and the math libraries PhysX does not use. Point `CUDA_
 
 ## Building the editor
 
-```
+```bat
 scons platform=windows target=editor ^
   physx_sdk=<physx checkout>/physx/install/vc15win64-godot-gpu/PhysX ^
   physx_gpu=yes ^
   blast_sdk=<physx checkout>/blast/_build/windows-x86_64/release/blast-sdk ^
   flow_sdk=<physx checkout>/flow
 ```
+
+Run this from `cmd`. `^` is cmd's line continuation; PowerShell's is a backtick and
+treats `^` as a literal argument, so pasting the block into PowerShell silently runs a
+truncated `scons platform=windows target=editor` with none of the SDK paths.
+
+If the AccessKit SDK is absent, scons prints a red `ERROR:` about the screen reader
+driver, then disables that driver itself and carries on — the build still succeeds, it
+just does not have screen reader support. Install the SDK with `python
+misc\scripts\install_accesskit.py`, or pass `accesskit=no` explicitly to silence the
+message.
 
 PhysX static libraries built with MSVC 14.16 `/MT` **link cleanly into a Godot built with
 14.51** — verified, and consistent with Microsoft's binary-compatibility guarantee. Godot

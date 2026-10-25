@@ -124,6 +124,12 @@ scons platform=linuxbsd target=editor physx_sdk=<path from step 1>           # L
 scons platform=linuxbsd target=editor physx_sdk=<path> physx_gpu=yes         # Linux (GPU)
 ```
 
+If the AccessKit SDK is not installed, scons prints a red `ERROR:` about the
+screen reader driver, disables that driver itself and carries on, so the build
+still succeeds without screen reader support. Install it with `python
+misc/scripts/install_accesskit.py`, or pass `accesskit=no` to silence the
+message.
+
 For a **GPU** build, `SCsub` also copies `PhysXGpu_64.dll` (`libPhysXGpu_64.so`
 on Linux) next to the built binary automatically (a real SCons dependency,
 keyed on `physx_sdk=`'s own library — it only re-copies when that changes,
