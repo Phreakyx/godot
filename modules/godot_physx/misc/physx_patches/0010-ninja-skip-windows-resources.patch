@@ -1,0 +1,106 @@
+Don't compile the Windows .rc files under a Ninja generator. CMake's
+"Ninja Multi-Config" generator forwards -DCMAKE_INTDIR=\"release\" to rc.exe,
+which cannot parse the escaped quotes and stops with
+"fatal error RC1107: invalid usage". These .rc files only carry version
+resources -- inert in the static libraries this module links, and on
+PhysXGpu_64.dll only metadata nothing reads -- so they are marked
+HEADER_FILE_ONLY and left out of the compile. Visual Studio generator builds
+are unaffected.
+
+A Ninja generator is what the vc15win64-godot presets use: CMake's
+"Visual Studio 15 2017" generator needs a registered VS 2017 installation,
+which a packman-provided MSVC 14.16 toolchain is not.
+
+diff --git a/physx/source/compiler/cmake/windows/PhysX.cmake b/physx/source/compiler/cmake/windows/PhysX.cmake
+index d5561c1..f05dac7 100644
+--- a/physx/source/compiler/cmake/windows/PhysX.cmake
++++ b/physx/source/compiler/cmake/windows/PhysX.cmake
+@@ -54,6 +54,14 @@ SET(PHYSX_RESOURCE
+ 	${PHYSX_SOURCE_DIR}/compiler/windows/resource/resource.h
+ )
+ SOURCE_GROUP(resource FILES ${PHYSX_RESOURCE})
++# CMake's "Ninja Multi-Config" generator forwards -DCMAKE_INTDIR=\"release\" to
++# rc.exe, which cannot parse the escaped quotes and dies with RC1107. These .rc
++# files only carry DLL version info and are inert in a static-library build, so
++# keep them listed but don't compile them when generating for Ninja.
++IF(CMAKE_GENERATOR MATCHES "Ninja")
++	SET_SOURCE_FILES_PROPERTIES(${PHYSX_SOURCE_DIR}/compiler/windows/resource/PhysX.rc PROPERTIES HEADER_FILE_ONLY TRUE)
++ENDIF()
++
+ 
+ SET(PHYSX_DEVICE_SOURCE
+ )
+diff --git a/physx/source/compiler/cmake/windows/PhysXCommon.cmake b/physx/source/compiler/cmake/windows/PhysXCommon.cmake
+index a58a133..5593b00 100644
+--- a/physx/source/compiler/cmake/windows/PhysXCommon.cmake
++++ b/physx/source/compiler/cmake/windows/PhysXCommon.cmake
+@@ -45,6 +45,14 @@ SET(PHYSXCOMMON_RESOURCE
+ 	${PHYSX_SOURCE_DIR}/compiler/windows/resource/resource.h
+ )
+ SOURCE_GROUP(resource FILES ${PHYSXCOMMON_RESOURCE})
++# CMake's "Ninja Multi-Config" generator forwards -DCMAKE_INTDIR=\"release\" to
++# rc.exe, which cannot parse the escaped quotes and dies with RC1107. These .rc
++# files only carry DLL version info and are inert in a static-library build, so
++# keep them listed but don't compile them when generating for Ninja.
++IF(CMAKE_GENERATOR MATCHES "Ninja")
++	SET_SOURCE_FILES_PROPERTIES(${PHYSX_SOURCE_DIR}/compiler/windows/resource/PhysXCommon.rc PROPERTIES HEADER_FILE_ONLY TRUE)
++ENDIF()
++
+ 
+ SET(PXCOMMON_PLATFORM_SRC_FILES 
+ 	${PHYSXCOMMON_WINDOWS_HEADERS}
+diff --git a/physx/source/compiler/cmake/windows/PhysXCooking.cmake b/physx/source/compiler/cmake/windows/PhysXCooking.cmake
+index 0868f3d..1c278ab 100644
+--- a/physx/source/compiler/cmake/windows/PhysXCooking.cmake
++++ b/physx/source/compiler/cmake/windows/PhysXCooking.cmake
+@@ -55,6 +55,14 @@ SET(PHYSX_COOKING_RESOURCE
+ 	${PHYSX_SOURCE_DIR}/compiler/windows/resource/resource.h
+ )
+ SOURCE_GROUP(resource FILES ${PHYSX_COOKING_RESOURCE})
++# CMake's "Ninja Multi-Config" generator forwards -DCMAKE_INTDIR=\"release\" to
++# rc.exe, which cannot parse the escaped quotes and dies with RC1107. These .rc
++# files only carry DLL version info and are inert in a static-library build, so
++# keep them listed but don't compile them when generating for Ninja.
++IF(CMAKE_GENERATOR MATCHES "Ninja")
++	SET_SOURCE_FILES_PROPERTIES(${PHYSX_SOURCE_DIR}/compiler/windows/resource/PhysXCooking.rc PROPERTIES HEADER_FILE_ONLY TRUE)
++ENDIF()
++
+ 
+ SET(PHYSXCOOKING_PLATFORM_SRC_FILES 
+ 	${PHYSX_COOKING_WINDOWS_SOURCE}
+diff --git a/physx/source/compiler/cmake/windows/PhysXFoundation.cmake b/physx/source/compiler/cmake/windows/PhysXFoundation.cmake
+index 1ec8023..598585a 100644
+--- a/physx/source/compiler/cmake/windows/PhysXFoundation.cmake
++++ b/physx/source/compiler/cmake/windows/PhysXFoundation.cmake
+@@ -58,6 +58,14 @@ SET(PHYSXFOUNDATION_RESOURCE_FILE
+ 	${PHYSX_SOURCE_DIR}/compiler/windows/resource/resource.h
+ )
+ SOURCE_GROUP(resource FILES ${PHYSXFOUNDATION_RESOURCE_FILE})
++# CMake's "Ninja Multi-Config" generator forwards -DCMAKE_INTDIR=\"release\" to
++# rc.exe, which cannot parse the escaped quotes and dies with RC1107. These .rc
++# files only carry DLL version info and are inert in a static-library build, so
++# keep them listed but don't compile them when generating for Ninja.
++IF(CMAKE_GENERATOR MATCHES "Ninja")
++	SET_SOURCE_FILES_PROPERTIES(${PHYSX_SOURCE_DIR}/compiler/windows/resource/PhysXFoundation.rc PROPERTIES HEADER_FILE_ONLY TRUE)
++ENDIF()
++
+ 
+ SET(PHYSXFOUNDATION_PLATFORM_SOURCE
+ 	${LL_SOURCE_DIR}/windows/FdWindowsAtomic.cpp
+diff --git a/physx/source/compiler/cmakegpu/windows/PhysXGpu.cmake b/physx/source/compiler/cmakegpu/windows/PhysXGpu.cmake
+index 45fdb24..091dd89 100644
+--- a/physx/source/compiler/cmakegpu/windows/PhysXGpu.cmake
++++ b/physx/source/compiler/cmakegpu/windows/PhysXGpu.cmake
+@@ -78,6 +78,12 @@ ENDIF()
+ # Linux-host public flow enumerates these files via windows-crosscompile.
+ INCLUDE(${CMAKE_CURRENT_LIST_DIR}/PhysXGpuPlatformFiles.cmake)
+ SOURCE_GROUP(resource FILES ${PHYSXGPU_RESOURCE})
++# CMake's "Ninja Multi-Config" generator forwards -DCMAKE_INTDIR=\"release\" to
++# rc.exe, which cannot parse the escaped quotes and dies with RC1107. Skipping it
++# only drops PhysXGpu_64.dll's version metadata, which nothing reads.
++IF(CMAKE_GENERATOR MATCHES "Ninja")
++	SET_SOURCE_FILES_PROPERTIES(${PHYSX_SOURCE_DIR}/compiler/windows/resource/PhysXGpu.rc PROPERTIES HEADER_FILE_ONLY TRUE)
++ENDIF()
+ 
+ SET(PHYSXGPU_PLATFORM_SOURCES
+     ${PHYSXGPU_RESOURCE}
