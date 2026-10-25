@@ -43,8 +43,11 @@ Visual Studio with the C++ workload and Windows SDK, the D3D12 Agility SDK):
   `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8` and sets
   `CUDA_PATH`; open a fresh terminal afterwards). The end-user machine only
   needs an NVIDIA driver (`nvcuda.dll` / `libcuda.so.1`), not the toolkit.
-  CUDA 13 works too, but needs a newer driver (R580+) and drops `sm_70`, so
-  stick with 12.8.
+  CUDA 13 works too, but needs a newer driver (R580+); 12.8 is what the
+  module is tested against, so it stays the recommended route. The `sm_70`
+  difference does not affect these presets, which build a reduced SASS
+  list that carries no `sm_70` either way — see
+  BUILD-NOTES-WINDOWS-VS2026.md.
 
 On **Linux**, on top of a normal Godot Linux editor build: **CMake**, **git**
 and **clang** (the PhysX SDK is built with clang even when Godot itself is built
