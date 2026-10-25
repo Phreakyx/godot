@@ -1,0 +1,36 @@
+Build ExtDelaunayBoundaryInserter.cpp with MSVC 14.16 (VS 2017).
+
+MSVC 14.16 fails to parse the CRT's NAN macro in this translation unit and
+reports "error C2143: syntax error: missing ')' before ';'" on the PxVec3d
+line; the same macro compiles fine on 14.3x and newer, and in isolation on
+14.16, so it is specific to this file's include set. std::numeric_limits
+needs no macro expansion and is equivalent. Newer toolsets are unaffected.
+
+diff --git a/physx/source/physxextensions/src/tet/ExtDelaunayBoundaryInserter.cpp b/physx/source/physxextensions/src/tet/ExtDelaunayBoundaryInserter.cpp
+index f26da8f..f1f385e 100644
+--- a/physx/source/physxextensions/src/tet/ExtDelaunayBoundaryInserter.cpp
++++ b/physx/source/physxextensions/src/tet/ExtDelaunayBoundaryInserter.cpp
+@@ -42,6 +42,14 @@
+ #include "foundation/PxMathUtils.h"
+ #include "GuInternal.h"
+ #include "common/GuMeshAnalysis.h"
++#include <limits>
++
++// MSVC 14.16 fails to parse the CRT's NAN macro in this translation unit
++// (C2143); std::numeric_limits needs no macro expansion.
++static PX_FORCE_INLINE physx::PxF64 extQuietNaN()
++{
++	return std::numeric_limits<physx::PxF64>::quiet_NaN();
++}
+ 
+ #include <stdio.h>
+ 
+@@ -1197,7 +1205,7 @@ void physx::Ext::generateTetmesh(const PxBoundedData& inputPoints, const PxBound
+ 	for (PxI32 i = 0; i < PxI32(points.size()); ++i)
+ 	{
+ 		if(map[i] != i)
+-			points[i] = PxVec3d(PxF64(NAN), PxF64(NAN), PxF64(NAN));
++			points[i] = PxVec3d(extQuietNaN(), extQuietNaN(), extQuietNaN());
+ 	}
+ 	for (PxU32 i = 0; i < tris.size(); ++i)
+ 	{
