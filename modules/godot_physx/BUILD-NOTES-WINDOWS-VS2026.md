@@ -61,8 +61,11 @@ Patches `0008`–`0011` in `misc/physx_patches/`, described in that directory's
 ## Building the SDK
 
 Everything below must run **inside Blast's packman MSVC 14.16 environment**. Three
-non-obvious lines are required; see *Environment traps* for why. Adjust the three `E:\`
-paths to your machine.
+non-obvious lines are required; see *Environment traps* for why. Adjust the five
+machine-specific paths in the block: the packman root (twice), `CUDA_PATH`,
+`PM_CUDA_PATH` — which uses forward slashes, so searching for `E:\` misses it —
+and the Visual Studio Ninja directory, which depends on your VS edition
+(`Professional`, `Enterprise`, `BuildTools`) and install root.
 
 ```bat
 @echo off
