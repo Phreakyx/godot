@@ -94,6 +94,16 @@ def main():
         sys.exit("missing preset: " + preset_file)
     if args.gpu and not (os.environ.get("CUDA_PATH") or shutil.which("nvcc")):
         sys.exit("--gpu needs the CUDA Toolkit (set CUDA_PATH or put nvcc on PATH)")
+    # --vc 15 selects a preset with generator="ninja", and PhysX only passes
+    # -DCMAKE_MAKE_PROGRAM on its Linux ninja branch, so ninja has to be on PATH
+    # here. Without this the failure is a CMake error buried in
+    # generate_projects.bat output.
+    if args.platform == "windows" and args.vc == "15" and not shutil.which("ninja"):
+        sys.exit(
+            "--vc 15 builds through the Ninja generator (a packman VS 2017 toolchain is not a "
+            "registered VS install), so ninja must be on PATH. Visual Studio ships one under "
+            "Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja -- see BUILD-NOTES-WINDOWS-VS2026.md."
+        )
 
     # Locate / create the PhysX source tree.
     src = args.src
