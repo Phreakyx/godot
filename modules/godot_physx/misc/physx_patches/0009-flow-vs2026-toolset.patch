@@ -1,0 +1,35 @@
+Build Flow with Visual Studio 2026 (VS 18). build.bat maps any VS major >= 17
+onto premake's vs2022 action, and premake 5.0.0-beta2 has no vs2026 action, so
+the generated solution asks for PlatformToolset v143. VS 2026 ships only v145,
+so MSBuild fails with MSB8020 ("build tools for v143 cannot be found").
+Retarget the toolset on the MSBuild command line when running under VS 18+;
+VS 2022 builds are unchanged.
+
+diff --git a/flow/build.bat b/flow/build.bat
+index 4154e31..862e078 100644
+--- a/flow/build.bat
++++ b/flow/build.bat
+@@ -29,6 +29,10 @@ if "%MAJOR_VERSION%"=="16" (
+     goto Error
+ )
+ 
++:: premake has no vs2026 action, so it emits a v143 solution. VS 2026 ships
++:: only v145, so retarget the toolset on the MSBuild command line (MSB8020).
++set "TOOLSET_ARG="
++if %MAJOR_VERSION% GEQ 18 set "TOOLSET_ARG=/p:PlatformToolset=v145"
+ echo Microsoft Visual Studio version: %MSVS_VERSION%
+ echo Install directory: %InstallDir%
+ 
+@@ -76,10 +80,10 @@ if exist %MSBUILD_PATH% (
+ call %~dp0generate_projects.bat %MSVS_VERSION%
+ if %errorlevel% neq 0 ( goto Error )
+ 
+-call %MSBUILD_PATH% %~dp0_compiler\%MSVS_VERSION%\nvflow.sln /p:Configuration=debug
++call %MSBUILD_PATH% %~dp0_compiler\%MSVS_VERSION%\nvflow.sln /p:Configuration=debug %TOOLSET_ARG%
+ if %errorlevel% neq 0 ( goto Error )
+ 
+-call %MSBUILD_PATH% %~dp0_compiler\%MSVS_VERSION%\nvflow.sln /p:Configuration=release
++call %MSBUILD_PATH% %~dp0_compiler\%MSVS_VERSION%\nvflow.sln /p:Configuration=release %TOOLSET_ARG%
+ if %errorlevel% neq 0 ( goto Error )
+ 
+ :Success
