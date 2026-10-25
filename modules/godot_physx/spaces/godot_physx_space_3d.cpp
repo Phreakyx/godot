@@ -922,98 +922,159 @@ bool GodotPhysXSpace3D::test_body_motion(GodotPhysXBody3D *p_body, const Physics
 
 	if (motion_len > CMP_EPSILON) {
 		const PxVec3 unit_dir = to_px(p_params.motion / motion_len);
-		for (int i = 0; i < shape_count; i++) {
-			const GodotPhysXBody3D::ShapeRef *sr = p_body->get_shape_ref(i);
-			if (sr && !sr->disabled && sr->shape && sr->shape->is_separation_ray()) {
-				// Rays only take part in the motion when snapping to the floor
-				// (collide_separation_ray), or acting as a regular shape with
-				// slide_on_slope -- as on Godot Physics and Jolt. The tip moves
-				// with the body; cast it along the motion.
-				if (!p_params.collide_separation_ray && !sr->shape->is_ray_sliding_on_slope()) {
-					continue;
+		// A capsule or sphere that starts the sweep overlapping a triangle mesh or
+		// height field is pushed out first and swept again from there (as Godot
+		// Physics and Jolt recover before they sweep): a sweep from inside reports
+		// only the push-out, and following that sideways along a step's edge lifts
+		// the body over steps far too tall to walk up.
+		bool resweep = false;
+		for (int pass = 0; pass < 2; pass++) {
+			if (pass == 1) {
+				if (!resweep) {
+					break;
 				}
-				const SeparationRay ray = separation_ray(sr->shape, recovered_from, sr->xform, motion_scale);
-				PxRaycastBuffer rh;
-				if (px_scene->raycast(ray.origin + ray.dir * ray.length, unit_dir, (PxReal)motion_len, rh, PxHitFlag::ePOSITION | PxHitFlag::eNORMAL, fd, &filter) &&
-						rh.hasBlock && rh.block.normal.dot(-unit_dir) >= 0.001f) {
-					const real_t frac = CLAMP((real_t)rh.block.distance / motion_len, (real_t)0.0, (real_t)1.0);
-					if (frac < safe_fraction) {
-						safe_fraction = frac;
-						best_hit.actor = rh.block.actor;
-						best_hit.shape = rh.block.shape;
-						best_hit.position = rh.block.position;
-						best_hit.normal = rh.block.normal;
-						best_hit.distance = rh.block.distance;
-						best_hit.faceIndex = rh.block.faceIndex;
-						has_hit = true;
-					}
-				}
-				continue;
+				safe_fraction = 1.0;
+				best_hit = PxSweepHit();
+				has_hit = false;
 			}
-			if (!sr || !sr->shape || !sr->shape->is_valid()) {
-				continue;
-			}
-			const GodotPhysXShape3D::ScaledGeometry sg = sr->shape->scaled_geometry(motion_scale * sr->xform.basis.get_scale());
-			const PxTransform pose = recovered_from * to_px(sr->xform) * sg.local_pose;
-
-			PxSweepBuffer hit;
-			if (px_scene->sweep(sg.geom.any(), pose, unit_dir, (PxReal)motion_len, hit,
-						PxHitFlag::ePOSITION | PxHitFlag::eNORMAL | PxHitFlag::eMTD,
-						fd, &filter, nullptr, 0.0f) &&
-					hit.hasBlock) {
-				// Internal-edge fix: sweeping over a triangle-mesh surface catches
-				// on the shared edges between facets and PhysX hands back the edge
-				// normal (often axis-aligned, looks like a wall). Swap in the real
-				// triangle face normal so a walking character slides on the surface
-				// instead of hitting phantom steps.
-				if (hit.block.actor && hit.block.shape && hit.block.faceIndex != 0xffffffffu &&
-						hit.block.shape->getGeometry().getType() == PxGeometryType::eTRIANGLEMESH) {
-					const PxTransform hit_pose = hit.block.actor->getGlobalPose() *
-							hit.block.shape->getLocalPose();
-					PxTriangle tri;
-					PxMeshQuery::getTriangle(
-							static_cast<const PxTriangleMeshGeometry &>(hit.block.shape->getGeometry()),
-							hit_pose, hit.block.faceIndex, tri);
-					PxVec3 face_n;
-					tri.normal(face_n);
-					if (face_n.dot(hit.block.normal) < 0.0f) {
-						face_n = -face_n;
-					}
-					hit.block.normal = face_n;
-				}
-				// eMTD reports an initial overlap as a negative distance with the
-				// push-out normal. The body isn't blocked from moving -- it just
-				// needs depenetrating -- so record the push and don't clamp the
-				// travel. This is the only depenetration path for tri-mesh /
-				// height-field terrain (computePenetration() rejects those).
-				if (hit.block.distance <= 0.0f) {
-					const PxF32 pen = -hit.block.distance;
-					if (skip_one_sided_overlap(hit.block.actor, hit.block.shape, -1.0f, hit.block.normal, motion_dir, sg.geom.any(), pose)) {
+			const PxTransform sweep_from = PxTransform(mtd_recover) * recovered_from;
+			for (int i = 0; i < shape_count; i++) {
+				const GodotPhysXBody3D::ShapeRef *sr = p_body->get_shape_ref(i);
+				if (sr && !sr->disabled && sr->shape && sr->shape->is_separation_ray()) {
+					// Rays only take part in the motion when snapping to the floor
+					// (collide_separation_ray), or acting as a regular shape with
+					// slide_on_slope -- as on Godot Physics and Jolt. The tip moves
+					// with the body; cast it along the motion.
+					if (!p_params.collide_separation_ray && !sr->shape->is_ray_sliding_on_slope()) {
 						continue;
 					}
-					mtd_recover += hit.block.normal * (pen + margin);
-					// Only report a floor-like overlap so move_and_slide keeps a
-					// character grounded. Near-horizontal push-outs here are
-					// almost always a facet edge the capsule is grazing -- just
-					// depenetrate, don't treat it as a wall that stops the travel
-					// (that leaves a walking character frozen mid-slope).
-					if (hit.block.normal.y > 0.3f && (!has_hit || safe_fraction > (real_t)0.0)) {
+					const SeparationRay ray = separation_ray(sr->shape, sweep_from, sr->xform, motion_scale);
+					PxRaycastBuffer rh;
+					if (px_scene->raycast(ray.origin + ray.dir * ray.length, unit_dir, (PxReal)motion_len, rh, PxHitFlag::ePOSITION | PxHitFlag::eNORMAL, fd, &filter) &&
+							rh.hasBlock && rh.block.normal.dot(-unit_dir) >= 0.001f) {
+						const real_t frac = CLAMP((real_t)rh.block.distance / motion_len, (real_t)0.0, (real_t)1.0);
+						if (frac < safe_fraction) {
+							safe_fraction = frac;
+							best_hit.actor = rh.block.actor;
+							best_hit.shape = rh.block.shape;
+							best_hit.position = rh.block.position;
+							best_hit.normal = rh.block.normal;
+							best_hit.distance = rh.block.distance;
+							best_hit.faceIndex = rh.block.faceIndex;
+							has_hit = true;
+						}
+					}
+					continue;
+				}
+				if (!sr || !sr->shape || !sr->shape->is_valid()) {
+					continue;
+				}
+				const GodotPhysXShape3D::ScaledGeometry sg = sr->shape->scaled_geometry(motion_scale * sr->xform.basis.get_scale());
+				const PxTransform pose = sweep_from * to_px(sr->xform) * sg.local_pose;
+
+				PxSweepBuffer hit;
+				if (px_scene->sweep(sg.geom.any(), pose, unit_dir, (PxReal)motion_len, hit,
+							PxHitFlag::ePOSITION | PxHitFlag::eNORMAL | PxHitFlag::eMTD,
+							fd, &filter, nullptr, 0.0f) &&
+						hit.hasBlock) {
+					// Internal-edge fix: sweeping over a triangle-mesh surface catches
+					// on the shared edges between facets and PhysX hands back the edge
+					// normal (often axis-aligned, looks like a wall). A capsule or
+					// sphere gets its true contact normal instead -- from the touch
+					// point to the nearest point of its core -- which is straight up on
+					// a flat floor's internal edges, and tilted on a real ledge's edge
+					// as far as the ledge is low (so a low lip is walked up and a tall
+					// step stops it, as on Godot Physics and Jolt). Other shapes get the
+					// triangle's face normal, so a walking box slides on the surface
+					// instead of hitting phantom steps.
+					const PxGeometryType::Enum mover_type = sg.geom.any().getType();
+					if (hit.block.actor && hit.block.shape && (mover_type == PxGeometryType::eCAPSULE || mover_type == PxGeometryType::eSPHERE) &&
+							(hit.block.shape->getGeometry().getType() == PxGeometryType::eTRIANGLEMESH || hit.block.shape->getGeometry().getType() == PxGeometryType::eHEIGHTFIELD)) {
+						const PxVec3 centre = pose.p + unit_dir * PxMax(hit.block.distance, 0.0f);
+						PxVec3 a = centre;
+						PxVec3 ab(0.0f);
+						if (mover_type == PxGeometryType::eCAPSULE) {
+							// PhysX capsules lie along their local X axis.
+							const PxVec3 half = pose.q.getBasisVector0() * static_cast<const PxCapsuleGeometry &>(sg.geom.any()).halfHeight;
+							a = centre - half;
+							ab = half * 2.0f;
+						}
+						const PxReal len2 = ab.magnitudeSquared();
+						const PxReal s = len2 > 1e-8f ? PxClamp((hit.block.position - a).dot(ab) / len2, 0.0f, 1.0f) : 0.0f;
+						const PxVec3 to_core = a + ab * s - hit.block.position;
+						const PxReal dist = to_core.magnitude();
+						if (dist > 1e-4f) {
+							hit.block.normal = to_core / dist;
+						}
+					} else if (hit.block.actor && hit.block.shape && hit.block.faceIndex != 0xffffffffu &&
+							hit.block.shape->getGeometry().getType() == PxGeometryType::eTRIANGLEMESH) {
+						const PxTransform hit_pose = hit.block.actor->getGlobalPose() *
+								hit.block.shape->getLocalPose();
+						PxTriangle tri;
+						PxMeshQuery::getTriangle(
+								static_cast<const PxTriangleMeshGeometry &>(hit.block.shape->getGeometry()),
+								hit_pose, hit.block.faceIndex, tri);
+						PxVec3 face_n;
+						tri.normal(face_n);
+						if (face_n.dot(hit.block.normal) < 0.0f) {
+							face_n = -face_n;
+						}
+						hit.block.normal = face_n;
+					}
+					// eMTD reports an initial overlap as a negative distance with the
+					// push-out normal. The body isn't blocked from moving -- it just
+					// needs depenetrating -- so record the push and don't clamp the
+					// travel. This is the only depenetration path for tri-mesh /
+					// height-field terrain (computePenetration() rejects those).
+					if (hit.block.distance <= 0.0f) {
+						const PxF32 pen = -hit.block.distance;
+						if (skip_one_sided_overlap(hit.block.actor, hit.block.shape, -1.0f, hit.block.normal, motion_dir, sg.geom.any(), pose)) {
+							continue;
+						}
+						mtd_recover += hit.block.normal * (pen + margin);
+						const bool round = mover_type == PxGeometryType::eCAPSULE || mover_type == PxGeometryType::eSPHERE;
+						// Only a push-out that pushes back against the way the body
+						// moves (sideways) needs the second sweep -- an edge or a step
+						// it walks into. Resting on a floor pushes straight up and is
+						// handled as before, with one sweep.
+						const PxReal push_back = -(hit.block.normal.x * unit_dir.x + hit.block.normal.z * unit_dir.z);
+						if (pass == 0 && round && push_back > 0.02f && (hit.block.shape->getGeometry().getType() == PxGeometryType::eTRIANGLEMESH || hit.block.shape->getGeometry().getType() == PxGeometryType::eHEIGHTFIELD)) {
+							resweep = true;
+							continue;
+						}
+						// Only report a floor-like overlap so move_and_slide keeps a
+						// character grounded. Near-horizontal push-outs here are
+						// almost always a facet edge the capsule is grazing -- just
+						// depenetrate, don't treat it as a wall that stops the travel
+						// (that leaves a walking character frozen mid-slope).
+						if (hit.block.normal.y > 0.3f && (!has_hit || safe_fraction > (real_t)0.0)) {
+							best_hit = hit.block;
+							has_hit = true;
+						} else if (round && hit.block.normal.dot(-unit_dir) >= 0.001f) {
+							// A capsule's or sphere's push-out is its true contact
+							// normal (above), never a facet edge: a near-horizontal one
+							// is a wall or a step's face it's pressed against. It
+							// stops the travel -- otherwise the body would sink into
+							// the step a little each frame and be pushed out over its
+							// top.
+							safe_fraction = 0.0;
+							best_hit = hit.block;
+							has_hit = true;
+						}
+						continue;
+					}
+					// Ignore contacts that don't actually oppose the motion: a hit
+					// whose normal faces along (rather than against) the sweep is a
+					// grazing/edge contact from sliding on a surface.
+					if (hit.block.normal.dot(-unit_dir) < 0.001f) {
+						continue;
+					}
+					const real_t frac = CLAMP((real_t)hit.block.distance / motion_len, (real_t)0.0, (real_t)1.0);
+					if (frac < safe_fraction) {
+						safe_fraction = frac;
 						best_hit = hit.block;
 						has_hit = true;
 					}
-					continue;
-				}
-				// Ignore contacts that don't actually oppose the motion: a hit
-				// whose normal faces along (rather than against) the sweep is a
-				// grazing/edge contact from sliding on a surface.
-				if (hit.block.normal.dot(-unit_dir) < 0.001f) {
-					continue;
-				}
-				const real_t frac = CLAMP((real_t)hit.block.distance / motion_len, (real_t)0.0, (real_t)1.0);
-				if (frac < safe_fraction) {
-					safe_fraction = frac;
-					best_hit = hit.block;
-					has_hit = true;
 				}
 			}
 		}
