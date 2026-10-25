@@ -73,11 +73,15 @@ python modules/godot_physx/misc/build_physx.py --gpu      # + GPU dynamics / flu
 elsewhere) — pass it explicitly to be sure, e.g. `--platform linuxbsd --gpu`.
 Run it on the machine you're building for.
 
-`--vc` picks the MSVC toolchain for the Windows presets. The value goes
-straight into the preset filename — `--vc 15` selects
-`misc/physx_presets/vc15win64-godot.xml` — so a value with no preset file on
-disk stops the script with `missing preset: <path>`. It is ignored unless
-`--platform windows`, because the Linux branch always uses `linux64-godot`.
+`--vc` picks the MSVC toolchain for the Windows presets. It accepts `15`,
+`17` or `18`, each mapping to `misc/physx_presets/vc<N>win64-godot.xml`
+(or the `-gpu` variant with `--gpu`). Any other value is rejected by
+argparse before the script does anything — `argument --vc: invalid
+choice: '16' (choose from '15', '17', '18')` — so to build with a
+toolset that is not listed, add the matching preset file under
+`misc/physx_presets/` and its value to `--vc`'s `choices` in
+`build_physx.py`. It is ignored unless `--platform windows`, because the
+Linux branch always uses `linux64-godot`.
 
 | `--vc` | Preset | With `--gpu` | Toolset / generator | GPU build |
 | --- | --- | --- | --- | --- |
