@@ -76,12 +76,18 @@ def main():
         metavar="DIR",
         help="PhysX checkout to build in; cloned here if absent (default: a 'physx-sdk' directory beside the Godot repo)",
     )
+    ap.add_argument(
+        "--vc",
+        choices=["15", "17", "18"],
+        default="17",
+        help="MSVC toolchain for the Windows presets: 15 = VS 2017 (ninja), 17 = VS 2022, 18 = VS 2026 (default: %(default)s)",
+    )
     ap.add_argument("--ref", default=PHYSX_REF, help="git ref to check out when cloning (default: %(default)s)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4, help="parallel build jobs")
     ap.add_argument("--config", default="release", choices=["release", "checked", "profile", "debug"])
     args = ap.parse_args()
 
-    preset_base = "vc17win64-godot" if args.platform == "windows" else "linux64-godot"
+    preset_base = ("vc%swin64-godot" % args.vc) if args.platform == "windows" else "linux64-godot"
     preset = preset_base + "-gpu" if args.gpu else preset_base
     preset_file = os.path.join(PRESET_DIR, preset + ".xml")
     if not os.path.isfile(preset_file):
