@@ -47,9 +47,15 @@ if env["platform"] == "windows":
     # vc141 / vc142 / vc143 from MSVC_VERSION, see its GetCompilerAndPlatform.cmake
     # (14.3x and everything newer, 14.5x included, all report vc143). Match whichever
     # one the configured SDK actually shipped instead of assuming a single toolset.
-    _physx_bin_dirs = sorted(glob.glob(os.path.join(physx_sdk, "bin", "win.x86_64.vc*.mt")), reverse=True)
+    # glob.escape() on the SDK root: [ and ] in a perfectly legal install path
+    # are glob character classes, which would match nothing and drop silently
+    # through to the vc143 fallback. isdir() filters the same way, so a stray
+    # file named like a toolset tree cannot win.
+    _physx_bin_dirs = sorted(
+        d for d in glob.glob(os.path.join(glob.escape(physx_sdk), "bin", "win.x86_64.vc*.mt")) if os.path.isdir(d)
+    )
     physx_lib = os.path.join(
-        _physx_bin_dirs[0] if _physx_bin_dirs else os.path.join(physx_sdk, "bin", "win.x86_64.vc143.mt"),
+        _physx_bin_dirs[-1] if _physx_bin_dirs else os.path.join(physx_sdk, "bin", "win.x86_64.vc143.mt"),
         "release",
     )
     physx_libs = list(physx_static_libs)
@@ -67,6 +73,19 @@ if not os.path.isdir(physx_inc):
     raise SystemExit(
         "godot_physx: no PhysX SDK include/ directory at '%s'. Check physx_sdk= "
         "/ PHYSX_SDK points at an installed PhysX 5 SDK." % physx_inc
+    )
+
+# Check the library directory too, not just include/. Unlike physx_inc, physx_lib
+# only reaches the linker as a LIBPATH entry, so a wrong or unbuilt directory
+# used to surface as LNK1181 after a full compile -- and on a GPU build it was
+# worse than that: the DLL copy below silently does nothing when the source is
+# missing, so the editor linked, ran, found no PhysXGpu_64.dll beside it and fell
+# back to CPU with only a runtime warning. Empty on platforms the module does not
+# link PhysX on, so only a path actually derived above has to exist.
+if physx_lib and not os.path.isdir(physx_lib):
+    raise SystemExit(
+        "godot_physx: no PhysX libraries at '%s'. Build the SDK (see misc/build_physx.py) "
+        "and point physx_sdk= / PHYSX_SDK at the install directory." % physx_lib
     )
 
 env_physx.Prepend(CPPPATH=[physx_inc])
