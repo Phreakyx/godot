@@ -1,0 +1,42 @@
+Build with Visual Studio 2026 (VS 18 / MSVC 14.5). The pinned ref only maps
+vc15/vc16/vc17 onto CMake's Visual Studio generators, so a vc18win64 preset
+has no generator and project generation fails. Adds the vc18 -> "Visual
+Studio 18 2026" mapping, includes vc18 in the CUDA toolset (-T cuda=) branch
+so the GPU projects generate too, and lets a vc18win64* preset pull VsWhere.
+
+diff --git a/physx/buildtools/cmake_generate_projects.py b/physx/buildtools/cmake_generate_projects.py
+index a7d98e2..f923a09 100644
+--- a/physx/buildtools/cmake_generate_projects.py
++++ b/physx/buildtools/cmake_generate_projects.py
+@@ -215,7 +215,7 @@ class CMakePreset:
+                 if os.path.isfile(nvcc_path):
+                     outString = outString + ' -DCMAKE_CUDA_COMPILER=' + nvcc_path
+ 
+-                if self.compiler in ['vc15', 'vc16', 'vc17'] and self.generator != 'ninja':
++                if self.compiler in ['vc15', 'vc16', 'vc17', 'vc18'] and self.generator != 'ninja':
+                     outString = outString + ' -T cuda=' + cuda_path
+                 # TODO: Need to do the same for gcc (aarch64) when we package it with Packman
+                 elif self.compiler == 'clang':
+@@ -238,7 +238,8 @@ class CMakePreset:
+         vs_versions = {
+             'vc15': '\"Visual Studio 15 2017\"',
+             'vc16': '\"Visual Studio 16 2019\"',
+-            'vc17': '\"Visual Studio 17 2022\"'
++            'vc17': '\"Visual Studio 17 2022\"',
++            'vc18': '\"Visual Studio 18 2026\"'
+         }
+ 
+         # Visual studio
+diff --git a/physx/dependencies.xml b/physx/dependencies.xml
+index 1042b52..8817baa 100644
+--- a/physx/dependencies.xml
++++ b/physx/dependencies.xml
+@@ -4,7 +4,7 @@
+ 	</dependency>
+ 
+ 	<dependency name="vswhere">
+-		<package name="VsWhere" version="2.7.3111.17308_1.0"  platforms="vc15win64* vc16win64* vc17win64* linux-crosscompile linux-aarch64-crosscompile "/>
++		<package name="VsWhere" version="2.7.3111.17308_1.0"  platforms="vc15win64* vc16win64* vc17win64* vc18win64* linux-crosscompile linux-aarch64-crosscompile "/>
+ 	</dependency>
+ 
+ 	<dependency name="freeglut">
