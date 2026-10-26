@@ -67,15 +67,27 @@ def run(cmd, cwd):
 
 
 def _nvcc_major():
-    nvcc = shutil.which("nvcc") or os.path.join(os.environ.get("CUDA_PATH", ""), "bin", "nvcc")
+    """Read the CUDA release from nvcc. Returns (release, major, nvcc_path).
+
+    CUDA_PATH is probed before PATH, because that is the knob the refusals
+    below tell the user to turn, and because it is also the hint CMake's
+    find_program follows once PM_CUDA_PATH is unset -- which is how PhysX
+    resolves nvcc for the actual build. Probing PATH first meant a host with
+    a CUDA 13 bin/ on PATH could not be talked out of the refusal by setting
+    CUDA_PATH at all. shutil.which does the looking so PATHEXT applies: the
+    file is nvcc.exe on Windows, which a bare isfile() on "nvcc" would miss.
+    The resolved path is returned so the messages can name what they read.
+    """
+    cuda_bin = os.path.join(os.environ["CUDA_PATH"], "bin") if os.environ.get("CUDA_PATH") else None
+    nvcc = (shutil.which("nvcc", path=cuda_bin) if cuda_bin else None) or shutil.which("nvcc") or ""
     out = ""
     try:
-        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout
+        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout if nvcc else ""
     except OSError:
         pass
     # "Cuda compilation tools, release 12.8, V12.8.93"
     release = out.split("release ", 1)[1].split(",", 1)[0].strip() if "release " in out else ""
-    return release, release.split(".")[0]
+    return release, release.split(".")[0], nvcc
 
 
 def apply_patch(patch, src):
@@ -168,18 +180,20 @@ def main():
                 "CUDA 13's nvcc cannot compile sm_50, sm_60, sm_61 or sm_70 at all. Build the "
                 "legacy GPU SDK with --vc 15 and CUDA 12.x."
             )
-        release, major = _nvcc_major()
+        release, major, nvcc = _nvcc_major()
         if major.isdigit() and int(major) >= 13:
             sys.exit(
-                "--legacy-gpu needs CUDA 12.x and this is CUDA %s: its nvcc fatals with "
-                "\"Unsupported gpu architecture\" on each of sm_50, sm_60, sm_61 and sm_70, the "
+                "--legacy-gpu needs CUDA 12.x and this is CUDA %s (read from %s): its nvcc fatals "
+                "with \"Unsupported gpu architecture\" on each of sm_50, sm_60, sm_61 and sm_70, the "
                 "lowest architecture it can compile offline being sm_75. Build with --vc 15 and a "
-                "CUDA 12.x toolkit (CUDA_PATH), or drop --legacy-gpu." % release
+                "CUDA 12.x toolkit (point CUDA_PATH at it; it is read before PATH), or drop "
+                "--legacy-gpu." % (release, nvcc)
             )
         if not major.isdigit():
             print(
-                "warning: could not read a CUDA version from nvcc. --legacy-gpu needs CUDA 12.x; "
+                "warning: could not read a CUDA version from %s. --legacy-gpu needs CUDA 12.x; "
                 "CUDA 13 and newer cannot compile sm_50/60/61/70 at all."
+                % (nvcc or "nvcc (found neither under CUDA_PATH nor on PATH)")
             )
     # vc18 + GPU is accepted by the preset check because vc18win64-godot-gpu.xml
     # exists, and the CUDA guard above only tests that a toolkit is present, not
@@ -189,18 +203,21 @@ def main():
     # -allow-unsupported-compiler does not help. Only block on a version we
     # actually read, so a working CUDA 13+ host is not locked out.
     if args.gpu and args.vc == "18" and args.platform == "windows":
-        release, major = _nvcc_major()
+        release, major, nvcc = _nvcc_major()
         if major.isdigit() and int(major) < 13:
             sys.exit(
-                "--vc 18 --gpu needs CUDA 13 or newer: CUDA %s rejects MSVC 14.5x (_MSC_VER 1951 is "
-                "outside its accepted range) and cudafe++ crashes part way through the build. Build "
-                "the GPU SDK with --vc 15, or see BUILD-NOTES-WINDOWS-VS2026.md." % release
+                "--vc 18 --gpu needs CUDA 13 or newer: CUDA %s (read from %s) rejects MSVC 14.5x "
+                "(_MSC_VER 1951 is outside its accepted range) and cudafe++ crashes part way "
+                "through the build. Point CUDA_PATH at a 13.x toolkit (it is read before PATH), "
+                "build the GPU SDK with --vc 15, or see BUILD-NOTES-WINDOWS-VS2026.md."
+                % (release, nvcc)
             )
         if not major.isdigit():
             print(
-                "warning: could not read a CUDA version from nvcc. --vc 18 --gpu needs CUDA 13 or "
+                "warning: could not read a CUDA version from %s. --vc 18 --gpu needs CUDA 13 or "
                 "newer; under CUDA 12.x cudafe++ crashes part way through the build. See "
                 "BUILD-NOTES-WINDOWS-VS2026.md."
+                % (nvcc or "nvcc (found neither under CUDA_PATH nor on PATH)")
             )
     # --vc 15 selects a preset with generator="ninja", and PhysX only passes
     # -DCMAKE_MAKE_PROGRAM on its Linux ninja branch, so ninja has to be on PATH
