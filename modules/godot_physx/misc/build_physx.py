@@ -52,6 +52,17 @@ def run(cmd, cwd):
     subprocess.check_call(cmd, cwd=cwd)
 
 
+def apply_patch(patch, src):
+    name = os.path.basename(patch)
+    if subprocess.call(["git", "apply", "--reverse", "--check", patch], cwd=src, stderr=subprocess.DEVNULL) == 0:
+        print("patch already applied: " + name)
+        return
+    if subprocess.call(["git", "apply", "--check", patch], cwd=src, stderr=subprocess.DEVNULL) != 0:
+        sys.exit("bundled patch does not apply (wrong PhysX ref?): " + name)
+    run(["git", "apply", patch], cwd=src)
+    print("applied patch: " + name)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gpu", action="store_true", help="also build the CUDA GPU projects (needs the CUDA Toolkit)")
@@ -156,17 +167,7 @@ def main():
     # -p1 diff rooted at the checkout; skipped cleanly if already applied.
     if os.path.isdir(PATCH_DIR):
         for name in sorted(f for f in os.listdir(PATCH_DIR) if f.endswith(".patch")):
-            patch = os.path.join(PATCH_DIR, name)
-            if (
-                subprocess.call(["git", "apply", "--reverse", "--check", patch], cwd=src, stderr=subprocess.DEVNULL)
-                == 0
-            ):
-                print("patch already applied: " + name)
-                continue
-            if subprocess.call(["git", "apply", "--check", patch], cwd=src, stderr=subprocess.DEVNULL) != 0:
-                sys.exit("bundled patch does not apply (wrong PhysX ref?): " + name)
-            run(["git", "apply", patch], cwd=src)
-            print("applied patch: " + name)
+            apply_patch(os.path.join(PATCH_DIR, name), src)
 
     # Install the Godot-tuned preset.
     shutil.copy2(preset_file, os.path.join(physx, "buildtools", "presets", "public", preset + ".xml"))
