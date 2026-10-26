@@ -1145,6 +1145,35 @@ For deterministic lockstep multiplayer, use the Jolt backend.
     is painted over — use an opaque glowing mesh for a flame core;
   - NanoVDB (volume) emitters aren't supported;
   - Flow doesn't build on macOS.
+- **Legacy GPU architectures (`--legacy-gpu`).** A default GPU build targets
+  `sm_75` (Turing) and up and leaves PhysX's compute-capability floor at 7.0, so
+  Maxwell and Pascal cards get CPU simulation only. `--legacy-gpu` widens the
+  SASS list and lowers that floor together
+  (`misc/physx_patches/legacy/0012-legacy-gpu-archs.patch`), and what it does
+  not do matters more than what it does: **whether GPU simulation is actually
+  right on that silicon is unmeasured.** The flag makes the build emit code for
+  those cards; no Maxwell, Pascal or Volta hardware was available to check that
+  the resulting simulation agrees with a Turing-or-newer run. That measurement
+  is separate work on real hardware, and "do not enable this below Volta" is a
+  legitimate result of it.
+  A compute-7.0 (Volta) card is affected even with the flag off, in the build
+  everyone already gets: it passes the default 7.0 floor and is admitted, but
+  the default binary carries no `sm_70` cubin, so the driver JIT-compiles every
+  kernel from the embedded `compute_52` PTX at load and GPU dynamics runs
+  several times slower than native — with nothing in the log distinguishing it
+  from a native run. That follows from the measured architecture list
+  (`sm_52 sm_75 sm_80 sm_86 sm_89 sm_90 sm_100 sm_120`, read back with
+  `cuobjdump --list-elf`) rather than from an observation on a Volta card; there
+  was none to observe. It is deliberately not fixed by default, because adding
+  `sm_70` to the default list would change the binary every existing user gets.
+  The flag is also permanently CUDA 12.x-only — CUDA 13's lowest offline target
+  is `compute_75` and its nvcc fatals on each of the four legacy architectures,
+  so this is not a restriction that lapses when the toolkit is bumped — and it
+  costs real build time and disk: measured on 32 cores, the SDK's ninja build
+  goes from 100.3 s to 172.5 s and `PhysXGpu_64.dll` from 331 MB to 478 MB, and
+  that DLL ships next to the Godot binary. If you want it anyway: build with
+  `--vc 15` on a CUDA 12.8 toolkit, and read back what you actually got with
+  `cuobjdump --list-elf`.
 - Windows and Linux x86-64 are the only platforms built and tested.
 
 ## Layout
