@@ -122,10 +122,16 @@ CUDA 13's own lowest offline target is `compute_75`, and its nvcc exits with
 `sm_61` and `sm_70` — measured on CUDA 13.4, where the same one-file compile
 succeeds at `sm_75`. That is a property of the toolkit rather than a guard that
 lapses when it is bumped. The flag is also refused without `--gpu` (a CPU build
-has no architecture list to widen) and with `--vc 18`, because the vc18 presets
-themselves need CUDA 13 or newer — so `--vc 15` on a CUDA 12.x toolkit is the
-only combination that builds it. Each refusal is a one-line exit naming the
-conflict, before the script clones or configures anything.
+has no architecture list to widen) and, on `--platform windows`, with
+`--vc 18`, because the vc18 presets themselves need CUDA 13 or newer. Each
+refusal is a one-line exit naming the conflict, before the script clones or
+configures anything.
+
+No other flag combination is refused. `--vc 15` on a CUDA 12.x toolkit is
+the only one *verified* here, not the only one accepted: the default
+`--vc 17` is accepted and unverified, as the table above says, so omitting
+`--vc` builds the flag on an untested toolchain rather than being turned
+away. `--vc` does not apply to `--platform linuxbsd` at all.
 
 It costs compile time and disk, which is why it is off by default. Measured on
 a 32-core machine: the ninja build of the whole SDK goes from 100.3 s to
