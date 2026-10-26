@@ -234,18 +234,21 @@ def main():
     # Apply bundled patches (fixes not yet in the pinned PhysX ref). Each is a
     # -p1 diff rooted at the checkout; skipped cleanly if already applied.
     #
-    # The opt-in legacy patch comes off FIRST. It rewrites the same two lines
-    # 0002 owns, so while it is applied 0002 neither reverse-checks nor
-    # forward-checks and the loop below exits with "bundled patch does not
-    # apply (wrong PhysX ref?)" -- measured, not theorised. Its reversal is
-    # conditioned on nothing but the absence of the flag, and deliberately not
-    # on whether this is a GPU build: the checkout is reused across runs, so an
-    # earlier --gpu --legacy-gpu run leaves it patched and the next run may
-    # well be a CPU-only one. Skipping the reversal there would leave the patch
-    # applied, and the GPU build after that would ship sm_50/60/61/70 to
-    # someone who never asked for them.
-    if not args.legacy_gpu:
-        reverse_patch(LEGACY_PATCH, src)
+    # The opt-in legacy patch comes off FIRST, and unconditionally. It rewrites
+    # the same two lines 0002 owns, so while it is applied 0002 neither
+    # reverse-checks nor forward-checks and the loop below exits with "bundled
+    # patch does not apply (wrong PhysX ref?)" -- measured, not theorised. The
+    # reversal is conditioned on nothing at all: not on whether this is a GPU
+    # build, and not on the flag either. The checkout is reused across runs, so
+    # an earlier --gpu --legacy-gpu run leaves it patched, and every later run
+    # starts in that state -- a CPU-only one, a different --config, a retry
+    # after an interrupted build, or the same legacy build again. Skipping the
+    # reversal when the flag is absent would leave the patch applied and ship
+    # sm_50/60/61/70 to someone who never asked for them; skipping it when the
+    # flag is present would abort the loop on 0002 with a message blaming
+    # PHYSX_REF, on every repeat legacy run. Reversing always is idempotent:
+    # reverse_patch returns silently when the patch is not applied.
+    reverse_patch(LEGACY_PATCH, src)
 
     if os.path.isdir(PATCH_DIR):
         for name in sorted(f for f in os.listdir(PATCH_DIR) if f.endswith(".patch")):
