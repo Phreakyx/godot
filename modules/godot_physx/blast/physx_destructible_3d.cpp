@@ -502,7 +502,7 @@ void PhysXDestructible3D::_notification(int p_what) {
 				// owning this piece's transform later (see spawn_scale's note).
 				spawn_scale = get_global_transform().basis.get_scale();
 				if (pieces[0].body.is_valid()) {
-					PhysicsServer3D::get_singleton()->body_set_state(pieces[0].body, PhysicsServer3D::BODY_STATE_TRANSFORM, get_global_transform());
+					PhysicsServer3D::get_singleton()->body_set_state(pieces[0].body, PS3DE::BODY_STATE_TRANSFORM, get_global_transform());
 				}
 				RenderingServer::get_singleton()->instance_set_transform(pieces[0].instance, get_global_transform());
 			}
@@ -872,21 +872,21 @@ void PhysXDestructible3D::_spawn_intact() {
 	// could ever own this piece's transform, so it's the last clean read of
 	// the node's real intended scale.
 	spawn_scale = get_global_transform().basis.get_scale();
-	_spawn_piece({ 0 }, get_global_transform(), Vector3(), physics, PhysicsServer3D::BODY_MODE_RIGID, live_actors.is_empty() ? nullptr : live_actors[0]);
+	_spawn_piece({ 0 }, get_global_transform(), Vector3(), physics, PS3DE::BODY_MODE_RIGID, live_actors.is_empty() ? nullptr : live_actors[0]);
 	if (physics) {
 		PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
 		if (dynamic) {
 			// A real falling/colliding body, not a fixed prop -- and contact
 			// reporting so _check_impact_fracture() can see what it hit.
-			ps->body_set_mode(pieces[0].body, PhysicsServer3D::BODY_MODE_RIGID);
+			ps->body_set_mode(pieces[0].body, PS3DE::BODY_MODE_RIGID);
 			ps->body_set_max_contacts_reported(pieces[0].body, 8);
 		} else {
-			ps->body_set_mode(pieces[0].body, PhysicsServer3D::BODY_MODE_STATIC);
+			ps->body_set_mode(pieces[0].body, PS3DE::BODY_MODE_STATIC);
 		}
 	}
 }
 
-int PhysXDestructible3D::_spawn_piece(const LocalVector<uint32_t> &p_chunk_indices, const Transform3D &p_transform, const Vector3 &p_linear_velocity, bool p_physics, PhysicsServer3D::BodyMode p_body_mode, NvBlastActor *p_actor) {
+int PhysXDestructible3D::_spawn_piece(const LocalVector<uint32_t> &p_chunk_indices, const Transform3D &p_transform, const Vector3 &p_linear_velocity, bool p_physics, PS3DE::BodyMode p_body_mode, NvBlastActor *p_actor) {
 	// One piece per actor, covering every chunk index in p_chunk_indices on
 	// a single body -- a leaf actor's piece is just the one-chunk case.
 	// Returns the pushed piece's index in `pieces` (freeing superseded
@@ -935,7 +935,7 @@ int PhysXDestructible3D::_spawn_piece(const LocalVector<uint32_t> &p_chunk_indic
 		// the first break could fracture from a collision (the other half
 		// of the "the rest got a lot stronger" report). Static bodies
 		// don't generate contact reports, so this is inert for them.
-		if (p_body_mode == PhysicsServer3D::BODY_MODE_RIGID) {
+		if (p_body_mode == PS3DE::BODY_MODE_RIGID) {
 			ps->body_set_max_contacts_reported(body, 8);
 		}
 		for (uint32_t ci : p_chunk_indices) {
@@ -949,9 +949,9 @@ int PhysXDestructible3D::_spawn_piece(const LocalVector<uint32_t> &p_chunk_indic
 		for (uint32_t ci : p_chunk_indices) {
 			piece_mass += _chunk_mass(ci);
 		}
-		ps->body_set_param(body, PhysicsServer3D::BODY_PARAM_MASS, piece_mass);
-		ps->body_set_state(body, PhysicsServer3D::BODY_STATE_TRANSFORM, p_transform);
-		ps->body_set_state(body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY, p_linear_velocity);
+		ps->body_set_param(body, PS3DE::BODY_PARAM_MASS, piece_mass);
+		ps->body_set_state(body, PS3DE::BODY_STATE_TRANSFORM, p_transform);
+		ps->body_set_state(body, PS3DE::BODY_STATE_LINEAR_VELOCITY, p_linear_velocity);
 		if (is_inside_world() && get_world_3d().is_valid()) {
 			ps->body_set_space(body, get_world_3d()->get_space());
 		}
@@ -1092,7 +1092,7 @@ real_t PhysXDestructible3D::_ground_below(const Vector3 &p_from, real_t p_fallba
 	if (space == nullptr) {
 		return p_fallback;
 	}
-	PhysicsDirectSpaceState3D::RayParameters ray;
+	PS3DT::RayParameters ray;
 	ray.from = p_from;
 	ray.to = p_from - Vector3(0, 50, 0);
 	ray.collision_mask = collision_mask;
@@ -1101,7 +1101,7 @@ real_t PhysXDestructible3D::_ground_below(const Vector3 &p_from, real_t p_fallba
 			ray.exclude.insert(other.body);
 		}
 	}
-	PhysicsDirectSpaceState3D::RayResult hit;
+	PS3DT::RayResult hit;
 	return space->intersect_ray(ray, hit) ? hit.position.y : p_fallback;
 }
 
@@ -1154,7 +1154,7 @@ void PhysXDestructible3D::_sync_transforms() {
 		bool any_moving = false;
 		bool all_asleep = true;
 		for (const ChunkVisual &piece : pieces) {
-			if (piece.frozen || piece.shrinking || !piece.body.is_valid() || ps->body_get_mode(piece.body) != PhysicsServer3D::BODY_MODE_RIGID) {
+			if (piece.frozen || piece.shrinking || !piece.body.is_valid() || ps->body_get_mode(piece.body) != PS3DE::BODY_MODE_RIGID) {
 				continue;
 			}
 			any_moving = true;
@@ -1166,10 +1166,10 @@ void PhysXDestructible3D::_sync_transforms() {
 		}
 		if (any_moving && all_asleep) {
 			for (ChunkVisual &piece : pieces) {
-				if (!piece.frozen && !piece.shrinking && piece.body.is_valid() && ps->body_get_mode(piece.body) == PhysicsServer3D::BODY_MODE_RIGID) {
+				if (!piece.frozen && !piece.shrinking && piece.body.is_valid() && ps->body_get_mode(piece.body) == PS3DE::BODY_MODE_RIGID) {
 					// Kinematic, not static: PhysX flips that in place on the
 					// same actor; static rebuilds it.
-					ps->body_set_mode(piece.body, PhysicsServer3D::BODY_MODE_KINEMATIC);
+					ps->body_set_mode(piece.body, PS3DE::BODY_MODE_KINEMATIC);
 					piece.frozen = true;
 				}
 			}
@@ -1195,7 +1195,7 @@ void PhysXDestructible3D::_sync_transforms() {
 			_retire_piece((uint32_t)i);
 			continue;
 		}
-		const bool moving = !piece.frozen && ps->body_get_mode(piece.body) == PhysicsServer3D::BODY_MODE_RIGID;
+		const bool moving = !piece.frozen && ps->body_get_mode(piece.body) == PS3DE::BODY_MODE_RIGID;
 		// Only debris ages -- a chipped wall's static remainder stays put
 		// (a frozen or shrinking piece did move, so it still ages).
 		real_t shrink = 1.0;
@@ -1220,7 +1220,7 @@ void PhysXDestructible3D::_sync_transforms() {
 				// otherwise still block players at full size while it looks
 				// smaller), and pin the point it shrinks toward -- the bottom of
 				// its geometry under its middle, where it touches the ground.
-				ps->body_set_mode(piece.body, PhysicsServer3D::BODY_MODE_KINEMATIC); // in place, see the freeze above
+				ps->body_set_mode(piece.body, PS3DE::BODY_MODE_KINEMATIC); // in place, see the freeze above
 				ps->body_set_collision_layer(piece.body, 0);
 				ps->body_set_collision_mask(piece.body, 0);
 				real_t bottom = Math::INF;
@@ -1338,7 +1338,7 @@ void PhysXDestructible3D::_check_impact_fracture() {
 // the dedup inside _spawn_piece() frees superseded pieces during the
 // split, so scanning `pieces` here would miss the predecessor entirely
 // once a sibling consumed it.
-int PhysXDestructible3D::_spawn_island_piece(NvBlastActor *p_actor, PhysicsServer3D *p_ps, const Transform3D &p_base_transform, const Vector3 &p_base_linear, const Vector3 &p_base_angular, const Vector3 &p_damage_world_origin, real_t p_max_radius, PhysicsServer3D::BodyMode p_body_mode) {
+int PhysXDestructible3D::_spawn_island_piece(NvBlastActor *p_actor, PhysicsServer3D *p_ps, const Transform3D &p_base_transform, const Vector3 &p_base_linear, const Vector3 &p_base_angular, const Vector3 &p_damage_world_origin, real_t p_max_radius, PS3DE::BodyMode p_body_mode) {
 	const uint32_t visible_count = NvBlastActorGetVisibleChunkCount(p_actor, blast_log);
 	if (visible_count == 0) {
 		return 0;
@@ -1364,15 +1364,15 @@ int PhysXDestructible3D::_spawn_island_piece(NvBlastActor *p_actor, PhysicsServe
 	// predecessor's mode (a chipped STATIC wall's remainder stays put);
 	// giving its combined hull a per-chunk kick would tear the one rigid
 	// body apart from the inside.
-	PhysicsServer3D::BodyMode child_mode = p_body_mode;
-	if (child_mode == PhysicsServer3D::BODY_MODE_STATIC && !_island_anchored(visible)) {
+	PS3DE::BodyMode child_mode = p_body_mode;
+	if (child_mode == PS3DE::BODY_MODE_STATIC && !_island_anchored(visible)) {
 		// Cut loose from everything `anchor` says holds it: it falls (no
 		// kick -- it was never hit as a piece of debris, just let go).
-		child_mode = PhysicsServer3D::BODY_MODE_RIGID;
+		child_mode = PS3DE::BODY_MODE_RIGID;
 	}
 	Vector3 spawn_linear = piece_linear;
 	if (visible_count == 1) {
-		child_mode = PhysicsServer3D::BODY_MODE_RIGID;
+		child_mode = PS3DE::BODY_MODE_RIGID;
 		const Vector3 centroid_world = piece_transform.xform(_chunk_centroid_local(visible[0]));
 		const Vector3 offset = centroid_world - p_damage_world_origin;
 		const real_t dist = offset.length();
@@ -1386,7 +1386,7 @@ int PhysXDestructible3D::_spawn_island_piece(NvBlastActor *p_actor, PhysicsServe
 		return 0;
 	}
 	if (pieces[piece_idx].body.is_valid()) {
-		p_ps->body_set_state(pieces[piece_idx].body, PhysicsServer3D::BODY_STATE_ANGULAR_VELOCITY, piece_angular);
+		p_ps->body_set_state(pieces[piece_idx].body, PS3DE::BODY_STATE_ANGULAR_VELOCITY, piece_angular);
 		pieces[piece_idx].last_angular_velocity = piece_angular;
 	}
 	return 1;
@@ -1396,7 +1396,7 @@ Transform3D PhysXDestructible3D::get_piece_transform(int p_index) const {
 	if (p_index < 0 || p_index >= (int)pieces.size() || !pieces[p_index].body.is_valid()) {
 		return Transform3D();
 	}
-	return PhysicsServer3D::get_singleton()->body_get_state(pieces[p_index].body, PhysicsServer3D::BODY_STATE_TRANSFORM);
+	return PhysicsServer3D::get_singleton()->body_get_state(pieces[p_index].body, PS3DE::BODY_STATE_TRANSFORM);
 }
 
 uint32_t PhysXDestructible3D::get_piece_chunk(int p_index) const {
@@ -1437,7 +1437,7 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 	Vector3 base_linear;
 	Vector3 base_angular;
 	if (!fractured && !pieces.is_empty() && pieces[0].body.is_valid()) {
-		const Transform3D t = ps->body_get_state(pieces[0].body, PhysicsServer3D::BODY_STATE_TRANSFORM);
+		const Transform3D t = ps->body_get_state(pieces[0].body, PS3DE::BODY_STATE_TRANSFORM);
 		if (t != Transform3D()) {
 			base_transform = t;
 			base_linear = pieces[0].last_linear_velocity; // pre-impact, see ChunkVisual
@@ -1470,7 +1470,7 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 		}
 		Transform3D damage_from_asset = get_global_transform(); // a render-only editor piece
 		if (actor_piece >= 0 && pieces[actor_piece].body.is_valid()) {
-			const Transform3D t = ps->body_get_state(pieces[actor_piece].body, PhysicsServer3D::BODY_STATE_TRANSFORM);
+			const Transform3D t = ps->body_get_state(pieces[actor_piece].body, PS3DE::BODY_STATE_TRANSFORM);
 			if (t != Transform3D()) {
 				damage_from_asset = t;
 			}
@@ -1526,10 +1526,10 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 		Transform3D pred_transform = base_transform;
 		Vector3 pred_linear = base_linear;
 		Vector3 pred_angular = base_angular;
-		PhysicsServer3D::BodyMode pred_mode = dynamic ? PhysicsServer3D::BODY_MODE_RIGID : PhysicsServer3D::BODY_MODE_STATIC;
+		PS3DE::BodyMode pred_mode = dynamic ? PS3DE::BODY_MODE_RIGID : PS3DE::BODY_MODE_STATIC;
 		if (actor_piece >= 0 && pieces[actor_piece].body.is_valid()) {
 			const RID body = pieces[actor_piece].body;
-			const Transform3D t = ps->body_get_state(body, PhysicsServer3D::BODY_STATE_TRANSFORM);
+			const Transform3D t = ps->body_get_state(body, PS3DE::BODY_STATE_TRANSFORM);
 			if (t != Transform3D()) {
 				pred_transform = t;
 				// The velocity from before this tick's contacts (see ChunkVisual):
@@ -1538,10 +1538,10 @@ int PhysXDestructible3D::apply_radial_damage(const Vector3 &p_world_position, fl
 				pred_linear = pieces[actor_piece].last_linear_velocity;
 				pred_angular = pieces[actor_piece].last_angular_velocity;
 				pred_mode = ps->body_get_mode(body);
-				if (pred_mode == PhysicsServer3D::BODY_MODE_KINEMATIC) {
+				if (pred_mode == PS3DE::BODY_MODE_KINEMATIC) {
 					// Frozen (freeze_when_asleep) debris that breaks again: its
 					// children are loose debris, not frozen in mid-air.
-					pred_mode = PhysicsServer3D::BODY_MODE_RIGID;
+					pred_mode = PS3DE::BODY_MODE_RIGID;
 				}
 			}
 		}

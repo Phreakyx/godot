@@ -1061,7 +1061,7 @@ void WaterSolverGPU::rt_render_caustics(Ref<WaterSolverGPU> p_self, Vector3 p_su
 	Vector<Color> clear_colors;
 	clear_colors.push_back(Color(0, 0, 0, 1));
 	RD::DrawListID draw_list = rd->draw_list_begin(caustics_framebuffer, RD::DRAW_CLEAR_COLOR_0, clear_colors);
-	rd->draw_list_set_viewport(draw_list, Rect2(0, 0, CAUSTICS_MAP_SIZE, CAUSTICS_MAP_SIZE));
+	rd->draw_list_set_viewport(draw_list, Rect2i(0, 0, CAUSTICS_MAP_SIZE, CAUSTICS_MAP_SIZE));
 	rd->draw_list_bind_render_pipeline(draw_list, pipeline_caustics);
 	rd->draw_list_bind_uniform_set(draw_list, uset_caustics, 0);
 	rd->draw_list_bind_vertex_array(draw_list, caustics_vertex_array);

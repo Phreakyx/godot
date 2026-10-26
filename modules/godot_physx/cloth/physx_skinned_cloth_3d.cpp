@@ -1300,8 +1300,8 @@ Vector3 PhysXSkinnedCloth3D::get_effective_gravity() const {
 		if (w.is_valid()) {
 			const RID space = w->get_space();
 			PhysicsServer3D *ps = PhysicsServer3D::get_singleton();
-			const float mag = ps->area_get_param(space, PhysicsServer3D::AREA_PARAM_GRAVITY);
-			const Vector3 dir = ps->area_get_param(space, PhysicsServer3D::AREA_PARAM_GRAVITY_VECTOR);
+			const float mag = ps->area_get_param(space, PS3DE::AREA_PARAM_GRAVITY);
+			const Vector3 dir = ps->area_get_param(space, PS3DE::AREA_PARAM_GRAVITY_VECTOR);
 			g = dir * mag;
 		}
 	}

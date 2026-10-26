@@ -41,7 +41,7 @@ class PxJoint;
 class GodotPhysXBody3D;
 
 class GodotPhysXJoint3D {
-	using JointType = PhysicsServer3D::JointType;
+	using JointType = PS3DE::JointType;
 
 	RID self;
 	JointType type = JointType::JOINT_TYPE_MAX;
@@ -111,21 +111,21 @@ public:
 	Vector3 get_pin_local_a() const { return frame_a.origin; }
 	Vector3 get_pin_local_b() const { return frame_b.origin; }
 
-	void set_hinge_param(PhysicsServer3D::HingeJointParam p_param, real_t p_value);
-	real_t get_hinge_param(PhysicsServer3D::HingeJointParam p_param) const;
-	void set_hinge_flag(PhysicsServer3D::HingeJointFlag p_flag, bool p_enabled);
-	bool get_hinge_flag(PhysicsServer3D::HingeJointFlag p_flag) const;
+	void set_hinge_param(PS3DE::HingeJointParam p_param, real_t p_value);
+	real_t get_hinge_param(PS3DE::HingeJointParam p_param) const;
+	void set_hinge_flag(PS3DE::HingeJointFlag p_flag, bool p_enabled);
+	bool get_hinge_flag(PS3DE::HingeJointFlag p_flag) const;
 
-	void set_slider_param(PhysicsServer3D::SliderJointParam p_param, real_t p_value);
-	real_t get_slider_param(PhysicsServer3D::SliderJointParam p_param) const;
+	void set_slider_param(PS3DE::SliderJointParam p_param, real_t p_value);
+	real_t get_slider_param(PS3DE::SliderJointParam p_param) const;
 
-	void set_cone_twist_param(PhysicsServer3D::ConeTwistJointParam p_param, real_t p_value);
-	real_t get_cone_twist_param(PhysicsServer3D::ConeTwistJointParam p_param) const;
+	void set_cone_twist_param(PS3DE::ConeTwistJointParam p_param, real_t p_value);
+	real_t get_cone_twist_param(PS3DE::ConeTwistJointParam p_param) const;
 
-	void set_6dof_param(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisParam p_param, real_t p_value);
-	real_t get_6dof_param(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisParam p_param) const;
-	void set_6dof_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag, bool p_enable);
-	bool get_6dof_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag) const;
+	void set_6dof_param(Vector3::Axis p_axis, PS3DE::G6DOFJointAxisParam p_param, real_t p_value);
+	real_t get_6dof_param(Vector3::Axis p_axis, PS3DE::G6DOFJointAxisParam p_param) const;
+	void set_6dof_flag(Vector3::Axis p_axis, PS3DE::G6DOFJointAxisFlag p_flag, bool p_enable);
+	bool get_6dof_flag(Vector3::Axis p_axis, PS3DE::G6DOFJointAxisFlag p_flag) const;
 
 	~GodotPhysXJoint3D();
 };

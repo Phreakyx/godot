@@ -323,14 +323,14 @@ void PhysXFlow3D::_gather_colliders(const AABB &p_region, LocalVector<FlowBacken
 		query_shape = ps->box_shape_create();
 	}
 	ps->shape_set_data(query_shape, p_region.size * 0.5f);
-	PhysicsDirectSpaceState3D::ShapeParameters query;
+	PS3DT::ShapeParameters query;
 	query.shape_rid = query_shape;
 	query.transform = Transform3D(Basis(), p_region.get_center());
 	query.collision_mask = collision_mask;
 	query.collide_with_bodies = true;
 	query.collide_with_areas = false;
 	constexpr int MAX_RESULTS = 64;
-	PhysicsDirectSpaceState3D::ShapeResult results[MAX_RESULTS];
+	PS3DT::ShapeResult results[MAX_RESULTS];
 	const int count = space->intersect_shape(query, results, MAX_RESULTS);
 	for (int i = 0; i < count; i++) {
 		const RID body = results[i].rid;
@@ -339,18 +339,18 @@ void PhysXFlow3D::_gather_colliders(const AABB &p_region, LocalVector<FlowBacken
 		if (!shape.is_valid()) {
 			continue;
 		}
-		const Transform3D body_xform = ps->body_get_state(body, PhysicsServer3D::BODY_STATE_TRANSFORM);
+		const Transform3D body_xform = ps->body_get_state(body, PS3DE::BODY_STATE_TRANSFORM);
 		const Transform3D xform = body_xform * ps->body_get_shape_transform(body, index);
 		// The body's velocity where this shape is, spin included: a shape on a
 		// spinning or swinging body (a rotor, a door, a walker on a turntable)
 		// moves although the body's centre may not.
-		Vector3 velocity = ps->body_get_state(body, PhysicsServer3D::BODY_STATE_LINEAR_VELOCITY);
+		Vector3 velocity = ps->body_get_state(body, PS3DE::BODY_STATE_LINEAR_VELOCITY);
 		if (PhysicsDirectBodyState3D *state = ps->body_get_direct_state(body)) {
 			velocity = state->get_velocity_at_local_position(xform.origin - body_xform.origin);
 		}
 		const Variant shape_data = ps->shape_get_data(shape);
 		switch (ps->shape_get_type(shape)) {
-			case PhysicsServer3D::SHAPE_BOX: {
+			case PS3DE::SHAPE_BOX: {
 				FlowBackend::Emitter e = make_solid(xform, velocity);
 				e.shape = FlowBackend::Emitter::SHAPE_BOX;
 				const Vector3 half = shape_data;
@@ -359,13 +359,13 @@ void PhysXFlow3D::_gather_colliders(const AABB &p_region, LocalVector<FlowBacken
 				}
 				r_emitters.push_back(e);
 			} break;
-			case PhysicsServer3D::SHAPE_SPHERE: {
+			case PS3DE::SHAPE_SPHERE: {
 				FlowBackend::Emitter e = make_solid(xform, velocity);
 				e.shape = FlowBackend::Emitter::SHAPE_SPHERE;
 				e.radius = shape_data;
 				r_emitters.push_back(e);
 			} break;
-			case PhysicsServer3D::SHAPE_CAPSULE: {
+			case PS3DE::SHAPE_CAPSULE: {
 				// A row of spheres along the capsule's axis (local Y).
 				const Dictionary d = shape_data;
 				const float radius = d["radius"];
@@ -379,7 +379,7 @@ void PhysXFlow3D::_gather_colliders(const AABB &p_region, LocalVector<FlowBacken
 					r_emitters.push_back(e);
 				}
 			} break;
-			case PhysicsServer3D::SHAPE_CYLINDER: {
+			case PS3DE::SHAPE_CYLINDER: {
 				const Dictionary d = shape_data;
 				const float radius = d["radius"];
 				FlowBackend::Emitter e = make_solid(xform, velocity);

@@ -302,13 +302,13 @@ void PhysXParticleFluid3D::_mpm_step(double p_delta) {
 			}
 			PhysicsServer3D::get_singleton()->shape_set_data(_mpm_query_shape, mpm_domain_size * 0.5f);
 
-			PhysicsDirectSpaceState3D::ShapeParameters qp;
+			PS3DT::ShapeParameters qp;
 			qp.shape_rid = _mpm_query_shape;
 			qp.transform = get_global_transform();
 			qp.collide_with_bodies = true;
 			qp.collide_with_areas = false;
 
-			PhysicsDirectSpaceState3D::ShapeResult res[COLLIDER_BUDGET];
+			PS3DT::ShapeResult res[COLLIDER_BUDGET];
 			const int hits = ss->intersect_shape(qp, res, COLLIDER_BUDGET);
 
 			struct AutoCand {
@@ -1753,7 +1753,7 @@ void PhysXParticleFluid3D::_screen_space_publish(const float *p_transforms, int 
 	}
 	// 10 cm of fluid lets screen_space_tint through.
 	for (int c = 0; c < 3; c++) {
-		s.absorption.components[c] = -Math::log(CLAMP(screen_space_tint.components[c], 0.01f, 1.0f)) / 0.1f;
+		s.absorption[c] = -Math::log(CLAMP(screen_space_tint[c], 0.01f, 1.0f)) / 0.1f;
 	}
 	s.refraction = screen_space_refraction;
 	// A StandardMaterial3D (or ORMMaterial3D) override is translated; anything

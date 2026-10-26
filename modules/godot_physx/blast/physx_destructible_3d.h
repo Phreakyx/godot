@@ -35,6 +35,7 @@
 #include "core/templates/local_vector.h"
 #include "scene/3d/node_3d.h"
 #include "scene/resources/material.h"
+#include "servers/physics_3d/physics_server_3d.h"
 
 struct NvBlastAsset;
 struct NvBlastFamily;
@@ -226,7 +227,7 @@ public:
 	void set_auto_mass(bool p_auto);
 	bool get_auto_mass() const { return auto_mass; }
 
-	// If true, the intact piece is a real dynamic (BODY_MODE_RIGID) body --
+	// If true, the intact piece is a real dynamic (PS3DE::BODY_MODE_RIGID) body --
 	// it falls under gravity and collides normally, like any other physics
 	// object, instead of hanging in place until something explicitly calls
 	// apply_radial_damage() on it. Also enables impact_strength/
@@ -529,7 +530,7 @@ private:
 	// Spawns ONE piece for ONE new (island) actor from a split -- see the
 	// definition for why the old one-body-per-chunk spawning had to go.
 	// Returns 1 if a piece was spawned, 0 otherwise.
-	int _spawn_island_piece(NvBlastActor *p_actor, PhysicsServer3D *p_ps, const Transform3D &p_base_transform, const Vector3 &p_base_linear, const Vector3 &p_base_angular, const Vector3 &p_damage_world_origin, real_t p_max_radius, PhysicsServer3D::BodyMode p_body_mode);
+	int _spawn_island_piece(NvBlastActor *p_actor, PhysicsServer3D *p_ps, const Transform3D &p_base_transform, const Vector3 &p_base_linear, const Vector3 &p_base_angular, const Vector3 &p_damage_world_origin, real_t p_max_radius, PS3DE::BodyMode p_body_mode);
 	// p_physics: create a PhysicsServer3D body+shape for this piece too, not
 	// just its RenderingServer mesh instance. False in the editor (no physics
 	// simulation runs there anyway) so the node still shows *something* in
@@ -541,7 +542,7 @@ private:
 	// Returns the pushed piece's index into `pieces` (the U24 dedup inside
 	// may have swapped entries around, so callers can't assume a fixed
 	// position), or -1 if the chunk was rejected.
-	int _spawn_piece(const LocalVector<uint32_t> &p_chunk_indices, const Transform3D &p_transform, const Vector3 &p_linear_velocity, bool p_physics = true, PhysicsServer3D::BodyMode p_body_mode = PhysicsServer3D::BODY_MODE_RIGID, NvBlastActor *p_actor = nullptr);
+	int _spawn_piece(const LocalVector<uint32_t> &p_chunk_indices, const Transform3D &p_transform, const Vector3 &p_linear_velocity, bool p_physics = true, PS3DE::BodyMode p_body_mode = PS3DE::BODY_MODE_RIGID, NvBlastActor *p_actor = nullptr);
 	// See set_gi_mode()'s own note on why this is needed at all.
 	void _apply_gi_mode(RenderingServer *p_rs, RID p_instance) const;
 	// Same idea as _apply_gi_mode(), covering the rest of the

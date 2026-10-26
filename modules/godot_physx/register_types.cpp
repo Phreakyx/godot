@@ -76,6 +76,7 @@
 #include "core/config/project_settings.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "servers/physics_3d/physics_server_3d_manager.h"
 #include "servers/physics_3d/physics_server_3d_wrap_mt.h"
 
 #ifdef TOOLS_ENABLED
