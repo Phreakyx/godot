@@ -31,7 +31,13 @@ So a GPU build on a VS-2026-only machine has exactly two options:
 Note that **option 1 costs no GPU architectures.** The GPU preset sets
 `PX_GENERATE_GPU_REDUCED_ARCHITECTURES=True`, whose SASS list (after patch `0002`) is
 `75,80,86,89,90,100,120`. `sm_70` appears only in the non-reduced `ELSE` branch, which this
-preset never takes — so the common "CUDA 13 drops sm_70" concern does not apply either way.
+preset never takes — so in a **default** build the common "CUDA 13 drops sm_70" concern is moot
+in both directions.
+
+That holds for a default build only. `build_physx.py --legacy-gpu` adds `50,60,61,70` to that
+same reduced list (patch `legacy/0012`), and CUDA 13's nvcc fatals on all four with
+`Unsupported gpu architecture` — so option 2 and `--legacy-gpu` are mutually exclusive, and the
+script refuses the combination by name. A legacy GPU SDK is an option-1 build.
 
 MinGW is not an option for a GPU or Blast build: nvcc on Windows supports only MSVC as host
 compiler, and Blast exposes a C++ ABI built with MSVC. Flow alone would be fine, as it is a

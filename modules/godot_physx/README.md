@@ -44,10 +44,11 @@ Visual Studio with the C++ workload and Windows SDK, the D3D12 Agility SDK):
   `CUDA_PATH`; open a fresh terminal afterwards). The end-user machine only
   needs an NVIDIA driver (`nvcuda.dll` / `libcuda.so.1`), not the toolkit.
   CUDA 13 works too, but needs a newer driver (R580+); 12.8 is what the
-  module is tested against, so it stays the recommended route. The `sm_70`
-  difference does not affect these presets, which build a reduced SASS
-  list that carries no `sm_70` either way — see
-  BUILD-NOTES-WINDOWS-VS2026.md.
+  module is tested against, so it stays the recommended route. In a **default**
+  build the `sm_70` difference does not reach these presets, which build a
+  reduced SASS list carrying no `sm_70` either way — see
+  BUILD-NOTES-WINDOWS-VS2026.md. It does reach `--legacy-gpu`, which adds `70`
+  to that reduced list, and is one of the reasons that flag requires CUDA 12.x.
 
 On **Linux**, on top of a normal Godot Linux editor build: **CMake**, **git**
 and **clang** (the PhysX SDK is built with clang even when Godot itself is built
@@ -179,11 +180,37 @@ At startup a GPU build logs `PhysX: CUDA context ready on device '...'`; if no
 usable CUDA device is found it warns and falls back to CPU simulation.
 
 `build_physx.py` compiles native GPU code (SASS) for `sm_75` (Turing) through
-`sm_120` (Blackwell), plus a PTX fallback the driver JITs for anything newer.
-Older cards (Pascal `sm_61` and below) aren't targeted; widen the SASS list in
-`misc/physx_patches/0002-gpu-turing-sm75-arch.patch` if you need one. A card
-with no matching SASS still runs, but every kernel is JIT-compiled at load and
-GPU dynamics is several times slower.
+`sm_120` (Blackwell), and the built DLL also carries an `sm_52` cubin and
+`compute_52` PTX, which CMake contributes independently of that list. Three
+different things therefore happen, depending on the card:
+
+- **Below PhysX's compute-capability floor** — 7.0 in a default build — the card
+  gets no GPU simulation at all. `CudaContextManager`'s constructor compares the
+  device's capability against `MIN_SM_MAJOR_VERSION`, reports a debug warning and
+  returns, strictly before it loads any CUDA module: the device is rejected and
+  nothing is JIT-compiled. The module falls back to CPU simulation. A device at
+  *exactly* the floor is admitted, not rejected.
+- **At or above the floor with a matching cubin**, the card runs native SASS —
+  `sm_75` and up in a default build.
+- **At or above the floor with no matching cubin**, the driver JIT-compiles every
+  kernel from the embedded `compute_52` PTX at load, and GPU dynamics runs
+  several times slower than native. That PTX serves anything at compute 5.2 or
+  newer, not only cards above the top of the SASS list — which is why a
+  compute-7.0 (Volta) card, admitted by the default floor but with no `sm_70`
+  cubin in a default build, lands in this third case rather than the second.
+
+Worth knowing before diagnosing one of these: a card with no loadable binary for
+its architecture is not reported as an error anywhere. The SDK excludes
+`CUDA_ERROR_NO_BINARY_FOR_GPU` from its module-load error path
+(`source/cudamanager/src/CudaContextManager.cpp`), leaves the module handle null,
+and has already marked the context valid by that point — so a GPU build still
+logs `PhysX: CUDA context ready on device '...'` either way.
+
+To target Maxwell, Pascal or Volta natively, build the SDK with `--legacy-gpu`
+(see **Step 1** above for what it requires and what it costs). Widening the SASS
+list by hand in `misc/physx_patches/0002-gpu-turing-sm75-arch.patch` is not
+enough on its own: the architecture list and the capability floor have to move
+together, which is what that flag's patch does.
 
 To confirm a stock build is unaffected, build with
 `module_godot_physx_enabled=no` (or simply without an SDK configured).
