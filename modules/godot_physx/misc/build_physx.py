@@ -25,6 +25,16 @@ build.bat / build.sh. flow_sdk= is that flow/ directory itself. Nothing is
 linked -- nvflow / nvflowext are loaded at run time, and SCsub copies both
 next to the Godot binary.
 
+--legacy-gpu additionally targets Maxwell through Volta: it widens the GPU
+SASS list with sm_50/60/61/70 and lowers PhysX's compute-capability gate
+from 7.0 to 5.0 together, through one opt-in patch
+(misc/physx_patches/legacy/0012-legacy-gpu-archs.patch). Without it a GTX
+10-series card is refused outright; with it, it runs. Needs CUDA 12.x --
+CUDA 13's nvcc cannot compile any of those four architectures. It costs
+build time and disk, which is why it is off by default: measured on 32
+cores, the SDK build goes from 100 s to 173 s and PhysXGpu_64.dll from
+331 MB to 478 MB.
+
 The last thing printed is the scons command for everything built.
 
 Run this script on the machine you're building the module for -- --platform
@@ -45,6 +55,8 @@ PHYSX_REF = "ovphysx-0.5.11"  # PhysX SDK 5.10.0
 HERE = os.path.dirname(os.path.abspath(__file__))
 PRESET_DIR = os.path.join(HERE, "physx_presets")
 PATCH_DIR = os.path.join(HERE, "physx_patches")
+# Opt-in, so it lives in a subdirectory the PATCH_DIR loop's *.patch filter skips.
+LEGACY_PATCH = os.path.join(PATCH_DIR, "legacy", "0012-legacy-gpu-archs.patch")
 
 
 def run(cmd, cwd):
@@ -66,6 +78,11 @@ def apply_patch(patch, src):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gpu", action="store_true", help="also build the CUDA GPU projects (needs the CUDA Toolkit)")
+    ap.add_argument(
+        "--legacy-gpu",
+        action="store_true",
+        help="also target Maxwell through Volta (sm_50/60/61/70) and let those cards past PhysX's compute 7.0 gate",
+    )
     ap.add_argument(
         "--blast",
         action="store_true",
@@ -168,6 +185,12 @@ def main():
     if os.path.isdir(PATCH_DIR):
         for name in sorted(f for f in os.listdir(PATCH_DIR) if f.endswith(".patch")):
             apply_patch(os.path.join(PATCH_DIR, name), src)
+
+    # The legacy-GPU patch is opt-in, and it has to be applied after the loop
+    # above: its context lines are the text 0002 leaves behind, not pristine
+    # upstream.
+    if args.legacy_gpu:
+        apply_patch(LEGACY_PATCH, src)
 
     # Install the Godot-tuned preset.
     shutil.copy2(preset_file, os.path.join(physx, "buildtools", "presets", "public", preset + ".xml"))

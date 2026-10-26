@@ -1,0 +1,86 @@
+Build native CUDA code for Maxwell through Volta, and let those cards
+past the compute-capability gate. Opt-in: build_physx.py applies this
+only under --legacy-gpu, and reverse-applies it on any run without the
+flag, so the default build is unchanged.
+
+The reduced SASS list (after patch 0002) is 75,80,86,89,90,100,120, and
+CMake separately injects compute_52, so the shipped PhysXGpu_64.dll
+carries cubins and PTX for eight architectures: sm_52 and sm_75 through
+sm_120. CudaContextManager.cpp then refuses any device below compute
+7.0. Maxwell, Pascal and the GTX 10-series are rejected outright, which
+is the behaviour this patch exists to change.
+
+Both halves have to move together, and not for the reason it looks
+like. Lowering the floor alone does NOT leave a card with nothing to
+run -- the compute_52 PTX image is forward-compatible, so the driver
+JIT-compiles every PhysX kernel for a GTX 1080 at load and the card
+works, several times slower than native, with no diagnostic that
+distinguishes it from a native run. Worse, CudaContextManager.cpp:673
+excludes CUDA_ERROR_NO_BINARY_FOR_GPU from its error path and
+mIsValid is already true by then, so a missing cubin is reported as
+nothing at all and the context advertises itself as healthy. A
+half-applied change therefore ships a silently slow or silently
+broken GPU path rather than a clean failure. Keeping both edits in one
+-p1 diff makes "neither half alone" true by construction instead of by
+convention.
+
+Compute 5.0 is the one capability with genuinely nothing loadable: a
+sm_52 cubin cannot run on a 5.0 device (cubins are forward-compatible
+only within a major version) and compute_52 PTX cannot target it
+either. Lowering the floor to 5 admits exactly that device, so the
+sm_50 this patch adds is what keeps the lowered floor honest -- which
+is the second reason the two edits cannot be separated.
+
+Widen both the reduced and full SASS lists to
+50,60,61,70,75,80,86,89,90,100,120, exactly as 0002 widened both, and
+lower MIN_SM_MAJOR_VERSION from 7 to 5 (the minor stays 0). 70 is
+included because Volta is compute 7.0 and already passes the gate
+today, so it is JIT-compiling from compute_52 PTX in the default build
+-- the same latent bug 0002 fixed for Turing. 61 is named alongside 60
+because whether a sm_60 cubin covers a 6.1 device is unverified here.
+
+Costs CUDA compile time and disk. 8 architectures become 12, and CUDA
+is 86% of this build's compile work. Measured on 32 cores under CUDA
+12.8, a full SDK build goes from 100.3 s to 172.5 s of ninja wall time
+and from 36.7 to 72.0 CUDA cpu-minutes -- the architecture count rises
+by half but the work very nearly doubles, because the four legacy
+targets are no cheaper to compile than the modern ones. The DLL grows
+from 346,803,712 to 501,424,640 bytes (331 MB to 478 MB), carrying 732
+cubin sections instead of 488.
+
+Needs CUDA 12.x. CUDA 13's nvcc dropped all four of sm_50/60/61/70 --
+its floor is compute_75 and it fails with "nvcc fatal : Unsupported gpu
+architecture", so it rejects this patch's arch list rather than quietly
+omitting it. No runtime effect on compute 7.5 and newer, which keep
+exactly the cubins they have today.
+
+diff --git a/physx/source/compiler/cmakegpu/CMakeLists.txt b/physx/source/compiler/cmakegpu/CMakeLists.txt
+index da02fbe..e5b932f 100644
+--- a/physx/source/compiler/cmakegpu/CMakeLists.txt
++++ b/physx/source/compiler/cmakegpu/CMakeLists.txt
+@@ -94,10 +94,10 @@ SET(SOURCE_DISTRO_FILE_LIST "")
+ # since that's the default set in: compiler\internal\CMakeLists.txt (using CMAKE_CUDA_ARCHITECTURES)
+ # see policy CMP0104
+ IF(PX_GENERATE_GPU_REDUCED_ARCHITECTURES)
+-	GENERATE_ARCH_CODE_LIST(SASS "75,80,86,89,90,100,120" PTX "120")
++	GENERATE_ARCH_CODE_LIST(SASS "50,60,61,70,75,80,86,89,90,100,120" PTX "120")
+ ELSE()
+ 	# Volta is the minimum compute arch required because NGC supports V100
+-	GENERATE_ARCH_CODE_LIST(SASS "70,75,80,86,89,90,100,120" PTX "120")
++	GENERATE_ARCH_CODE_LIST(SASS "50,60,61,70,75,80,86,89,90,100,120" PTX "120")
+ ENDIF()
+ 
+ # Force response files off because clangd does not parse them
+diff --git a/physx/source/cudamanager/src/CudaContextManager.cpp b/physx/source/cudamanager/src/CudaContextManager.cpp
+index dbd620d..03d17a1 100644
+--- a/physx/source/cudamanager/src/CudaContextManager.cpp
++++ b/physx/source/cudamanager/src/CudaContextManager.cpp
+@@ -106,7 +106,7 @@ namespace physx
+ #define MIN_CUDA_VERSION			12000	// Use Cuda toolkit 12.0 and above
+ #define NV_DRIVER_MAJOR_VERSION		527
+ #define NV_DRIVER_MINOR_VERSION		41
+-#define MIN_SM_MAJOR_VERSION		7
++#define MIN_SM_MAJOR_VERSION		5
+ #define MIN_SM_MINOR_VERSION		0
+ 
+ #define USE_DEFAULT_CUDA_STREAM		0
