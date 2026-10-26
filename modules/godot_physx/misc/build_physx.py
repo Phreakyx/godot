@@ -66,6 +66,18 @@ def run(cmd, cwd):
     subprocess.check_call(cmd, cwd=cwd)
 
 
+def _nvcc_major():
+    nvcc = shutil.which("nvcc") or os.path.join(os.environ.get("CUDA_PATH", ""), "bin", "nvcc")
+    out = ""
+    try:
+        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        pass
+    # "Cuda compilation tools, release 12.8, V12.8.93"
+    release = out.split("release ", 1)[1].split(",", 1)[0].strip() if "release " in out else ""
+    return release, release.split(".")[0]
+
+
 def apply_patch(patch, src):
     name = os.path.basename(patch)
     if subprocess.call(["git", "apply", "--reverse", "--check", patch], cwd=src, stderr=subprocess.DEVNULL) == 0:
@@ -132,6 +144,43 @@ def main():
         sys.exit("missing preset: " + preset_file)
     if args.gpu and not (os.environ.get("CUDA_PATH") or shutil.which("nvcc")):
         sys.exit("--gpu needs the CUDA Toolkit (set CUDA_PATH or put nvcc on PATH)")
+    # --legacy-gpu is permanently CUDA 12.x-only, and this refusal is the mirror
+    # image of the vc18 one just below: that guard refuses CUDA *below* 13 for
+    # --vc 18 --gpu, this one refuses CUDA *13 or newer* for --legacy-gpu. They
+    # are not two rules in tension -- --vc 18 --gpu already needs CUDA >= 13,
+    # and no CUDA >= 13 can compile sm_50/60/61/70, so --vc 18 --gpu
+    # --legacy-gpu is impossible by composition. That is one conflict, which is
+    # why the preset case is a message branch here rather than a second
+    # version-reading guard, and why both comparisons go through the one
+    # _nvcc_major(). nvcc --list-gpu-arch is the more robust probe than the
+    # release string if these two are ever revisited together.
+    if args.legacy_gpu:
+        if not args.gpu:
+            sys.exit(
+                "--legacy-gpu only widens the GPU architecture list, so it does nothing without "
+                "--gpu: a CPU build has no architecture list to widen and gains no legacy GPU "
+                "support. Add --gpu, or drop --legacy-gpu."
+            )
+        if args.vc == "18" and args.platform == "windows":
+            sys.exit(
+                "--legacy-gpu cannot be combined with --vc 18: the vc18 presets need CUDA 13 or "
+                "newer (MSVC 14.5x reports _MSC_VER 1951, outside CUDA 12.x's accepted range), and "
+                "CUDA 13's nvcc cannot compile sm_50, sm_60, sm_61 or sm_70 at all. Build the "
+                "legacy GPU SDK with --vc 15 and CUDA 12.x."
+            )
+        release, major = _nvcc_major()
+        if major.isdigit() and int(major) >= 13:
+            sys.exit(
+                "--legacy-gpu needs CUDA 12.x and this is CUDA %s: its nvcc fatals with "
+                "\"Unsupported gpu architecture\" on each of sm_50, sm_60, sm_61 and sm_70, the "
+                "lowest architecture it can compile offline being sm_75. Build with --vc 15 and a "
+                "CUDA 12.x toolkit (CUDA_PATH), or drop --legacy-gpu." % release
+            )
+        if not major.isdigit():
+            print(
+                "warning: could not read a CUDA version from nvcc. --legacy-gpu needs CUDA 12.x; "
+                "CUDA 13 and newer cannot compile sm_50/60/61/70 at all."
+            )
     # vc18 + GPU is accepted by the preset check because vc18win64-godot-gpu.xml
     # exists, and the CUDA guard above only tests that a toolkit is present, not
     # which one. CUDA 12.x's crt/host_config.h accepts _MSC_VER in [1910, 1950)
@@ -140,15 +189,7 @@ def main():
     # -allow-unsupported-compiler does not help. Only block on a version we
     # actually read, so a working CUDA 13+ host is not locked out.
     if args.gpu and args.vc == "18" and args.platform == "windows":
-        nvcc = shutil.which("nvcc") or os.path.join(os.environ.get("CUDA_PATH", ""), "bin", "nvcc")
-        out = ""
-        try:
-            out = subprocess.run([nvcc, "--version"], capture_output=True, text=True).stdout
-        except OSError:
-            pass
-        # "Cuda compilation tools, release 12.8, V12.8.93"
-        release = out.split("release ", 1)[1].split(",", 1)[0].strip() if "release " in out else ""
-        major = release.split(".")[0]
+        release, major = _nvcc_major()
         if major.isdigit() and int(major) < 13:
             sys.exit(
                 "--vc 18 --gpu needs CUDA 13 or newer: CUDA %s rejects MSVC 14.5x (_MSC_VER 1951 is "
