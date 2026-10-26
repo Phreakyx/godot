@@ -33,7 +33,9 @@ from 7.0 to 5.0 together, through one opt-in patch
 CUDA 13's nvcc cannot compile any of those four architectures. It costs
 build time and disk, which is why it is off by default: measured on 32
 cores, the SDK build goes from 100 s to 173 s and PhysXGpu_64.dll from
-331 MB to 478 MB.
+331 MB to 478 MB. Any run without the flag reverse-applies the patch, so
+a checkout that built with it once goes back to the default architecture
+list on the next build -- including a CPU-only one.
 
 The last thing printed is the scons command for everything built.
 
@@ -73,6 +75,14 @@ def apply_patch(patch, src):
         sys.exit("bundled patch does not apply (wrong PhysX ref?): " + name)
     run(["git", "apply", patch], cwd=src)
     print("applied patch: " + name)
+
+
+def reverse_patch(patch, src):
+    name = os.path.basename(patch)
+    if subprocess.call(["git", "apply", "--reverse", "--check", patch], cwd=src, stderr=subprocess.DEVNULL) != 0:
+        return  # not applied, nothing to say
+    run(["git", "apply", "--reverse", patch], cwd=src)
+    print("reversed patch: " + name)
 
 
 def main():
@@ -182,13 +192,26 @@ def main():
 
     # Apply bundled patches (fixes not yet in the pinned PhysX ref). Each is a
     # -p1 diff rooted at the checkout; skipped cleanly if already applied.
+    #
+    # The opt-in legacy patch comes off FIRST. It rewrites the same two lines
+    # 0002 owns, so while it is applied 0002 neither reverse-checks nor
+    # forward-checks and the loop below exits with "bundled patch does not
+    # apply (wrong PhysX ref?)" -- measured, not theorised. Its reversal is
+    # conditioned on nothing but the absence of the flag, and deliberately not
+    # on whether this is a GPU build: the checkout is reused across runs, so an
+    # earlier --gpu --legacy-gpu run leaves it patched and the next run may
+    # well be a CPU-only one. Skipping the reversal there would leave the patch
+    # applied, and the GPU build after that would ship sm_50/60/61/70 to
+    # someone who never asked for them.
+    if not args.legacy_gpu:
+        reverse_patch(LEGACY_PATCH, src)
+
     if os.path.isdir(PATCH_DIR):
         for name in sorted(f for f in os.listdir(PATCH_DIR) if f.endswith(".patch")):
             apply_patch(os.path.join(PATCH_DIR, name), src)
 
-    # The legacy-GPU patch is opt-in, and it has to be applied after the loop
-    # above: its context lines are the text 0002 leaves behind, not pristine
-    # upstream.
+    # Applied after the loop, because its context lines are the text 0002
+    # leaves behind rather than pristine upstream.
     if args.legacy_gpu:
         apply_patch(LEGACY_PATCH, src)
 
