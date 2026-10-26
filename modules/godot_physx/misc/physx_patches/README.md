@@ -1,8 +1,11 @@
 # PhysX source patches
 
-`build_physx.py` applies every `*.patch` here (sorted by name) to the PhysX
-checkout after clone/locate and before project generation. Each is a `-p1` diff
-rooted at the repo (`a/physx/...`), and is skipped cleanly if already applied.
+`build_physx.py` applies every `*.patch` directly in this directory (sorted by
+name) to the PhysX checkout after clone/locate and before project generation.
+The `legacy/` subdirectory is the exception: the patches there are opt-in and
+are applied only when the matching `build_physx.py` flag is passed, and
+reverse-applied on any build without it. Each patch is a `-p1` diff rooted at
+the repo (`a/physx/...`), and is skipped cleanly if already applied.
 
 These are fixes the pinned `PHYSX_REF` (`ovphysx-0.5.11`) doesn't have, either
 upstream fixes that landed later or our own build fixes. Drop a patch once the
@@ -21,3 +24,4 @@ ref is bumped past it.
 | `0009-flow-vs2026-toolset.patch` | none (build config) | Flow's `build.bat` maps any VS major >= 17 onto premake's `vs2022` action, and premake 5.0.0-beta2 has no `vs2026` action, so the solution asks for PlatformToolset `v143`. VS 2026 ships only `v145` -> `MSB8020`. Retargets the toolset on the MSBuild command line for VS 18+; VS 2022 builds unchanged. |
 | `0010-ninja-skip-windows-resources.patch` | none (build config) | CMake's "Ninja Multi-Config" generator forwards `-DCMAKE_INTDIR=\"release\"` to `rc.exe`, which cannot parse the escaped quotes (`RC1107`). Marks the five Windows `.rc` files `HEADER_FILE_ONLY`; they are inert version resources in a static-library build. Only affects Ninja generators, which the `vc15win64-godot` presets use. |
 | `0011-msvc141-nan-macro.patch` | none (not reported upstream) | MSVC 14.16 (VS 2017) cannot parse the CRT's `NAN` macro in `ExtDelaunayBoundaryInserter.cpp` (`C2143`), though it compiles on 14.3x+ and in isolation on 14.16. Uses `std::numeric_limits`, which needs no macro expansion. Newer toolsets unaffected. |
+| `legacy/0012-legacy-gpu-archs.patch` | none (build config) | A Maxwell or Pascal card gets no GPU simulation at all, and a Volta one gets no native code: PhysX's `MIN_SM_MAJOR_VERSION` floor is compute 7.0, so anything below it is rejected outright, while compute 7.0 itself passes the floor and then finds no `sm_70` cubin in the reduced SASS list and JIT-compiles from the embedded `compute_52` PTX. Widens both reduced `GENERATE_ARCH_CODE_LIST` calls with `50,60,61,70` and lowers the floor to 5.0, in one coupled diff so the architecture list and the gate can never disagree. Only applied under `--legacy-gpu`, which needs CUDA 12.x (CUDA 13's nvcc fatals on all four); every build without the flag reverses it first, so the default architecture list is unchanged. |

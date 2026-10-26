@@ -70,6 +70,7 @@ and Blast builds.
 ```
 python modules/godot_physx/misc/build_physx.py            # CPU only
 python modules/godot_physx/misc/build_physx.py --gpu      # + GPU dynamics / fluid
+python modules/godot_physx/misc/build_physx.py --gpu --legacy-gpu --vc 15   # + Maxwell..Volta SASS, CUDA 12.x only
 ```
 
 `--platform` defaults to the host OS (`windows` on Windows, `linuxbsd`
@@ -86,11 +87,11 @@ toolset that is not listed, add the matching preset file under
 `build_physx.py`. It is ignored unless `--platform windows`, because the
 Linux branch always uses `linux64-godot`.
 
-| `--vc` | Preset | With `--gpu` | Toolset / generator | GPU build |
-| --- | --- | --- | --- | --- |
-| `15` | `vc15win64-godot` | `vc15win64-godot-gpu` | MSVC 14.16 (VS 2017), Ninja | Yes — MSVC 14.16 reports `_MSC_VER 1916`, inside CUDA 12.8's accepted range |
-| `17` (default) | `vc17win64-godot` | `vc17win64-godot-gpu` | MSVC 14.3x (VS 2022), MSBuild | Not verified here — VS 2022 is not installed on the machine this was written on |
-| `18` | `vc18win64-godot` | `vc18win64-godot-gpu` | MSVC 14.5x (VS 2026), MSBuild | No, CPU only under CUDA 12.8 |
+| `--vc` | Preset | With `--gpu` | Toolset / generator | GPU build | `--legacy-gpu` |
+| --- | --- | --- | --- | --- | --- |
+| `15` | `vc15win64-godot` | `vc15win64-godot-gpu` | MSVC 14.16 (VS 2017), Ninja | Yes — MSVC 14.16 reports `_MSC_VER 1916`, inside CUDA 12.8's accepted range | Yes — the only toolchain it builds with |
+| `17` (default) | `vc17win64-godot` | `vc17win64-godot-gpu` | MSVC 14.3x (VS 2022), MSBuild | Not verified here — VS 2022 is not installed on the machine this was written on | Not verified here |
+| `18` | `vc18win64-godot` | `vc18win64-godot-gpu` | MSVC 14.5x (VS 2026), MSBuild | No, CPU only under CUDA 12.8 | No — refused, the vc18 presets need CUDA 13 |
 
 The SDK is therefore built with an older compiler than Godot itself, for one
 reason: CUDA 12.8's `include/crt/host_config.h` accepts `_MSC_VER` in the
@@ -101,6 +102,45 @@ and `-allow-unsupported-compiler` does not help, `cudafe++` dies parsing the
 extra toolchain to install, and its `/MT` static libraries link cleanly into
 a Godot built by the system 14.51 — verified, and consistent with Microsoft's
 binary-compatibility guarantee.
+
+`--legacy-gpu` is off by default and widens a GPU build to Maxwell through
+Volta. It adds native SASS for `sm_50`, `sm_60`, `sm_61` and `sm_70` *and*
+lowers PhysX's own compute-capability floor from 7.0 to 5.0 — both halves live
+in one `-p1` diff
+(`misc/physx_patches/legacy/0012-legacy-gpu-archs.patch`), so neither can be
+applied without the other: widening the list alone leaves the floor rejecting
+the card, and lowering the floor alone admits a card the binary carries no code
+for. A default build's architecture list is
+`sm_52 sm_75 sm_80 sm_86 sm_89 sm_90 sm_100 sm_120`; with the flag it is those
+eight plus `sm_50`, `sm_60`, `sm_61` and `sm_70`. Read back what you actually
+got with `cuobjdump --list-elf <install>/bin/.../PhysXGpu_64.dll`.
+
+`--legacy-gpu` needs a CUDA 12.x toolkit and is refused on CUDA 13 or newer.
+CUDA 13's own lowest offline target is `compute_75`, and its nvcc exits with
+`nvcc fatal : Unsupported gpu architecture` on each of `sm_50`, `sm_60`,
+`sm_61` and `sm_70` — measured on CUDA 13.4, where the same one-file compile
+succeeds at `sm_75`. That is a property of the toolkit rather than a guard that
+lapses when it is bumped. The flag is also refused without `--gpu` (a CPU build
+has no architecture list to widen) and with `--vc 18`, because the vc18 presets
+themselves need CUDA 13 or newer — so `--vc 15` on a CUDA 12.x toolkit is the
+only combination that builds it. Each refusal is a one-line exit naming the
+conflict, before the script clones or configures anything.
+
+It costs compile time and disk, which is why it is off by default. Measured on
+a 32-core machine: the ninja build of the whole SDK goes from 100.3 s to
+172.5 s, the CUDA compile work across its 61 `.cu` translation units from 36.7
+to 72.0 cpu-minutes (+96%), and `PhysXGpu_64.dll` from 331 MB to 478 MB
+(+147 MB, +44.6%). The DLL figure is a distribution cost, not just a build one
+— `SCsub` copies that file next to the Godot binary. Any run *without*
+`--legacy-gpu` reverse-applies the patch before it applies anything else,
+including a CPU-only run, so a checkout that built with the flag once goes back
+to the default architecture list — the same sources, the same CUDA flags and
+the same `ARCH_CODE_LIST` as a build that never saw the flag.
+
+What `--legacy-gpu` does not do is establish that those cards simulate
+correctly. It makes the build target them; whether GPU dynamics is right on
+pre-Volta silicon is a separate measurement on real hardware that has not been
+made here. See **Known limitations**.
 
 `--vc 17` is the default, so every command in this document and every
 previously published invocation builds exactly as before.
