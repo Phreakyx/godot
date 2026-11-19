@@ -28,4 +28,5 @@
 * [GPU voxel levels for the far field](/project/far-field-gpu-voxel-levels.md) - per-brick level selection in compute, indirect MultiMesh discs, exact CPU mirror
 * [Far directional cascades kept between frames](/project/directional-cascade-cache.md) - far cascades every 2nd/4th frame, staggered, reused while the slice fits the cached region; -1.1 to -1.5 ms in the valley
 * [Coarser mesh LODs for shadow casters](/project/shadow-lod-scale.md) - shadow passes use a 4x LOD threshold; -0.4 ms in the valley; grass draw order and frame timestamps tried without effect
+* [Unit-test baseline per stage](/project/unit-test-baseline.md) - full `--test` result of the tests build at each groundwork stage; pre-sync `143b8865d6`: 1482 cases, 0 failed, 3 skipped on purpose
 * [World wind and weather core](/project/world-wind.md) - WindServer gusts shared by foliage, cloth and bodies; Weather node, profiles, effects, borrowed scene values; weather sky and drifting clouds; rain, occlusion map, wet surfaces; ground haze and mist motes; lightning; synthesized sound; local wind zones

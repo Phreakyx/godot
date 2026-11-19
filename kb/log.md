@@ -1,5 +1,15 @@
 # Update log
 
+## 2026-11-20 (unit-test baseline)
+
+* **Added**: [unit-test baseline](/project/unit-test-baseline.md): the
+  pre-sync tree (`143b8865d6`) passes the whole `--test` suite (1482
+  cases, 0 failed, 3 skipped on purpose) and the smoke tests.
+* **Changed**: `devtools/build/build.ps1` builds with the Python that has
+  SCons (`Get-SconsPython` in `devtools/common.ps1`), works when started
+  from Git Bash through `powershell.exe` (clears `MSYSTEM`), and has
+  `-Tests` for the unit-test build.
+
 ## 2026-11-17 (release 0.10.3)
 
 * **Released**: `godot4.8-beta-diginaat-physx-v0.10.3` at `db5506be7d`
