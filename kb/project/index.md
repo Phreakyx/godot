@@ -12,6 +12,7 @@
 * [Core template migration benchmarks](/project/core-template-benchmarks.md) - 24-case controlled A/B: the dropped migration, and the kept String-key byte hash (integer tables unchanged, String hits 0.55-0.62x)
 * [Where engine CPU time goes in core code](/project/core-cpu-profiles.md) - sampling profiles of five workloads: hash lookups 3-16%, scene instancing 21% in RID checks, locks and refcounts plus 14% heap; the callers' patterns cost more than container internals
 
+* [Sync to Godot 4.8-beta4 and PhysX module 1302f909ca](/project/fork-sync-2026-11.md) - the milestone's one sync: two conflicts combined, fork-owned core files reviewed, one PhysX master adaptation, tests 1497/1497 and smoke pass; NVIDIA inventoried separately
 * [Project overview](/project/overview.md) - what this fork is, its sources, branches and release flow
 * [Modern compact editor theme](/project/modern-compact-editor-theme.md) - neutral charcoal native theme with compact spacing and restrained interaction accents
 * [Native indirect foundation](/project/native-indirect-foundation.md) - existing GPU submission seam, sentinel defect and per-view culling constraints

@@ -67,6 +67,9 @@ Update this table after every sync.
 | 2026-10-31 | `95c0fa5fe8` (Godot 4.8-beta) | `135dff3887` (no change) | `97bd583c28` (separate render thread, PXTGI reflections, VS 2026 SDK build) | `7c12c34bed` (on `dev`) |
 | 2026-11-07 | `b47a795aa5` | `135dff3887` (kept; NVIDIA force-pushed `49a825dc52`, not taken) | `92da57bda8` (cloth wind, ragdoll drives, vehicle engine drives, water and PXTGI fixes) | `09fbb8dbfa` (on `dev`) |
 | 2026-11-16 | `b47a795aa5` (no change) | `135dff3887` (kept; NVIDIA still `49a825dc52`, not taken) | `847b2ca459` (groom hair simulation, optional Alembic import with `alembic_sdk`, Blast fracture in the background, XR lens effects, PXTGI fixes, editor icons) | `ed6cd4a3e2` (on `dev`) |
+| 2026-11-19 | `b070e63b16` (Godot 4.8-beta4, godot-builds tag `4.8-beta4`) | `135dff3887` (kept; head `49a825dc52` inventoried in 01-04, see next row) | `1302f909ca` (Optimize Shaders editor tool, PXTGI Measure Materials measures albedo and metals, area-weighted off-screen albedo and glow) | `d08c7580f4` (on `dev`) |
+
+diginaat `13e860dfbe` checked 2026-11-19: nothing taken (README commits only).
 
 ### History layout
 

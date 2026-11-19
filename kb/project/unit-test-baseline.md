@@ -36,6 +36,7 @@ off as old. No full `--test` run of this fork had been recorded before.
 | Stage | Commit | Test cases | Passed | Failed | Skipped | Assertions | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | pre-sync | `143b8865d6` | 1482 | 1482 | 0 | 3 | 490282 passed, 0 failed | `SUCCESS!` |
+| post-sync | `2b7e93d07e` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -50,6 +51,7 @@ Doctest summary of the pre-sync run, verbatim:
 | Stage | Case | Message | Cause | Flaky |
 | --- | --- | --- | --- | --- |
 | pre-sync | none | | | |
+| post-sync | none | | | |
 
 The three skipped cases are skipped on purpose in the source, not by this
 build: `Validate tests / Pending tests are skipped`
@@ -61,6 +63,14 @@ node's _draw() ...` lines from `CanvasItem::draw_texture_rect_region`.
 They are engine error prints during a test, not failed checks; the suite
 still reports 0 failed. A later stage that changes their count is worth a
 look, not a regression by itself.
+
+The post-sync tree (Godot 4.8-beta4 merge and PhysX module `1302f909ca`,
+see [the sync](/project/fork-sync-2026-11.md)) adds 15 cases, all
+upstream's new tests (`tests/core/templates/test_sort_array.cpp`, and
+additions to `tests/core/io/test_scenes.cpp` and
+`tests/scene/test_button.cpp`). No case failed; the same three are
+skipped, and the same three `ERROR: Drawing is only allowed ...` prints
+appear. Same build command and machine, about 20 s wall time.
 
 # Smoke on the same tree
 

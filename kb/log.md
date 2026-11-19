@@ -1,5 +1,17 @@
 # Update log
 
+## 2026-11-20 (sync to Godot 4.8-beta4)
+
+* **Added**: [sync to Godot 4.8-beta4 and PhysX module 1302f909ca](/project/fork-sync-2026-11.md):
+  upstream `b070e63b16` merged into `dev` (`d08c7580f4`; conflicts in
+  the Modern theme's tooltip style and `thirdparty/README.md`, both
+  combined), PhysX module updated by a 3-way patch (`2b7e93d07e`,
+  `Color::components` adapted). NVIDIA `49a825dc52` not taken yet;
+  diginaat has nothing to take.
+* **Changed**: [unit-test baseline](/project/unit-test-baseline.md) has
+  the post-sync row: 1497 cases, 0 failed, 3 skipped. Smoke passes.
+* **Changed**: `CUSTOM_BUILD.md` sync state log row for 2026-11-19.
+
 ## 2026-11-20 (unit-test baseline)
 
 * **Added**: [unit-test baseline](/project/unit-test-baseline.md): the
