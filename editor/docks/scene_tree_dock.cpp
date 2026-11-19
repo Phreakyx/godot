@@ -159,7 +159,7 @@ void SceneTreeDock::input(const Ref<InputEvent> &p_event) {
 
 	Ref<InputEventMouseButton> mb = p_event;
 
-	if (mb.is_valid() && (mb->get_button_index() == MouseButton::LEFT || mb->get_button_index() == MouseButton::RIGHT)) {
+	if (mb.is_valid() && mb->get_button_index() == MouseButton::LEFT) {
 		Tree *tree = scene_tree->get_scene_tree();
 		if (mb->is_pressed() && tree->get_rect().has_point(tree->get_local_mouse_position())) {
 			tree_clicked = true;
