@@ -11,9 +11,10 @@ versioning) are in [CUSTOM_BUILD.md](../CUSTOM_BUILD.md). Feature notes:
 
 | Folder | Script | What it does |
 | --- | --- | --- |
-| `setup/` | `setup_dev_windows.ps1` | Sets up a new PC in one go (below) |
+| `setup/` | `setup_dev_windows.ps1`, `setup_dev_cachyos.sh` | Sets up a new Windows or CachyOS PC in one go (below) |
 | `build/` | `build.ps1` | Builds the editor, the .NET editor, the export templates or a whole release |
 | `test/` | `smoke.ps1` | The smoke tests every merge and release must pass |
+| `test/` | `smoke_linux.sh` | Linux smoke: the editor and a game start on Vulkan, PhysX (CPU) initializes |
 | `test/` | `scene_bench.ps1` | SceneTree / Node / transform scenarios (idle, deep, wide, moving parents, sparse and heavy updates, scripts, native processing, churn, reparenting, instancing, 2D/3D), 1k-100k nodes, builds alternated ([numbers](../docs/benchmarks/scene-runtime.md)) |
 | `profile/` | `profile.ps1`, `analyze.py` | CPU sampling profiles without elevation: a user-mode stack sampler with inlined frames, summaries by source directory, type and caller ([README](profile/README.md)) |
 | `test/` | `core_templates_bench.py` | Actual HEAD versus working-tree Vector/String/hash-container microbenchmarks; alternating samples, correctness checks and live allocation bytes |
@@ -33,21 +34,22 @@ build (`bin/`) and the packages (`dist/`).
 
 ## Set up a new PC
 
-1. Install Git, Python 3.8+ and Visual Studio 2022 (or the Build Tools) with
+1. Install Git, Python 3.8+ and Visual Studio 2022 or newer (or the Build Tools) with
    the "Desktop development with C++" workload. For PhysX GPU dynamics also
    the CUDA Toolkit 12.8 (`winget install Nvidia.CUDA --version 12.8`), for
    the C# editor the .NET SDK 8 or newer.
 2. Clone into a short folder (MSVC can't handle paths over 260 characters,
    and the build's deepest files add about 150), then run the setup:
    ```
-   git clone -b nvidia-dlss-physx https://github.com/Diginaat/godot.git godot-rtx
+   git clone -b dev https://github.com/Phreakyx/godot.git godot-rtx
    cd godot-rtx
    powershell -ExecutionPolicy Bypass -File devtools\setup\setup_dev_windows.ps1 -Build
    ```
 
 The setup checks the tools, installs SCons and Godot's D3D12 build
-dependencies, sets the git remotes the runbook uses (`upstream`, `origin` =
-NVIDIA-RTX, `physx`, `fork` = Diginaat), builds the PhysX, Blast and Flow
+dependencies, sets the git remotes the runbook uses (`origin` stays as cloned,
+Phreakyx/godot; `upstream`, `nvidia` = NVIDIA-RTX, `physx` and `diginaat` =
+the former maintainer's fork are fetch only, with push URL `DISABLED`), builds the PhysX, Blast and Flow
 SDKs once in a `physx-sdk` folder next to the repository (about 20 minutes
 the first time), writes the SDK paths into `custom.py` and, with `-Build`,
 builds the editor. Run it again any time: finished steps are skipped.
@@ -60,6 +62,19 @@ builds need no long command lines. It is not tracked by git.
 
 DLSS is optional: in the editor, click **Get NVIDIA DLSS...** to install
 NVIDIA's runtime files next to it.
+
+### Linux (CachyOS)
+
+```
+devtools/setup/setup_dev_cachyos.sh --install-deps --build
+devtools/test/smoke_linux.sh
+```
+
+The same steps as on Windows, with PhysX on the CPU (GPU dynamics are
+Windows-only). Without `--install-deps` the script only prints the
+`sudo pacman` line for missing packages. `--build` builds the GCC and Clang
+editors, both unit-test builds and a GCC `dev_build` test build. The smoke
+logs go to `devtools/out/smoke/linux/`.
 
 ## Build
 
@@ -187,8 +202,11 @@ only does the listing.
    powershell -File devtools\package\package_templates_win64.ps1
    powershell -File devtools\package\package_templates_win64.ps1 -Mono
    ```
-   The scripts print the release tag and title. Public packages never contain
+   The scripts print the release tag (`godot<major>.<minor>-<status>-physx-pt-v<own>`)
+   and title (`Godot Community Edition + PhysX + PT (Godot <major>.<minor>-<status>) v<own>`);
+   the zips are `godot_<major>.<minor>-physx-pt_v<own>-editor_windows_amd64[_mono].zip`
+   and `..._export_templates_windows_amd64[_mono].tpz`. Public packages never contain
    NVIDIA Streamline / DLSS files; games exported with the editor get them
    from the editor's folder.
-5. Push the branch and the tag, then
+5. Push the branch and the tag (`git push origin dev <tag>`; no other remote), then
    `gh release create <tag> --target <full commit SHA> --title "<title>" dist\...`.

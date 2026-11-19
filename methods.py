@@ -156,7 +156,7 @@ def get_version_info(module_version_string="", silent=False):
 
     # This build's own name, shown in window titles, the startup header and the version
     # button. Set here so that version.py stays as upstream has it.
-    version_info["name"] = "Godot Diginaat"
+    version_info["name"] = "Godot Community Edition"
 
     # For dev snapshots (alpha, beta, RC, etc.) we do not commit status change to Git,
     # so this define provides a way to override it without having to modify the source.

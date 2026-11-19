@@ -6,7 +6,8 @@
 #      the .NET SDK for the C# editor (only with -Mono).
 #   2. Installs SCons (pip) and Godot's D3D12 build dependencies.
 #   3. Sets the git remotes the runbook (CUSTOM_BUILD.md) uses: upstream,
-#      origin (NVIDIA-RTX), physx and fork (Diginaat).
+#      nvidia (NVIDIA-RTX), physx and diginaat (watched, never pushed: their
+#      push URL is DISABLED). origin stays as cloned.
 #   4. Builds the PhysX, Blast and Flow SDKs once, in a physx-sdk folder next
 #      to this repository (about 20 minutes the first time).
 #   5. Writes custom.py (not tracked) with the SDK paths, so a build is just:
@@ -53,7 +54,7 @@ Ok "Python $pyVersion"
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 $vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath } else { $null }
-if (-not $vs) { Fail "Visual Studio 2022 with the C++ workload is missing. Install it: winget install Microsoft.VisualStudio.2022.BuildTools --override ""--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive""" }
+if (-not $vs) { Fail "Visual Studio 2022 or newer with the C++ workload is missing. Install it: winget install Microsoft.VisualStudio.2022.BuildTools --override ""--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive""" }
 Ok "Visual Studio C++: $vs"
 
 if (-not (Have cmake)) {
@@ -102,22 +103,16 @@ if ((Test-Path (Join-Path $deps "agility_sdk")) -and (Get-ChildItem $deps -Direc
 	Ok "D3D12 dependencies installed"
 }
 
-# 3. Remotes (names as in CUSTOM_BUILD.md).
+# 3. Remotes (names as in CUSTOM_BUILD.md). origin is the clone's own remote.
 Step "Setting the git remotes"
 $want = [ordered]@{
 	"upstream" = "https://github.com/godotengine/godot.git"
-	"origin" = "https://github.com/NVIDIA-RTX/godot.git"
+	"nvidia" = "https://github.com/NVIDIA-RTX/godot.git"
 	"physx" = "https://github.com/uno1982/godot.git"
-	"fork" = "https://github.com/Diginaat/godot.git"
+	"diginaat" = "https://github.com/Diginaat/godot.git"
 }
 $remotes = @(git remote)
-# A fresh clone of the fork calls it origin; the runbook calls it fork and
-# keeps origin for NVIDIA's repository.
-if (($remotes -contains "origin") -and -not ($remotes -contains "fork") -and ((git remote get-url origin) -match "Diginaat/godot")) {
-	git remote rename origin fork
-	Info "Renamed the remote 'origin' (Diginaat/godot) to 'fork'"
-	$remotes = @(git remote)
-}
+if ($remotes -contains "origin") { Ok "origin -> $(git remote get-url origin)" } else { Info "No origin remote; this clone pushes nowhere until you add one." }
 foreach ($name in $want.Keys) {
 	if ($remotes -contains $name) {
 		Ok "$name -> $(git remote get-url $name)"
@@ -125,6 +120,8 @@ foreach ($name in $want.Keys) {
 		git remote add $name $want[$name]
 		Ok "$name -> $($want[$name]) (added)"
 	}
+	# Source remotes are fetched, never pushed.
+	git remote set-url --push $name DISABLED
 }
 
 # 4. PhysX, Blast and Flow SDKs.

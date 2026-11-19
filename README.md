@@ -14,19 +14,21 @@ CC BY-NC).</sub>
   </a>
 </p>
 
-This is a fork of [Godot Engine](https://github.com/godotengine/godot) (`master`,
-4.8-beta) that combines three things in one source tree:
+This is a fork of [Godot Engine](https://github.com/godotengine/godot) that
+tracks Godot's releases (currently the 4.8-beta4 snapshot) instead of
+`master`, and combines three things in one source tree. It lives at
+[Phreakyx/godot](https://github.com/Phreakyx/godot).
 
 | Part | Source | What it adds |
 | --- | --- | --- |
-| Godot Engine | [godotengine/godot](https://github.com/godotengine/godot) `master` | The engine itself, kept up to date with upstream. |
+| Godot Engine | [godotengine/godot](https://github.com/godotengine/godot) 4.8-beta4 (`b070e63b16`) | The engine itself, synced at each Godot release. |
 | NVIDIA RTX branch | [NVIDIA-RTX/godot](https://github.com/NVIDIA-RTX/godot) `nvidia-pt-dlss` | DLSS through NVIDIA Streamline, a real-time path tracer with DLSS Ray Reconstruction, Reflex, and Nsight Aftermath crash dumps. |
 | PhysX 5 module | [uno1982/godot](https://github.com/uno1982/godot/tree/feature/physx5-module) `feature/physx5-module` | `modules/godot_physx`: an NVIDIA PhysX 5 physics server with CUDA GPU dynamics, plus GPU fluid, cloth, soft bodies, destruction, vehicles and water. |
 
 All credit for those features goes to their authors: the Godot contributors,
 NVIDIA's RTX team, and the PhysX module's author. This fork merges them,
-fixes the conflicts between them, and keeps them building against the latest
-Godot `master`.
+fixes the conflicts between them, and keeps them building against each new
+Godot release.
 
 ## PhysX module by Wild Ox Studios
 
@@ -79,10 +81,12 @@ reaches them bounces off the sunlit tracks, grass and vines.
 ## Downloads
 
 Prebuilt Windows editors and export templates (standard and .NET) are on the
-[**Releases page**](https://github.com/Diginaat/godot/releases).
+[**Releases page**](https://github.com/Phreakyx/godot/releases).
 Each release names the Godot version it's based on and this build's own
-version: `godot4.8-beta-diginaat-physx-v0.10.3` is build 0.10.3, on Godot
-4.8-beta. Releases before 0.9.0 are tagged `...-nvidia-rt-dlss-physx-v...`.
+version: `godot4.8-beta-physx-pt-v0.11.0` is build 0.11.0, on Godot
+4.8-beta. Older releases (up to 0.10.3, by the former maintainer) keep their
+old names: `...-diginaat-physx-v...`, and before 0.9.0
+`...-nvidia-rt-dlss-physx-v...`.
 
 > [!IMPORTANT]
 > **The downloads work out of the box. You only need the NVIDIA Streamline SDK
@@ -345,9 +349,9 @@ won't run them.
 
 ### Changes in this fork
 
-- Merged with Godot `master` (currently `b47a795aa5`, 4.8-beta), with every
+- Merged with Godot 4.8-beta4 (`b070e63b16`), with every
   conflict resolved by hand (both sides kept). The PhysX module is at
-  `92da57bda8`. The NVIDIA path tracer and DLSS code stays at NVIDIA's
+  `1302f909ca`. The NVIDIA path tracer and DLSS code stays at NVIDIA's
   `135dff3887`; NVIDIA's November 2026 rewrite of that branch is not merged
   yet. The current state of each source is in the sync log in
   [`CUSTOM_BUILD.md`](CUSTOM_BUILD.md).
@@ -370,7 +374,7 @@ won't run them.
 
 ### 1. Prerequisites
 
-- **Visual Studio 2022** (or Build Tools) with the "Desktop development with
+- **Visual Studio 2022 or newer** (or Build Tools) with the "Desktop development with
   C++" workload and a Windows SDK.
 - **Python 3** and **SCons**: `python -m pip install scons`.
 - **Git** and **CMake** (the PhysX SDK builds with CMake).
@@ -386,13 +390,14 @@ won't run them.
 ### 2. Get the source and set up
 
 ```
-git clone -b nvidia-dlss-physx https://github.com/Diginaat/godot.git godot-rtx
+git clone -b dev https://github.com/Phreakyx/godot.git godot-rtx
 cd godot-rtx
 powershell -ExecutionPolicy Bypass -File devtools\setup\setup_dev_windows.ps1 -Build
 ```
 
 The setup script checks the tools from step 1, installs SCons and the D3D12
-dependencies, sets the git remotes, builds the PhysX SDK (with Blast and
+dependencies, sets the git remotes (`upstream`, `nvidia`, `physx` and
+`diginaat`, fetch only; `origin` stays as cloned), builds the PhysX SDK (with Blast and
 Flow, and GPU dynamics when the CUDA Toolkit is installed) in a `physx-sdk`
 folder next to the repository, writes the SDK paths into `custom.py` and
 builds the editor into `bin\godot.windows.editor.x86_64.exe`. Running it again
@@ -487,6 +492,17 @@ Export templates: build them with `devtools\build\build.ps1 -Target templates`
 the `.tpz` in the editor with Editor > Manage Export Templates > Install from
 File.
 
+## Building on Linux (CachyOS)
+
+`devtools/setup/setup_dev_cachyos.sh --install-deps --build` is the Linux
+counterpart of the Windows setup: it checks (and with `--install-deps`
+installs) the Arch packages, sets the same git remotes, builds PhysX (CPU),
+Blast and Flow, writes `custom.py`, and with `--build` builds the GCC and Clang
+editors and their unit-test builds. `devtools/test/smoke_linux.sh` then checks
+that the editor and a game start on Vulkan and that PhysX initializes. PhysX
+GPU dynamics are Windows-only. Keep the clone on a Linux file system, not an
+NTFS partition.
+
 ## Using the features
 
 - **DLSS** (needs the optional Streamline DLLs from step 5): Project Settings >
@@ -519,6 +535,8 @@ the maintainer's own local paths; replace them with yours.
 
 ## Credits
 
+- **[Diginaat](https://github.com/Diginaat)**, the original maintainer of this
+  fork, who built it up to 0.10.3.
 - **[Snesmocha](https://github.com/Snesmocha)** (mocha), for helping with
   this build's optimizations, and with the GPU and core engine improvements
   of 0.10.1.
