@@ -355,12 +355,18 @@ multiple bounces.
   scene see the sky (or the background colour).
 - A body's look comes from the mesh under it, or else the mesh it sits
   under (a model with its collision body as a child), or else the first
-  mesh beside it in a small group (up to 8 children): its albedo from the first surface with a
-  `StandardMaterial3D`, its glow from its brightest surface. PXTGI can't
-  read a `ShaderMaterial`; give one a `pxtgi_albedo` and/or
+  mesh beside it in a small group (up to 8 children): its albedo the colors
+  of its surfaces averaged by their areas (a wall's thin colored trim tints
+  it only as much as it covers; a surface PXTGI can't read is left out), its
+  glow from its brightest surface, given off only where that surface is on
+  the shape (a pot's thin light strip glows as a band, not the whole pot;
+  a glow given in a node's metadata covers the whole shape). PXTGI reads a
+  `StandardMaterial3D`'s albedo color but not its albedo texture's colors,
+  and can't read a `ShaderMaterial` at all; give one a `pxtgi_albedo` and/or
   `pxtgi_emission` Color in its metadata (or put them on the
-  `MeshInstance3D` or the physics body), or it bounces as neutral gray with
-  no glow off screen.
+  `MeshInstance3D` or the physics body), or off screen it bounces as its
+  albedo color (neutral gray for a `ShaderMaterial`) with no glow. The tags
+  are read only by PXTGI: they don't change how the material draws.
 - A `pxtgi_emission` Color must say how bright the material actually draws.
   It's read as sRGB, like an albedo color; its linear value is the glow's
   strength in the material's own units (nits with physical light units on):
@@ -370,17 +376,26 @@ multiple bounces.
   `EMISSION` by a hidden factor, say, as some importers' converted materials
   do), probes and reflections disagree with PXTGI's light: a probe capturing
   far brighter lamps than the tag says blows out what it lights.
-- **Find Emissive Materials** (a button on a `PXTGI3D`'s inspector) does the
-  tagging for a scene: it lists the `ShaderMaterial`s that have no
-  `pxtgi_emission` tag (on the material or its mesh), each measured by
-  drawing it with no light (`PXTGIEmissionMeter`), so the glow shown is what
-  the shader really draws, hidden multipliers included. The ones that glow
-  come ticked; edit a value to override it, untick what shouldn't light the
-  scene, and Tag Selected writes the tags (undoable) and saves materials kept
-  in their own files. Double-click a row to go to a mesh using it. A glow
-  that changes over time is tagged with its mean; a material inside an
-  imported file can't be tagged (the tag would be lost on reimport), make it
-  unique or save it to a file first.
+- **Measure Materials** (a button on a `PXTGI3D`'s inspector) does the
+  tagging for a scene: it lists the materials PXTGI can't read in full
+  (`ShaderMaterial`s with no `pxtgi_emission` tag on the material or its
+  mesh, and `ShaderMaterial`s or textured `StandardMaterial3D`s with no
+  `pxtgi_albedo`), each measured by drawing it (`PXTGIEmissionMeter`): with
+  no light, so the glow shown is what the shader really draws, hidden
+  multipliers included; then under an even white light and in a white sky's
+  reflections, so the albedo shown is the share of light it bounces,
+  textures and tints averaged over the surface: a dielectric's diffuse color,
+  a metal's reflection (about its color when glossy, dimmer when rough, as
+  Godot draws it). The ones that
+  glow come ticked for a glow tag, and every one for an albedo tag; edit a
+  glow to override it, untick what you don't want, and Tag Selected writes
+  the tags (undoable) and saves materials kept in their own files.
+  Double-click a row to go to a mesh using it. A glow that changes over time
+  is tagged with its mean; a material inside an imported file can't be
+  tagged (the tag would be lost on reimport), make it unique or save it to a
+  file first. The tags are measured once: measure again after changing a
+  material's textures or glow. Nothing is measured at run time, so the tags
+  cost nothing in a game.
 - A material's `AO` output above 1 multiplies all of its indirect light
   (PXTGI's included) instead of darkening it; keep it within 0–1.
   Converted materials can carry intensities far above 1 that their source
@@ -419,6 +434,46 @@ multiple bounces.
   trace pass; a scene with no emissives pays nothing.
 - Demos: `demo/editor/rendering/gi_courtyard.tscn`, `gi_courtyard_night.tscn`,
   `gi_cornell_box.tscn`, `demo/cpu/physx_playground_gi.tscn` (key `G`).
+
+## Optimize Shaders (editor tool)
+
+**Project > Tools > Optimize Shaders...** finds the shaders a project's
+materials use that could be one shader, and merges them. Every shader Godot
+compiles is a set of render pipelines the graphics driver keeps in system
+memory (tens of MB for a big one) that take time to compile and to free, and
+two `Shader` resources with the same code are compiled twice. Exporters that
+write a shader per material leave many: an Unreal project's material
+instances, each baked into its own `VisualShader`, came to 313 shaders in a
+test scene where 192 do the same.
+
+- It reads the `ShaderMaterial`s saved in their own files (`.tres`, `.res`)
+  under `res://` and groups the shaders whose code is the same, or differs
+  only in its parameters' default values. Each group keeps the shader most
+  of its materials use; the others' materials are moved onto it.
+- Nothing looks different: a material that relied on a default the kept
+  shader doesn't share gets that value set on itself. (Godot writes every
+  parameter's value when it saves a material, so materials it saved don't
+  rely on defaults.)
+- Not merged: shaders whose code differs in anything else, a differing
+  `instance uniform` or `global uniform` default (it can't be set on a
+  material), shaders whose default textures differ (a `VisualShader`'s
+  texture nodes: Godot hides those parameters from materials, so a material
+  can't be given its own; shaders with the same textures still merge; the
+  dialog counts these, as changing those nodes to Texture2D Parameter nodes
+  would let them merge), and groups with no shader in its own file (one
+  built into a file can't be used from another; save one as a `.tres`).
+- Merge Selected moves the ticked groups' materials as one undoable action
+  and saves them, keeping their UIDs. The changes are written to disk and can
+  touch many files: back up the project or track it in version control first.
+- The shaders no longer used stay on disk unless **Delete the shaders left
+  unused** is ticked: then, after merging, a confirmation lists those no
+  other file in the project depends on, and Delete moves them (and their
+  `.uid` files) to the system trash; Keep Unused leaves them. Once they're
+  deleted, undoing the merge needs them restored from the trash.
+- Double-click a shader to find it in the FileSystem dock.
+- Scripts can do the same with `PhysXShaderOptimizer` (`find_materials`,
+  `find_groups`, `merge_group`); it needs a rendering device (not
+  `--headless`), and a save made outside the editor may drop the files' UIDs.
 
 ## Characters on debris piles
 
