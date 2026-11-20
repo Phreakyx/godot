@@ -19,7 +19,7 @@ installation = subprocess.check_output([str(vswhere), "-latest", "-products", "*
 vcvars = Path(installation) / "VC/Auxiliary/Build/vcvars64.bat"
 source = ROOT / "devtools/test/math_simd_bench.cpp"
 exe = OUT / "bench.exe"
-args = ["cl", "/nologo", "/O2", "/MT", "/std:c++17", "/Zc:__cplusplus", "/fp:precise", "/DNOMINMAX", "/DWINDOWS_ENABLED", f"/I{ROOT}", f"/I{ROOT / 'platform/windows'}", f"/Fo{OUT / 'bench.obj'}", f"/Fe{exe}", str(source)]
+args = ["cl", "/nologo", "/O2", "/MT", "/std:c++20", "/Zc:__cplusplus", "/fp:precise", "/DNOMINMAX", "/DWINDOWS_ENABLED", f"/I{ROOT}", f"/I{ROOT / 'platform/windows'}", f"/Fo{OUT / 'bench.obj'}", f"/Fe{exe}", str(source)]
 command = OUT / "build.cmd"
 command.write_text(f'@call "{vcvars}" >nul\n@if errorlevel 1 exit /b %errorlevel%\n' + subprocess.list2cmdline(args) + "\n@exit /b %errorlevel%\n", encoding="utf-8")
 build = subprocess.run(["cmd", "/d", "/c", str(command)], cwd=ROOT, text=True, capture_output=True)

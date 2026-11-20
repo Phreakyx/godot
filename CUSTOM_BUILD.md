@@ -318,6 +318,16 @@ straight line otherwise.
   - The weather module (`modules/weather/`: wind, `Weather`, profiles, effects),
     the wind in `GrassField3D`'s default material and
     `PhysXCloth3D.use_global_wind`. See [WEATHER.md](WEATHER.md).
+  - The engine builds as C++20, a port of upstream's open PR
+    godotengine/godot#100749: the `-std=gnu++20` and `/std:c++20` flags and
+    the compiler floors in `SConstruct` (GCC 11, Clang 14, Apple Clang 16,
+    Visual Studio 2022; the PR has Clang 13 and Visual Studio 2019 16.11),
+    `static_assert(__cplusplus >= 202002L)` in `core/typedefs.h`, the PR's
+    comparison operators (`Vector2/3/4`, `Rect2`, `Ref<T>`, `Variant`),
+    `spin_lock.h`, `mono_gc_handle.h`, the GridMap literals, the manifold
+    define in `modules/csg/SCsub` and `thirdparty/basis_universal/patches/0007-enum-to-int32.patch`.
+    Take upstream's version when it lands and drop ours. See
+    [kb/project/cpp20-switch.md](kb/project/cpp20-switch.md).
 
 ## Diverged core files
 
@@ -346,6 +356,18 @@ fork's change when upstream lands the same).
 | `core/io/dir_access.h` | NVIDIA | `get_next()` non-virtual, `_get_next_entry()` pure virtual, virtual `current_modified_time()` | Keep; a new upstream `DirAccess` subclass must implement `_get_next_entry()` instead of `get_next()` |
 | `core/io/file_access_pack.cpp` | NVIDIA | `DirAccessPack::get_next()` renamed to `_get_next_entry()` | Keep |
 | `core/io/file_access_pack.h` | NVIDIA | Same rename in `DirAccessPack` | Keep |
+| `core/math/rect2.cpp` | Fork | C++20: `Rect2` == / != `Rect2i` (godotengine/godot#100749) | Take upstream's when #100749 lands |
+| `core/math/rect2.h` | Fork | C++20: declarations of the `Rect2i` comparisons (#100749) | Take upstream's when #100749 lands |
+| `core/math/vector2.cpp` | Fork | C++20: `Vector2` == / != `Vector2i` (#100749) | Take upstream's when #100749 lands |
+| `core/math/vector2.h` | Fork | C++20: declarations of the `Vector2i` comparisons (#100749) | Take upstream's when #100749 lands |
+| `core/math/vector3.cpp` | Fork | C++20: `Vector3` == / != `Vector3i` (#100749) | Take upstream's when #100749 lands |
+| `core/math/vector3.h` | Fork | C++20: declarations of the `Vector3i` comparisons (#100749) | Take upstream's when #100749 lands |
+| `core/math/vector4.cpp` | Fork | C++20: `Vector4` == / != `Vector4i` (#100749) | Take upstream's when #100749 lands |
+| `core/math/vector4.h` | Fork | C++20: declarations of the `Vector4i` comparisons (#100749) | Take upstream's when #100749 lands |
+| `core/object/ref_counted.h` | Fork | C++20: cross-type `Ref<T>` == / != (#100749) | Take upstream's when #100749 lands |
+| `core/os/spin_lock.h` | Fork | C++20: no pre-C++20 `ATOMIC_VAR_INIT` branch (#100749) | Take upstream's when #100749 lands |
+| `core/typedefs.h` | Fork | C++20: `static_assert(__cplusplus >= 202002L)` (#100749) | Take upstream's when #100749 lands |
+| `core/variant/variant.h` | Fork | C++20: templated `Variant` comparison operators (#100749) | Take upstream's when #100749 lands |
 | `core/math/dynamic_bvh.h` | Fork | SSE `Volume` layout and kernels on x86-64 single precision (`DYNAMIC_BVH_SSE`, D014) | Port upstream `Volume` changes into both the SSE and the scalar code |
 | `core/templates/a_hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
 | `core/templates/hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
@@ -389,6 +411,11 @@ when the module's `build_physx.py` pin, patches or presets change.
   (`tests=yes object_prefix=t_ extra_suffix=tests`):
   `bin\godot.windows.editor.x86_64.tests.console.exe`.
 - Close any running editor from `bin\` first, or the link fails with `Access is denied`.
+- The engine is C++20 (`/std:c++20`, `-std=gnu++20`; C stays C17). Minimum
+  compilers: GCC 11, Clang 14, Apple Clang 16, Visual Studio 2022; only the
+  newest MSVC and the CachyOS GCC and Clang are tested. C++23/26 features
+  are used only behind a feature-test macro (`__cpp_lib_*`, `__cpp_*`), with
+  a C++20 fallback.
 - After a change to the version info in `methods.py` (for example
   `GODOT_VERSION_NAME`), SCons regenerates `core/version_generated.gen.h` but
   does not recompile the files that reach it through `core/version.h`

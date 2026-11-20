@@ -94,6 +94,7 @@ Patches:
 - `0004-clang-warning-exclude.patch` ([GH-111346](https://github.com/godotengine/godot/pull/111346))
 - `0005-unused-typedef.patch` ([GH-111445](https://github.com/godotengine/godot/pull/111445))
 - `0006-explicit-includes.patch` ([GH-111767](https://github.com/godotengine/godot/pull/111767))
+- `0007-enum-to-int32.patch` ([GH-100749](https://github.com/godotengine/godot/pull/100749))
 
 
 ## brotli

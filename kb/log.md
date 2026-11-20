@@ -1,5 +1,17 @@
 # Update log
 
+## 2026-11-20 (C++20)
+
+* **Added**: [the engine switched to C++20](/project/cpp20-switch.md):
+  upstream PR godotengine/godot#100749 (head `6619728124`) ported as is,
+  floors raised to GCC 11, Clang 14 and Visual Studio 2022; on MSVC no
+  extra breakage and no new warning.
+* **Changed**: [unit-test baseline](/project/unit-test-baseline.md) has
+  the C++20 (MSVC) row: 1497 cases, 0 failed, 3 skipped. Smoke passes.
+* **Changed**: `CUSTOM_BUILD.md` (C++20 in "Fork-specific code to
+  preserve", Build and "Diverged core files"); three fork benchmark
+  scripts compile with `/std:c++20`.
+
 ## 2026-11-20 (NVIDIA part of the sync)
 
 * **Changed**: [sync to Godot 4.8-beta4](/project/fork-sync-2026-11.md)

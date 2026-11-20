@@ -57,7 +57,7 @@ def build(out, baseline_ref):
         content = subprocess.run(["git", "show", f"{commit}:{relative}"], cwd=ROOT, check=True, capture_output=True).stdout
         target.write_bytes(content)
 
-    manifest = {"baseline_commit": commit, "flags": "/O2 /MT /Gy /Gw /std:c++17 /Zc:__cplusplus /GR- /DDEBUG_ENABLED /DTOOLS_ENABLED /DWINDOWS_ENABLED /OPT:REF /OPT:ICF", "sources": {}}
+    manifest = {"baseline_commit": commit, "flags": "/O2 /MT /Gy /Gw /std:c++20 /Zc:__cplusplus /GR- /DDEBUG_ENABLED /DTOOLS_ENABLED /DWINDOWS_ENABLED /OPT:REF /OPT:ICF", "sources": {}}
     support = ROOT / "devtools/test/core_templates_bench.cpp"
     for variant in ("baseline", "candidate"):
         directory = out / variant
@@ -88,7 +88,7 @@ def build(out, baseline_ref):
                     manifest["sources"][variant][name] = sha(ROOT / name)
         manifest["sources"][variant]["core/profiling/profiling.gen.h"] = sha(ROOT / "core/profiling/profiling.gen.h")
         compile_args = [
-            "cl", "/nologo", "/O2", "/MT", "/Gy", "/Gw", "/std:c++17", "/Zc:__cplusplus", "/GR-",
+            "cl", "/nologo", "/O2", "/MT", "/Gy", "/Gw", "/std:c++20", "/Zc:__cplusplus", "/GR-",
             "/DDEBUG_ENABLED", "/DTOOLS_ENABLED", "/DWINDOWS_ENABLED", "/DNOMINMAX", "/D_CRT_SECURE_NO_WARNINGS",
             f"/DBENCH_MODERN_HASH={int('uint64_t hash_buffer64(' in (source / 'core/templates/hashfuncs.h').read_text(encoding='utf-8'))}", f"/I{include}", f"/I{ROOT}", f"/I{ROOT / 'platform/windows'}",
             f"/Fo{directory}\\", f"/Fe{directory / 'bench.exe'}", *map(str, inputs),

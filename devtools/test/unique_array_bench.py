@@ -145,7 +145,7 @@ def main():
     for mode in ("timing", "counts"):
         directory = OUT / mode
         directory.mkdir(exist_ok=True)
-        flags = ["cl", "/nologo", "/O2", "/MT", "/std:c++17", "/Zc:__cplusplus", "/DDEBUG_ENABLED", "/DWINDOWS_ENABLED", f"/I{baseline}", f"/I{baseline / 'platform/windows'}"]
+        flags = ["cl", "/nologo", "/O2", "/MT", "/std:c++20", "/Zc:__cplusplus", "/DDEBUG_ENABLED", "/DWINDOWS_ENABLED", f"/I{baseline}", f"/I{baseline / 'platform/windows'}"]
         commands = [
             flags + ["/c", f"/FI{header}", f"/DARRAY_BENCH_HOOKS={int(mode == 'counts')}", f"/Fo{directory / 'memory.obj'}", str(baseline / "core/os/memory.cpp")],
             flags + [f"/DARRAY_BENCH_COPY_ONLY={int(args.copy_only)}", f"/DARRAY_BENCH_SPECIALIZE_COPY={int(args.specialize_copy)}", f"/DARRAY_BENCH_BOUNDARY={int(args.boundary)}", f"/DARRAY_BENCH_COUNT_RUN={int(mode == 'counts')}", f"/DARRAY_BENCH_SAMPLES={1 if mode == 'counts' else args.samples}", f"/Fo{directory / 'bench.obj'}", f"/Fe{directory / 'bench.exe'}", str(source), str(directory / "memory.obj")],
