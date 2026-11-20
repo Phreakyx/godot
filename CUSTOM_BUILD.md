@@ -342,6 +342,10 @@ fork's change when upstream lands the same).
 | `core/error/error_backtrace.h` | NVIDIA | New file: `backtrace_dump()`, `backtrace_capture()`, `backtrace_format()` | Keep; take NVIDIA's updates by the NVIDIA rule |
 | `core/error/error_macros.cpp` | NVIDIA | Prints a backtrace to stderr for errors and shader errors | Keep; take upstream's if it lands error backtraces |
 | `core/input/input.cpp` | NVIDIA | F13 emits the Streamline PC-latency ping marker | Keep |
+| `core/io/dir_access.cpp` | NVIDIA | Non-virtual `get_next()` records the entry; `current_modified_time()` (faster editor filesystem scan, `49a825dc52`) | Keep; port upstream `DirAccess` changes, every subclass implements `_get_next_entry()` |
+| `core/io/dir_access.h` | NVIDIA | `get_next()` non-virtual, `_get_next_entry()` pure virtual, virtual `current_modified_time()` | Keep; a new upstream `DirAccess` subclass must implement `_get_next_entry()` instead of `get_next()` |
+| `core/io/file_access_pack.cpp` | NVIDIA | `DirAccessPack::get_next()` renamed to `_get_next_entry()` | Keep |
+| `core/io/file_access_pack.h` | NVIDIA | Same rename in `DirAccessPack` | Keep |
 | `core/math/dynamic_bvh.h` | Fork | SSE `Volume` layout and kernels on x86-64 single precision (`DYNAMIC_BVH_SSE`, D014) | Port upstream `Volume` changes into both the SSE and the scalar code |
 | `core/templates/a_hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
 | `core/templates/hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
