@@ -6,11 +6,13 @@ $RepoRoot = (Resolve-Path "$DevRoot\..").Path
 $Out = Join-Path $DevRoot "out"
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-function Get-Editor([switch]$Mono, [switch]$Tests) {
-	# SConstruct puts extra_suffix (".tests") before the module suffix (".mono").
-	$suffix = "$(if ($Tests) { '.tests' })$(if ($Mono) { '.mono' })"
-	$exe = Join-Path $RepoRoot "bin\godot.windows.editor.x86_64$suffix.console.exe"
-	if (-not (Test-Path $exe)) { throw "Missing $exe. Build it first: devtools\build\build.ps1$(if ($Mono) { ' -Mono' })$(if ($Tests) { ' -Tests' })" }
+function Get-Editor([switch]$Mono, [switch]$Tests, [string]$Variant, [switch]$Dev) {
+	# SConstruct order: target, ".dev", arch, extra_suffix (".<variant>.tests"), ".mono".
+	$devPart = "$(if ($Dev) { '.dev' })"
+	$suffix = "$(if ($Variant) { ".$Variant" })$(if ($Tests) { '.tests' })$(if ($Mono) { '.mono' })"
+	$exe = Join-Path $RepoRoot "bin\godot.windows.editor$devPart.x86_64$suffix.console.exe"
+	$flags = "$(if ($Mono) { ' -Mono' })$(if ($Tests) { ' -Tests' })$(if ($Variant) { " -Variant $Variant" })$(if ($Dev) { ' -Dev' })"
+	if (-not (Test-Path $exe)) { throw "Missing $exe. Build it first: devtools\build\build.ps1$flags" }
 	return $exe
 }
 

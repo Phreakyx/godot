@@ -328,6 +328,14 @@ straight line otherwise.
     define in `modules/csg/SCsub` and `thirdparty/basis_universal/patches/0007-enum-to-int32.patch`.
     Take upstream's version when it lands and drop ours. See
     [kb/project/cpp20-switch.md](kb/project/cpp20-switch.md).
+  - The backend switch `core/templates/fork_backends.h` and the container
+    contract tests in `tests/fork/`. Both are fork-owned new files and never
+    conflict. Every `FORK_BACKEND_*` macro defaults to 0, upstream's code, which
+    stays the control and the merge anchor; a family gets its macro with its
+    first candidate, and a losing candidate is deleted. The contract tests pin
+    today's HashMap, AHashMap, HashSet, RBMap, RBSet and List behavior; an
+    upstream change that breaks one needs a look before the pin is updated. See
+    [kb/project/container-contracts.md](kb/project/container-contracts.md).
 
 ## Diverged core files
 
@@ -370,6 +378,7 @@ fork's change when upstream lands the same).
 | `core/variant/variant.h` | Fork | C++20: templated `Variant` comparison operators (#100749) | Take upstream's when #100749 lands |
 | `core/math/dynamic_bvh.h` | Fork | SSE `Volume` layout and kernels on x86-64 single precision (`DYNAMIC_BVH_SSE`, D014) | Port upstream `Volume` changes into both the SSE and the scalar code |
 | `core/templates/a_hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
+| `core/templates/fork_backends.h` | Fork | New file: compile-time container backend switch (`FORK_BACKEND_*`, 0 = upstream) | Keep |
 | `core/templates/hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
 | `core/templates/hash_set.h` | Fork | One allocation per table (`_allocate_block()`, `_free_block()`, D013); byte hash for String keys | Port upstream allocation, resize and copy changes to the block layout |
 | `core/templates/hashfuncs.cpp` | Fork | `hash_buffer()` byte hash (wyhash/XXH3) for String and CharString keys | Port; `HashMapHasherDefault` and `String::hash()` outputs never change |
@@ -575,6 +584,20 @@ Unit tests: `devtools\build\build.ps1 -Tests`, then
 `bin\godot.windows.editor.x86_64.tests.console.exe --test`; compare the summary
 (passed, failed, skipped) with the last recorded run in
 [kb/project/unit-test-baseline.md](kb/project/unit-test-baseline.md).
+
+Container contract tests: `--test --test-case="*Fork*"` runs only the
+`tests/fork/` cases. Run them in the production tests build and in the dev
+build (`devtools\build\build.ps1 -Tests -Dev`, then
+`bin\godot.windows.editor.dev.x86_64.tests.console.exe`), where `DEV_ASSERT`
+is compiled in.
+
+A/B builds for a backend candidate come from the same source:
+`devtools\build\build.ps1 -Tests -Variant {name} -Defines "{MACRO}=1"` passes
+SCons `cppdefines` and `extra_suffix`, so the candidate has its own objects and
+its own binary (`bin\godot.windows.editor.x86_64.{name}.tests.console.exe`) next
+to the control (`build.ps1 -Tests`). `[Fork][Backends]` prints the macro values
+each binary was built with. Never interrupt a variant build: variants share the
+generated headers.
 
 Linux: `devtools/test/smoke_linux.sh` runs the same pass rule against every
 `bin/godot.linuxbsd.editor.x86_64*` editor (GCC and Clang): the editor and a

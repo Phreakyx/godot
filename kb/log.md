@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-11-20 (container contracts)
+
+* **Added**: [container contracts and the backend switch](/project/container-contracts.md):
+  `core/templates/fork_backends.h` (`FORK_BACKEND_SELFTEST`, 0 = upstream)
+  and `build.ps1 -Variant -Defines -Dev` build a same-source control and
+  candidate side by side; 42 contract cases in `tests/fork/` pin HashMap,
+  AHashMap, HashSet, RBMap, RBSet and List behavior, pass in the
+  production and dev tests builds; no suspected bug found.
+* **Changed**: `CUSTOM_BUILD.md` ("Fork-specific code to preserve",
+  "Diverged core files", Test). The full `--test` run on the C++20 (MSVC)
+  tests build is now 1540 cases, 0 failed, 3 skipped (1497 plus the 43
+  `[Fork]` cases).
+
 ## 2026-11-20 (C++20)
 
 * **Added**: [the engine switched to C++20](/project/cpp20-switch.md):
