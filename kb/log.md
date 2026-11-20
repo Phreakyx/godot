@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-11-21 (allocation counter for benchmark builds)
+
+* **Added**: [allocation counts in release builds](/project/allocation-counter.md):
+  `FORK_ALLOC_COUNTERS` (default 0; `build.ps1 -Bench` sets it) counts
+  `Memory::alloc_static`, `alloc_aligned_static` and `realloc_static` calls in
+  per-thread slots, read through the custom monitors `fork/alloc_count` and
+  `fork/realloc_count`; `scene.gd` prints `allocs=` and `reallocs=` for the
+  measured frames, and the runner judges them by the count rule (`COUNTS`
+  lines, `counts.csv`). `CUSTOM_BUILD.md` lists the new core hunks.
+* **Measured** (i9-14900K, MSVC 14.51, n=5, `--max-load 50`): A/A counts
+  identical on both workloads and build types; `scene:instance:10000`
+  4,961,487 allocations (editor) and 4,961,727 (`template_release`),
+  `scene:churn:10000` 96,924 and 97,164; reallocations 245,775 and 46 in
+  both.
+
 ## 2026-11-20 (benchmark protocol and three-binary compare)
 
 * **Added**: [benchmark protocol](/tooling/benchmark-protocol.md), written

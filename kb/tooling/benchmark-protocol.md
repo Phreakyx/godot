@@ -82,7 +82,12 @@ rounds. Allocation counts are deterministic once the A/A run shows two
 same-source builds give identical counts: then **any allocation-count
 increase is flagged and must be explained** in the `kb/` entry, or the
 candidate is rejected. A workload whose A/A counts differ is reported as
-not deterministic, with its spread.
+not deterministic, with its spread. The counts come from the
+[allocation counter](/project/allocation-counter.md) every `-Bench` build
+carries (`allocs=`, `reallocs=` on the BENCH line); `aa` prints
+`COUNTS ... identical` or `COUNT-NONDETERMINISTIC (min..max)`, `compare`
+prints `ALLOC-INCREASE` or `NO-INCREASE`, and a binary without the counter
+(a previous build from before it) reads `n/a`.
 
 **Skip (D-07).** A family's max gain is `share x (1 - 1/speedup)`, with the
 measured share and the best plausible speedup of its internals. The family
@@ -171,6 +176,8 @@ started in the same second as another gets a `-2` suffix):
   and reason, CPU and wall seconds, `clock_mhz`, `clock_flag`.
 - `summary.csv`: per workload, metric and build type the medians, the
   median paired differences, wins, losses, the floor and the verdict.
+- `counts.csv`: per workload, count and build type the range of each
+  binary's counts and the count verdict.
 - `meta.json`: commit, dirty flag and the sha256 of `git diff HEAD`, the
   binaries in round-1 order with their commit, `build.ps1` and SCons
   arguments and cppdefines, MSVC toolset and Visual Studio versions, CPU

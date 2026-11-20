@@ -100,6 +100,23 @@ def count_verdict(control_counts, candidate_counts, aa_identical):
     return "NO-INCREASE"
 
 
+def aa_counts(control, twin):
+    """A/A counts (round -> count): identical across both binaries and all rounds, or the spread."""
+    missing = [label for label, series in (("control", control), ("aa", twin)) if not series]
+    if missing:
+        return f"n/a ({', '.join(missing)})"
+    seen = set(control.values()) | set(twin.values())
+    return "identical" if len(seen) == 1 else f"COUNT-NONDETERMINISTIC ({min(seen)}..{max(seen)})"
+
+
+def compare_counts(control, candidate):
+    """D-06 on counts (round -> count); a binary without counts (built before the counter) is n/a."""
+    if not control or not candidate:
+        return "n/a"
+    deterministic = len(set(control.values())) == 1 and len(set(candidate.values())) == 1
+    return count_verdict({"count": max(control.values())}, {"count": max(candidate.values())}, deterministic)
+
+
 def max_gain(share, speedup):
     """Best case of a family (D-07): its share of the workload times the saved fraction of its time."""
     return share * (1 - 1 / speedup)
@@ -230,6 +247,9 @@ def prepare_scene_project():
 # name -> (command builder, judged metrics with the time metric first, editor mode). Editor-mode runs start
 # 32 workers whatever the project says (D-12 exception): their count is recorded, not checked.
 WORKLOADS = {"scene": (scene_command, SCENE_METRICS, False)}
+# Allocation counts per workload (bench builds only, fork/alloc_count): judged by the count rule, never by the
+# time or memory rules (D-06).
+COUNT_METRICS = {"scene": ("allocs", "reallocs")}
 
 
 def parse_workload(spec):
@@ -239,8 +259,8 @@ def parse_workload(spec):
     return name, params
 
 
-def parse_sample(result, metrics):
-    """Metric -> (value, reason); value None means failed. Never turns a failure into a number."""
+def bench_fields(result):
+    """(BENCH line fields, None) for a good sample, or (None, reason) for a failed one."""
     lines = result["output"].splitlines()
     errors = [line for line in lines if line.startswith("ERROR") and "screen reader support driver" not in line]
     bench = [line for line in lines if line.startswith("BENCH: ")]
@@ -258,8 +278,15 @@ def parse_sample(result, metrics):
     elif not bench:
         reason = "no BENCH line"
     if reason:
-        return {m: (None, reason.strip()) for m in metrics}
-    values = dict(re.findall(r"(\w+)=(\S+)", bench[0][len("BENCH: ") :]))
+        return None, reason.strip()
+    return dict(re.findall(r"(\w+)=(\S+)", bench[0][len("BENCH: ") :])), None
+
+
+def parse_sample(result, metrics):
+    """Metric -> (value, reason); value None means failed. Never turns a failure into a number."""
+    values, reason = bench_fields(result)
+    if reason:
+        return {m: (None, reason) for m in metrics}
     values["peak_ws_mb"] = result["peak_ws_bytes"] / 1048576
     sample = {}
     for metric in metrics:
@@ -270,6 +297,13 @@ def parse_sample(result, metrics):
             continue
         sample[metric] = (value, None) if math.isfinite(value) and value > 0 else (None, f"{metric}={value}")
     return sample
+
+
+def parse_counts(result, names):
+    """Count -> int, or None (n/a) when the sample failed or the binary has no counter. Zero is a count."""
+    values, _ = bench_fields(result)
+    values = values or {}
+    return {name: int(values[name]) if values.get(name, "").isdigit() else None for name in names}
 
 
 # --- machine checks (D-13: read, refuse with the fix, never change) ---
@@ -381,7 +415,7 @@ def run_series(args, sides):
                 "build_ps1_args": osb.build_args(build, s["variant"], s["defines"],
                                                  "<worktree>" if s["root"] != ROOT else None),
                 "scons_args": osb.scons_args(build, s["variant"], s["defines"]),
-                "cppdefines": s["defines"] or "",
+                "cppdefines": osb.bench_defines(s["defines"]),
             }
             for build in builds
             for s in sides
@@ -389,6 +423,7 @@ def run_series(args, sides):
     }
 
     raw, values, clocks, cold_s = [], {}, {}, {}  # values: (spec, metric, build, label) -> {round: value}
+    counts = {}  # (spec, count, build, label) -> {round: count}; a binary without the counter has none
 
     def run_round(rnd, order, specs):
         osb.ensure_idle()
@@ -417,6 +452,16 @@ def run_series(args, sides):
                         shown.append(f"{metric}={value:.3f}" if value is not None else f"{metric}=FAILED ({reason})")
                         if rnd > 0 and value is not None:
                             values.setdefault((spec, metric, build, label), {})[rnd] = value
+                    for metric, count in parse_counts(result, COUNT_METRICS.get(name, ())).items():
+                        raw.append({
+                            "round": rnd, "position": position, "binary": label, "build": build, "workload": name,
+                            "case": ":".join(params), "metric": metric, "value": "" if count is None else count,
+                            "failed": 0, "reason": "n/a" if count is None else "", "cpu_s": repr(result["cpu_s"]),
+                            "wall_s": f"{wall:.3f}",
+                        })
+                        shown.append(f"{metric}={'n/a' if count is None else count}")
+                        if rnd > 0 and count is not None:
+                            counts.setdefault((spec, metric, build, label), {})[rnd] = count
                     tag = "cold" if rnd == 0 else f"r{rnd}"
                     print(f"[{tag}] {build:16} {spec} {label:9} {' '.join(shown)} cpu_s={result['cpu_s']:.2f}",
                           flush=True)
@@ -480,6 +525,9 @@ def run_series(args, sides):
     summary = summarize_aa(args, workloads, builds, values, n_of, meta) if mode == "aa" else \
         summarize_compare(args, workloads, builds, values, n_of, meta)
     write_csv(out / "summary.csv", summary)
+    count_rows = summarize_counts(mode, workloads, builds, counts)
+    if count_rows:
+        write_csv(out / "counts.csv", count_rows)
     print(f"\nraw.csv, summary.csv and meta.json in {out}")
 
 
@@ -562,6 +610,28 @@ def summarize_compare(args, workloads, builds, values, n_of, meta):
                     "floor": "" if isinstance(floor, str) else floor, "rule": "accept" if is_target else "regression",
                     "verdict": token,
                 })
+    return summary
+
+
+def summarize_counts(mode, workloads, builds, counts):
+    """COUNTS lines: A/A determinism in aa mode, the D-06 count rule (candidate vs control) in compare mode."""
+    summary = []
+    for spec, name, _ in workloads:
+        for metric in COUNT_METRICS.get(name, ()):
+            for build in builds:
+                series = {label: counts.get((spec, metric, build, label), {})
+                          for label in ("control", "aa", "previous", "candidate")}
+                shown = {label: f"{min(s.values())}..{max(s.values())}" if s else "n/a" for label, s in series.items()}
+                if mode == "aa":
+                    token = aa_counts(series["control"], series["aa"])
+                    print(f"COUNTS {spec} {metric} {build}: {token} (control {shown['control']}, aa {shown['aa']})")
+                else:
+                    token = compare_counts(series["control"], series["candidate"])
+                    print(f"COUNTS {spec} {metric} {build}: previous {shown['previous']}, candidate"
+                          f" {shown['candidate']}, control {shown['control']}")
+                    print(f"VERDICT {spec} {metric} {build}: {token}", flush=True)
+                summary.append({"workload": spec, "metric": metric, "build": build, "verdict": token,
+                                **{f"{label}_counts": shown[label] for label in series}})
     return summary
 
 

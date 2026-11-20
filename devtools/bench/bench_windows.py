@@ -307,7 +307,12 @@ def scons_args(target, variant, defines=None):
     suffix = ".".join(part for part in ("bench", variant) if part)
     args = [f"target={target}", "production=yes", "debug_symbols=yes", "disable_path_overrides=no"]
     args = ["platform=windows"] + args + [f"extra_suffix={suffix}"]
-    return args + [f"cppdefines={defines}"] if defines else args
+    return args + [f"cppdefines={bench_defines(defines)}"]
+
+
+def bench_defines(defines=None):
+    """The cppdefines of build.ps1 -Bench: the allocation counter, then the candidate's defines."""
+    return " ".join(part for part in ("FORK_ALLOC_COUNTERS=1", defines) if part)
 
 
 def build(target, variant, defines=None, source_root=None):

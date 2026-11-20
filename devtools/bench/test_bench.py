@@ -120,6 +120,46 @@ class BudgetPlan(unittest.TestCase):
         self.assertAlmostEqual(bench.budget_minutes([(2.0, 11), (6.0, 5)], 3, 2), (22 + 30) * 6 / 60)
 
 
+def _result(line):
+    return {"output": line + "\n", "timed_out": False, "returncode": 0, "peak_ws_bytes": 1 << 20}
+
+
+class Counts(unittest.TestCase):
+    def test_counts_are_not_time_or_memory_metrics(self):
+        self.assertEqual(bench.COUNT_METRICS["scene"], ("allocs", "reallocs"))
+        self.assertFalse(set(bench.COUNT_METRICS["scene"]) & set(bench.WORKLOADS["scene"][1]))
+
+    def test_counts_are_read_from_the_bench_line_zero_included(self):
+        counts = bench.parse_counts(_result("BENCH: frame_ms_p50=1.0 allocs=1200 reallocs=0"), ("allocs", "reallocs"))
+        self.assertEqual(counts, {"allocs": 1200, "reallocs": 0})
+
+    def test_missing_field_is_not_available_not_zero(self):
+        counts = bench.parse_counts(_result("BENCH: frame_ms_p50=1.0"), ("allocs", "reallocs"))
+        self.assertEqual(counts, {"allocs": None, "reallocs": None})
+
+    def test_failed_sample_has_no_counts(self):
+        counts = bench.parse_counts(_result("BENCH_FAIL: boom"), ("allocs",))
+        self.assertEqual(counts, {"allocs": None})
+
+    def test_aa_identical(self):
+        self.assertEqual(bench.aa_counts({1: 50, 2: 50}, {1: 50, 2: 50}), "identical")
+
+    def test_aa_any_difference_is_nondeterministic_with_the_spread(self):
+        self.assertEqual(bench.aa_counts({1: 50, 2: 52}, {1: 49, 2: 50}), "COUNT-NONDETERMINISTIC (49..52)")
+
+    def test_aa_binary_without_counts_is_not_available(self):
+        self.assertEqual(bench.aa_counts({1: 50}, {}), "n/a (aa)")
+
+    def test_compare_uses_the_count_rule(self):
+        self.assertEqual(bench.compare_counts({1: 50, 2: 50}, {1: 51, 2: 51}), "ALLOC-INCREASE")
+        self.assertEqual(bench.compare_counts({1: 50, 2: 50}, {1: 50, 2: 50}), "NO-INCREASE")
+        self.assertEqual(bench.compare_counts({1: 50, 2: 50}, {1: 40, 2: 40}), "NO-INCREASE")
+
+    def test_compare_nondeterministic_or_missing(self):
+        self.assertEqual(bench.compare_counts({1: 50, 2: 51}, {1: 50, 2: 50}), "COUNT-NONDETERMINISTIC")
+        self.assertEqual(bench.compare_counts({1: 50}, {}), "n/a")
+
+
 class Clocks(unittest.TestCase):
     def test_rounds_more_than_five_percent_off_the_median_are_flagged(self):
         flags = bench.clock_flags({0: 5000.0, 1: 5100.0, 2: 4700.0, 3: 5000.0, 4: 5300.0})

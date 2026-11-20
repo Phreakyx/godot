@@ -34,6 +34,11 @@ var _scene: PackedScene
 var _instances: Array[Node] = []
 var _checksum := 0.0
 
+# Allocation counts (bench builds only: the fork/alloc_count monitor exists).
+var _counted := false
+var _counts_before: Array[int] = []
+var _read_cost: Array[int] = []
+
 
 func _initialize() -> void:
 	for arg in OS.get_cmdline_user_args():
@@ -54,6 +59,7 @@ func _initialize() -> void:
 	Engine.max_fps = 0
 	if DisplayServer.get_name() != "headless":
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	_counted = Performance.has_custom_monitor(&"fork/alloc_count")
 	_rng.seed = 12345
 	_mesh = BoxMesh.new()
 	_container = Node3D.new()
@@ -335,18 +341,31 @@ func _process(_delta: float) -> bool:
 	if _frame > 0 and _frame > _warmup:
 		_frame_ms.append((now - _last_usec) / 1000.0)
 	_last_usec = now
+	if _counted and _frame == _warmup:
+		var first := _read_counts()
+		_counts_before = _read_counts()
+		_read_cost = [_counts_before[0] - first[0], _counts_before[1] - first[1]]
 	_frame += 1
 	var start := Time.get_ticks_usec()
 	_step()
 	if _frame > _warmup:
 		_op_ms.append((Time.get_ticks_usec() - start) / 1000.0)
 	if _frame_ms.size() >= _frames:
-		print("BENCH: workload=scene scenario=%s count=%d visual=%s frames=%d frame_ms_p50=%.4f frame_ms_p95=%.4f op_ms_p50=%.4f setup_ms=%.2f static_mb=%.1f nodes=%d" % [
+		var counts := ""
+		if _counted:
+			var after := _read_counts()
+			counts = " allocs=%d reallocs=%d" % [after[0] - _counts_before[0] - _read_cost[0], after[1] - _counts_before[1] - _read_cost[1]]
+		print("BENCH: workload=scene scenario=%s count=%d visual=%s frames=%d frame_ms_p50=%.4f frame_ms_p95=%.4f op_ms_p50=%.4f setup_ms=%.2f static_mb=%.1f nodes=%d%s" % [
 			_scenario, _count, _visual, _frames, _pct(_frame_ms, 0.5), _pct(_frame_ms, 0.95), _pct(_op_ms, 0.5), _setup_ms,
-			OS.get_static_memory_usage() / 1048576.0, get_node_count()])
+			OS.get_static_memory_usage() / 1048576.0, get_node_count(), counts])
 		quit()
 		return true
 	return false
+
+
+# Both totals, read back to back; two calls in a row give the cost of one read pair.
+func _read_counts() -> Array[int]:
+	return [Performance.get_custom_monitor(&"fork/alloc_count"), Performance.get_custom_monitor(&"fork/realloc_count")]
 
 
 func _pct(p_values: Array[float], p_p: float) -> float:

@@ -32,7 +32,9 @@
 #include "performance.compat.inc"
 
 #include "core/config/engine.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/os/fork_alloc_counters.h"
 #include "core/os/os.h"
 #include "core/variant/typed_array.h"
 #include "scene/main/node.h"
@@ -661,6 +663,10 @@ Performance::Performance() {
 	_navigation_process_time = 0;
 	_monitor_modification_time = 0;
 	singleton = this;
+#if FORK_ALLOC_COUNTERS
+	add_custom_monitor(SNAME("fork/alloc_count"), callable_mp_static(&fork_alloc_counters_allocs), Vector<Variant>());
+	add_custom_monitor(SNAME("fork/realloc_count"), callable_mp_static(&fork_alloc_counters_reallocs), Vector<Variant>());
+#endif
 }
 
 Performance::MonitorCall::MonitorCall(Performance::MonitorType p_type, const Callable &p_callable, const Vector<Variant> &p_arguments) {

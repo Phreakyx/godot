@@ -349,6 +349,14 @@ straight line otherwise.
     "new export templates required". `tests/fork/test_fork_layouts.cpp` reads
     the same headers at run time. See
     [kb/project/container-contracts.md](kb/project/container-contracts.md).
+  - The allocation counter for benchmark builds: `core/os/fork_alloc_counters.h`
+    and `.cpp`, one call each in `Memory::alloc_static`, `alloc_aligned_static`
+    and `realloc_static` (`core/os/memory.cpp`), and the `fork/alloc_count` and
+    `fork/realloc_count` custom monitors in `Performance::Performance()`. All
+    behind `FORK_ALLOC_COUNTERS`, which defaults to 0, so shipped builds are
+    unchanged; only `devtools/build/build.ps1 -Bench` sets it. Upstream
+    changes to these allocation functions keep the calls. See
+    [kb/project/allocation-counter.md](kb/project/allocation-counter.md).
 
 ## Diverged core files
 
@@ -386,6 +394,9 @@ fork's change when upstream lands the same).
 | `core/math/vector4.cpp` | Fork | C++20: `Vector4` == / != `Vector4i` (#100749) | Take upstream's when #100749 lands |
 | `core/math/vector4.h` | Fork | C++20: declarations of the `Vector4i` comparisons (#100749) | Take upstream's when #100749 lands |
 | `core/object/ref_counted.h` | Fork | C++20: cross-type `Ref<T>` == / != (#100749) | Take upstream's when #100749 lands |
+| `core/os/fork_alloc_counters.cpp` | Fork | New file: per-thread allocation and reallocation counter slots and their totals, compiled only with `FORK_ALLOC_COUNTERS=1` | Keep |
+| `core/os/fork_alloc_counters.h` | Fork | New file: `FORK_ALLOC_COUNTERS` (default 0, `static_assert` 0 or 1) and the counter functions | Keep |
+| `core/os/memory.cpp` | Fork | Allocation and reallocation counts for benchmark builds behind `FORK_ALLOC_COUNTERS` (default 0): one call in `alloc_static`, `alloc_aligned_static` and `realloc_static` | Keep; upstream changes to these functions keep the calls |
 | `core/os/spin_lock.h` | Fork | C++20: no pre-C++20 `ATOMIC_VAR_INIT` branch (#100749) | Take upstream's when #100749 lands |
 | `core/typedefs.h` | Fork | C++20: `static_assert(__cplusplus >= 202002L)` (#100749) | Take upstream's when #100749 lands |
 | `core/variant/array.cpp` | Fork | `static_assert`s on the `ArrayPrivate` fields C# reads (`InteropStructs.cs`) | Keep; same rule as `cowdata.h` |
@@ -402,7 +413,7 @@ fork's change when upstream lands the same).
 | `core/templates/local_vector.h` | Fork | Bulk copy of trivially copyable spans from 256 elements | Keep; take upstream's if it lands a bulk copy |
 | `core/templates/rid_owner.h` | Fork | Lock-free `RID_Alloc::owns()` on x86-64 with the release store of `max_alloc` (D012) | Take upstream's when a fixed lock-free `owns()` lands (godotengine/godot#114900 was reverted) |
 | `main/main.cpp` | NVIDIA and fork | Streamline/Aftermath setup, markers and cleanup; `--gpu-markers`, `--debug-shaders`, `--raytracing-validation` (NVIDIA); layered windows for the editor's rounded popups (fork) | Keep |
-| `main/performance.cpp` | Fork | GPU geometry monitors (GPU-culled instances, cluster LOD triangles, HZB-occluded triangles, cluster LOD streaming memory) | Keep |
+| `main/performance.cpp` | Fork | GPU geometry monitors (GPU-culled instances, cluster LOD triangles, HZB-occluded triangles, cluster LOD streaming memory); custom monitors `fork/alloc_count` and `fork/realloc_count` in benchmark builds (`FORK_ALLOC_COUNTERS`) | Keep |
 | `main/performance.h` | Fork | The monitor enum entries and `_gpu_geometry_statistic()` | Keep |
 
 ## Build (Windows)

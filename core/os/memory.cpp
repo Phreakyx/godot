@@ -30,6 +30,7 @@
 
 #include "memory.h"
 
+#include "core/os/fork_alloc_counters.h"
 #include "core/profiling/profiling.h"
 #include "core/templates/safe_refcount.h"
 
@@ -51,6 +52,9 @@ void *Memory::alloc_aligned_static(size_t p_bytes, size_t p_alignment) {
 	if ((p1 = (void *)malloc(p_bytes + p_alignment - 1 + sizeof(uint32_t))) == nullptr) {
 		return nullptr;
 	}
+#if FORK_ALLOC_COUNTERS
+	fork_alloc_counters_on_alloc();
+#endif
 	GodotProfileAlloc(p1, p_bytes + p_alignment - 1 + sizeof(uint32_t));
 
 	p2 = (void *)(((uintptr_t)p1 + sizeof(uint32_t) + p_alignment - 1) & ~((p_alignment)-1));
@@ -94,6 +98,9 @@ void *Memory::alloc_static(size_t p_bytes, bool p_pad_align) {
 	}
 
 	ERR_FAIL_NULL_V(mem, nullptr);
+#if FORK_ALLOC_COUNTERS
+	fork_alloc_counters_on_alloc();
+#endif
 	GodotProfileAlloc(mem, p_bytes + (prepad ? DATA_OFFSET : 0));
 
 	if (prepad) {
@@ -119,6 +126,11 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 	if (p_memory == nullptr) {
 		return alloc_static(p_bytes, p_pad_align);
 	}
+#if FORK_ALLOC_COUNTERS
+	if (p_bytes > 0) {
+		fork_alloc_counters_on_realloc();
+	}
+#endif
 
 	uint8_t *mem = (uint8_t *)p_memory;
 

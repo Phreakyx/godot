@@ -18,9 +18,10 @@
 #                     next to the control. -Defines takes several, space-separated.
 #   ... -Dev          dev_build=yes instead of production=yes (DEV_ASSERT compiled in):
 #                     bin\godot.windows.editor.dev.x86_64[.tests].console.exe
-#   ... -Bench        benchmark build (devtools/bench/bench.py): debug_symbols=yes and
+#   ... -Bench        benchmark build (devtools/bench/bench.py): debug_symbols=yes,
 #                     disable_path_overrides=no (template_release then takes --path and
-#                     --script), extra_suffix bench[.<Variant>][.tests], so it never
+#                     --script) and cppdefines FORK_ALLOC_COUNTERS=1 before any -Defines
+#                     (allocation counts), extra_suffix bench[.<Variant>][.tests], so it never
 #                     rebuilds or replaces the daily binaries:
 #                     bin\godot.windows.<target>.x86_64.bench[.<Variant>].exe
 #   ... -SourceRoot <dir>
@@ -71,7 +72,10 @@ function Invoke-Scons([string]$SconsTarget, [bool]$WithMono) {
 	if ($Bench) { $sconsArgs += @("debug_symbols=yes", "disable_path_overrides=no") }
 	$suffix = @($(if ($Bench) { "bench" }), $Variant, $(if ($Tests) { "tests" })) | Where-Object { $_ }
 	if ($suffix) { $sconsArgs += "extra_suffix=$($suffix -join '.')" }
-	if ($Defines) { $sconsArgs += "cppdefines=$Defines" }
+	# Bench builds always count allocations (core/os/fork_alloc_counters.h), so every
+	# binary of a series carries the same counter cost.
+	$cppDefines = @($(if ($Bench) { "FORK_ALLOC_COUNTERS=1" }), $Defines) | Where-Object { $_ }
+	if ($cppDefines) { $sconsArgs += "cppdefines=$($cppDefines -join ' ')" }
 	$label = "$SconsTarget$(if ($WithMono) { ' (.NET)' })"
 	Write-Host "== Building $label" -ForegroundColor Cyan
 	$start = Get-Date
