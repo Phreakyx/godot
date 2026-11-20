@@ -338,8 +338,8 @@ fork's change when upstream lands the same).
 | --- | --- | --- | --- |
 | `core/config/engine.cpp` | NVIDIA | `is_raytracing_validation_enabled()`, `is_gpu_markers_enabled()` | Keep |
 | `core/config/engine.h` | NVIDIA | `use_raytracing_validation`, `use_gpu_markers` and their getters | Keep |
-| `core/error/error_backtrace.cpp` | NVIDIA | New file: native backtrace dump on errors (`ERROR_BACKTRACE_ENABLED`) | Keep; take NVIDIA's updates by the NVIDIA rule |
-| `core/error/error_backtrace.h` | NVIDIA | New file: `backtrace_dump()` | Keep; take NVIDIA's updates by the NVIDIA rule |
+| `core/error/error_backtrace.cpp` | NVIDIA | New file: native backtrace dump on errors (`ERROR_BACKTRACE_ENABLED`); `backtrace_capture()`/`backtrace_format()` and the DbgHelp lock from `49a825dc52` | Keep; take NVIDIA's updates by the NVIDIA rule |
+| `core/error/error_backtrace.h` | NVIDIA | New file: `backtrace_dump()`, `backtrace_capture()`, `backtrace_format()` | Keep; take NVIDIA's updates by the NVIDIA rule |
 | `core/error/error_macros.cpp` | NVIDIA | Prints a backtrace to stderr for errors and shader errors | Keep; take upstream's if it lands error backtraces |
 | `core/input/input.cpp` | NVIDIA | F13 emits the Streamline PC-latency ping marker | Keep |
 | `core/math/dynamic_bvh.h` | Fork | SSE `Volume` layout and kernels on x86-64 single precision (`DYNAMIC_BVH_SSE`, D014) | Port upstream `Volume` changes into both the SSE and the scalar code |
