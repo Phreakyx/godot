@@ -1,7 +1,7 @@
 # Shader permutations and pipelines: working memory
 
-Branch `feat/shader-permutations` (from `dev` 690fce897b), worktree
-`GodotPhysxDev-core`. Goal: fewer unneeded shader variants and pipelines,
+Work happens on `dev` (the work was done on `feat/shader-permutations`,
+from `dev` 690fce897b, and merged). Goal: fewer unneeded shader variants and pipelines,
 less compile stutter, same output. Read this first when resuming.
 
 ## Checklist
@@ -56,33 +56,50 @@ less compile stutter, same output. Read this first when resuming.
 
 ## Problems found
 
+State checked against the code on 2026-11-20: items 1-6 are resolved,
+7 and 8 are open.
+
 1. **Pipeline map keyed by a 32-bit hash only.** `PipelineHashMapRD` stores
    and looks up pipelines by `Key::hash()`; two keys with the same hash get
    the same pipeline (wrong formats, blend or spec constants), silently.
    Rare (n^2/2^33 per shader) but a correctness bug. `PipelineCacheRD`
-   compares full keys and is fine.
+   compares full keys and is fine. **Resolved** (D5):
+   `servers/rendering/renderer_rd/pipeline_hash_map_rd.h` keys
+   `HashMap<Key, RID>` by the whole key (`Key::hash()` plus
+   `Key::operator==`).
 2. **Coarse ADVANCED group.** Motion vectors alone pull in lightmap,
-   separate-specular, VoxelGI, SDF and material-bake variants.
+   separate-specular, VoxelGI, SDF and material-bake variants. **Resolved**
+   (D3): `SceneShaderForwardClustered::ShaderFeature` groups in
+   `forward_clustered/scene_shader_forward_clustered.h`.
 3. **Unused depth variants** for shared-shadow-material shaders (to be
-   confirmed by `SHADER_VARIANTS` request counts).
+   confirmed by `SHADER_VARIANTS` request counts). **Resolved** (D6):
+   `version_set_skipped_variants()` in `shader_rd.cpp`, called from
+   `forward_clustered/scene_shader_forward_clustered.cpp`.
 4. **Compiled bytes kept forever.** `Version::variant_data` holds every
    variant's shader container after the GPU shader exists; it is only read
    to create the shader and to write the group's cache file, both done by
    the end of `_compile_version_end`. Planned: free a group's bytes there
-   (measure with `mem_mb` in the benchmark line).
+   (measure with `mem_mb` in the benchmark line). **Resolved**:
+   `_compile_version_end()` in `servers/rendering/renderer_rd/shader_rd.cpp`
+   frees the group's `variant_data` after the cache file is written.
 5. **Vulkan PSO cache file kept in RAM.** The driver kept the loaded
    `pipelines.*.cache` (153 MiB here) after `vkCreatePipelineCache` copied
    it, and a full-size buffer after every save; the saved file could also be
-   longer than its `data_size` (rejected on the next load). Fixed: keep only
-   the header, save exactly `data_size`.
+   longer than its `data_size` (rejected on the next load). **Resolved**: keep
+   only the header, save exactly `data_size`
+   (`drivers/vulkan/rendering_device_driver_vulkan.cpp`, pipeline cache code).
 6. **Transparent pipelines precompiled for impossible passes.** Both
    transparent passes (raster and path tracer) strip motion vectors and
    separate specular, but `_mesh_compile_pipelines_for_surface` precompiles
-   TRANSPARENT+MV, +SEP, +SEP+MV ubershader pipelines.
+   TRANSPARENT+MV, +SEP, +SEP+MV ubershader pipelines. **Resolved** (D4):
+   `_mesh_compile_pipelines_for_surface()` in
+   `forward_clustered/render_forward_clustered.cpp` skips MV and SEP for the
+   alpha iteration.
 7. **D3D12 has no app-side pipeline cache** (`pipeline_cache_create` returns
    false; only the driver's DXCache). Later candidate: ID3D12PipelineLibrary.
+   Open.
 8. Forward Mobile: 10 variants per group, lightmap always included; lower
-   priority (desktop fork).
+   priority (desktop fork). Open.
 
 ## Measurements
 

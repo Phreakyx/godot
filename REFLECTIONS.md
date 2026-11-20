@@ -4,8 +4,7 @@ Working notes and documentation for the reflection system of this build:
 budgeted `ReflectionProbe` updates, DDGI-normalized probe reflections,
 on-demand reflection atlas memory, and planar reflections
 (`PlanarReflector3D`). Read it before changing any of them, and update the
-step table and the findings log as you go. Work happens on the
-`dev-ddgi-reflections` branch.
+step table and the findings log as you go. Work happens on `dev`.
 
 Both systems are GPU-vendor independent (rasterization and compute only, no
 ray tracing, no CUDA/OptiX) and work without DDGI. With DDGI, probe

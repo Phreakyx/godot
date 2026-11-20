@@ -3,7 +3,7 @@
 Working notes and documentation for the DDGI global illumination option of
 this build. This file is the shared memory for humans and agents working on
 it: read it before starting, and update the step table and the findings log
-as you go. Work happens on the `dev-ddgi` branch.
+as you go. Work happens on `dev`.
 
 ## What it is
 

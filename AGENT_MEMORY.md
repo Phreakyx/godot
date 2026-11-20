@@ -12,13 +12,12 @@ Read with: [AGENTS.md](AGENTS.md) (entry point), [CUSTOM_BUILD.md](CUSTOM_BUILD.
 
 ## Working rules
 
-- **Branches.** New work goes on `dev` first. `nvidia-pt-dlss` (published as
-  `nvidia-dlss-physx`) only gets tested work: build plus smoke tests passing,
-  and the maintainer's OK. After publishing, fast-forward `dev` and push both.
-- **Path tracer work goes on `dev-pt`**, so `dev` stays clean. Merge it into
-  `dev` only when a step is finished and tested. Merge `dev` into `dev-pt`
-  after every sync.
-- **Never push to `origin`** (NVIDIA-RTX). Publish only through the `fork` remote.
+- **Branches.** New work goes on `dev`, the only maintained line. Publish with
+  `git push origin dev` (origin is github.com/Phreakyx/godot), and only after
+  the push gate: an MSVC editor build and `devtools/test/smoke.ps1` pass. The
+  release branch is chosen at the first release.
+- **Never push to the source remotes** (`upstream`, `nvidia`, `physx`,
+  `diginaat`); their push URL is `DISABLED`. See CUSTOM_BUILD.md, "Sources".
 - **The fork is public.** Before every push, check tracked files for private
   paths and private project names (`git grep`).
 - **One validated part per commit.** Finish a part, update its `.md`/KB records,
@@ -45,7 +44,8 @@ Read with: [AGENTS.md](AGENTS.md) (entry point), [CUSTOM_BUILD.md](CUSTOM_BUILD.
   PhysX/Blast/Flow SDK paths into `custom.py` (untracked), which SCons reads,
   so builds need no SDK arguments. Put new helper scripts there, not in a
   scratch folder, and keep them free of machine-specific paths.
-- `scons` isn't on PATH on the maintainer's machine; use `python -m SCons`.
+- `scons` isn't on PATH on the maintainer's machine. `devtools/build/build.ps1`
+  finds the Python that has SCons; a raw `python -m SCons` needs that Python.
   Pass `-j10` (the maintainer's preferred job count).
 - Stay on one flag set between builds (for example always `production=yes`).
   Switching flags recompiles nearly everything.
@@ -71,14 +71,15 @@ Read with: [AGENTS.md](AGENTS.md) (entry point), [CUSTOM_BUILD.md](CUSTOM_BUILD.
   camera culling cannot decide shadow visibility.
 - CPU sentinel counts must be resolved before unsigned indirect-command uploads.
   Test with real RD backends; `--headless` does not exercise native GPU drawing.
-- Experimental native culling: `rendering/geometry/multimesh_gpu_culling/enabled`
-  defaults off. Read eligibility/fallbacks in the integration architecture before
+- Native MultiMesh culling: `rendering/geometry/multimesh_gpu_culling/enabled`
+  defaults on (`GLOBAL_DEF` in `render_forward_clustered.cpp`). Read eligibility/fallbacks in the integration architecture before
   extending it; never let custom vertex transforms escape conservative bounds.
-- Resident CLOD: `rendering/geometry/cluster_lod/enabled` defaults off; ArrayMesh
+- Resident CLOD: `rendering/geometry/cluster_lod/enabled` defaults on
+  (`GLOBAL_DEF(..., true)` in `render_forward_clustered.cpp`); ArrayMesh
   `generate_cluster_lods()` attaches derived data. Read `knowledge/VIRTUAL_GEOMETRY.md`
   and KB resident-raster limits before extending. Multi-pass/overlay eligibility
   must be atomic across a source surface; never mix coarse and source passes.
-- Current-frame CLOD HZB defaults off (`cluster_lod/occlusion_enabled`): complete
+- Current-frame CLOD HZB defaults on (`cluster_lod/occlusion_enabled`, `true`): complete
   depth first, reverse-Z farthest/min reduction, then opaque command rejection.
   SSR's max-depth pyramid is not interchangeable. Never cull uncertain clipped
   or large-coordinate bounds, and guard custom fragment depth in occluders too.
@@ -151,9 +152,10 @@ Read with: [AGENTS.md](AGENTS.md) (entry point), [CUSTOM_BUILD.md](CUSTOM_BUILD.
   `flow_sdk=`. The packaging script refuses to run without their DLLs.
   The packaging script's default is the public package.
 - Naming (details in CUSTOM_BUILD.md, "Versioning"): own version in
-  `CUSTOM_VERSION`; tag `godot<base>-diginaat-physx-v<own>` (before 0.9.0:
-  `-nvidia-rt-dlss-physx-`); title `Godot Diginaat + PhysX (Godot <base>) v<own>`;
-  zip `godot_<major>.<minor>-diginaat-physx_v<own>-editor_windows_amd64[_mono].zip`.
+  `CUSTOM_VERSION`; tag `godot<base>-physx-pt-v<own>` (0.9.0 to 0.10.3:
+  `-diginaat-physx-`, before 0.9.0: `-nvidia-rt-dlss-physx-`); title
+  `Godot Community Edition + PhysX + PT (Godot <base>) v<own>`;
+  zip `godot_<major>.<minor>-physx-pt_v<own>-editor_windows_amd64[_mono].zip`.
   Git tags can't contain spaces, `+` or brackets.
 - Editor zips keep the files at the zip root, with no wrapping folder. Never
   zip with `tar -C <dir> .`: its `./` prefix shows up as a folder named `.`
@@ -214,7 +216,7 @@ Read with: [AGENTS.md](AGENTS.md) (entry point), [CUSTOM_BUILD.md](CUSTOM_BUILD.
 
 ## DDGI
 
-- Notes, test project and findings: DDGI.md. Work on `dev-ddgi`.
+- Notes, test project and findings: DDGI.md. Work on `dev`.
 - Measure flicker before guessing: the test project's `--measure` with
   `--stdmap` (where) and `--trace_px` (how it moves over time). The probe
   RNG is deterministic, so a spike repeats at the same frame in every run.
@@ -271,8 +273,7 @@ Read with: [AGENTS.md](AGENTS.md) (entry point), [CUSTOM_BUILD.md](CUSTOM_BUILD.
 
 ## Reflections
 
-- Notes, test view (`reflect`) and findings: REFLECTIONS.md. Work on
-  `dev-ddgi-reflections`.
+- Notes, test view (`reflect`) and findings: REFLECTIONS.md. Work on `dev`.
 - Planar reflections are pixel-projected (two compute passes, no second
   scene render). Points within a reflector's thickness must be skipped in
   the projection pass: they mirror onto themselves with offset 0 and win

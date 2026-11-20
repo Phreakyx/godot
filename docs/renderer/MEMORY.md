@@ -16,7 +16,7 @@ PhysX, CLOD, weather) or the CPU fallback.
 
 | Item | Value |
 | --- | --- |
-| Branch | `dev-gpu-renderer` (from `dev` at `4bc2a22774`) |
+| Branch | `dev` (the former work branch `dev-gpu-renderer` was merged; it lives on only in Diginaat/godot) |
 | Phase | GPU path on game levels (2026-11-15, D038: commands only where a member can land, small shadow passes on the CPU list, one shadow cull per render; D039: commands cleared on the GPU, no per-view uploads); material parameter tables done (D036); 5.1 HZB occlusion done (D034); 6.1-6.3 shadow casters on the GPU path done; Phases 1 and 2 done |
 | Completed | Architecture audit, capability matrix, research notes, roadmap, many-instance bench, baseline (Vulkan, D3D12, safe/separate) |
 | Active task | None |
