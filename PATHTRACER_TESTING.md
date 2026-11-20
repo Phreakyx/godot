@@ -124,6 +124,16 @@ Other notes:
 
 Newest first. Note the date, the commit, the view and what you saw or changed.
 
+- 2026-11-20: NVIDIA `49a825dc52` groups N1 (crash handler, backtrace API) and
+  N2 (faster editor filesystem scan) ported on `dev` (`bdb3398d56`); neither
+  touches the path tracer, its other groups are deferred. Overview view,
+  `--pt=1` and `--pt=0`: noisy but complete, no black surfaces or missing
+  lights; smoke passes. Two of the first
+  three `--pt=1` shots after the build exited with `ERROR: Attempted to free
+  invalid ID` (`RenderingDevice::_free_internal`) after saving the screenshot;
+  then 0 of 6 on the same build and 0 of 6 on a control build with the pre-port
+  sources. Intermittent; the port touches no rendering code. Lead: an RID freed twice at
+  exit, like the 2026-10-08 BLAS case below. Not fixed yet.
 - 2026-11-05: Native raster MultiMesh frustum-culling integration changes shared
   Forward+ draw constants and bindings, not the ray tracer. Standard smoke tests
   pass on the `b23737c64e` working tree with integration changes: Vulkan PT room

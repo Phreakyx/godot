@@ -12,7 +12,7 @@
 * [Core template migration benchmarks](/project/core-template-benchmarks.md) - 24-case controlled A/B: the dropped migration, and the kept String-key byte hash (integer tables unchanged, String hits 0.55-0.62x)
 * [Where engine CPU time goes in core code](/project/core-cpu-profiles.md) - sampling profiles of five workloads: hash lookups 3-16%, scene instancing 21% in RID checks, locks and refcounts plus 14% heap; the callers' patterns cost more than container internals
 
-* [Sync to Godot 4.8-beta4 and PhysX module 1302f909ca](/project/fork-sync-2026-11.md) - the milestone's one sync: two conflicts combined, fork-owned core files reviewed, one PhysX master adaptation, tests 1497/1497 and smoke pass; NVIDIA inventoried separately
+* [Sync to Godot 4.8-beta4 and PhysX module 1302f909ca](/project/fork-sync-2026-11.md) - the milestone's one sync: two conflicts combined, fork-owned core files reviewed, one PhysX master adaptation, NVIDIA `49a825dc52` in part (N1, N2; the rest deferred); tests 1497/1497 and smoke pass
 * [Project overview](/project/overview.md) - what this fork is, its sources, branches and release flow
 * [Modern compact editor theme](/project/modern-compact-editor-theme.md) - neutral charcoal native theme with compact spacing and restrained interaction accents
 * [Native indirect foundation](/project/native-indirect-foundation.md) - existing GPU submission seam, sentinel defect and per-view culling constraints
@@ -29,5 +29,5 @@
 * [GPU voxel levels for the far field](/project/far-field-gpu-voxel-levels.md) - per-brick level selection in compute, indirect MultiMesh discs, exact CPU mirror
 * [Far directional cascades kept between frames](/project/directional-cascade-cache.md) - far cascades every 2nd/4th frame, staggered, reused while the slice fits the cached region; -1.1 to -1.5 ms in the valley
 * [Coarser mesh LODs for shadow casters](/project/shadow-lod-scale.md) - shadow passes use a 4x LOD threshold; -0.4 ms in the valley; grass draw order and frame timestamps tried without effect
-* [Unit-test baseline per stage](/project/unit-test-baseline.md) - full `--test` result of the tests build at each groundwork stage; pre-sync `143b8865d6`: 1482 cases, 0 failed, 3 skipped on purpose
+* [Unit-test baseline per stage](/project/unit-test-baseline.md) - full `--test` result of the tests build at each groundwork stage; pre-sync `143b8865d6`: 1482 cases, post-sync and post-NVIDIA: 1497, 0 failed, 3 skipped on purpose
 * [World wind and weather core](/project/world-wind.md) - WindServer gusts shared by foliage, cloth and bodies; Weather node, profiles, effects, borrowed scene values; weather sky and drifting clouds; rain, occlusion map, wet surfaces; ground haze and mist motes; lightning; synthesized sound; local wind zones

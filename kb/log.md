@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-11-20 (NVIDIA part of the sync)
+
+* **Changed**: [sync to Godot 4.8-beta4](/project/fork-sync-2026-11.md)
+  has an NVIDIA section: `49a825dc52` is a force-push on the same base;
+  N1 (crash handler, backtrace API, `c940f8c0ba`) and N2 (faster editor
+  filesystem scan, `bdb3398d56`) ported as own commits, N3 and N4
+  skipped, N5-N17 deferred.
+* **Changed**: [unit-test baseline](/project/unit-test-baseline.md) has
+  the post-NVIDIA row: 1497 cases, 0 failed, 3 skipped. Smoke passes.
+* **Added**: [a version name change didn't reach the exe after an
+  incremental build](/mistakes/version-name-incremental-build.md).
+* **Changed**: `CUSTOM_BUILD.md` sync state log (NVIDIA cell of
+  2026-11-19), `PATHTRACER_TESTING.md` findings log.
+
 ## 2026-11-20 (sync to Godot 4.8-beta4)
 
 * **Added**: [sync to Godot 4.8-beta4 and PhysX module 1302f909ca](/project/fork-sync-2026-11.md):

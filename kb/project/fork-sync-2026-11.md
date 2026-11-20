@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Sync to Godot 4.8-beta4 and PhysX module 1302f909ca (2026-11)
-description: The one sync of the core-performance milestone; upstream 4.8-beta4 merged with two combined conflicts, PhysX module updated by a 3-way patch with one master adaptation, tests 1497/1497 and smoke pass; NVIDIA left for its own inventory.
+description: The one sync of the core-performance milestone; upstream 4.8-beta4 merged with two combined conflicts, PhysX module updated by a 3-way patch with one master adaptation, NVIDIA 49a825dc52 ported in part (crash handler, filesystem scan; the rest deferred), tests 1497/1497 and smoke pass.
 tags: [sync, upstream, physx, testing, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:45:00Z }
@@ -13,7 +13,7 @@ generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:45:00Z }
 | --- | --- | --- | --- |
 | Godot upstream | `b47a795aa5` | `b070e63b16` (4.8-beta4, godot-builds tag `4.8-beta4`, "Built from commit" of that release; 247 commits) | `--no-ff` merge `d08c7580f4`, second parent `b070e63b16` |
 | PhysX module (uno1982/godot `feature/physx5-module`) | `847b2ca459` | `1302f909ca` (15 module commits, 19 files) | 3-way patch, commit `2b7e93d07e` |
-| NVIDIA-RTX/godot `nvidia-pt-dlss` | `135dff3887` | nothing yet | head `49a825dc52` (force-pushed series) is inventoried separately before any port |
+| NVIDIA-RTX/godot `nvidia-pt-dlss` | `135dff3887` | `49a825dc52`, groups N1 and N2 only | two `NVIDIA:` commits, `c940f8c0ba` and `bdb3398d56` (see [NVIDIA](#nvidia)) |
 | diginaat (former maintainer's fork) | | nothing | `nvidia-dlss-physx` head `13e860dfbe` is two README commits past this tree; `dev` is `143b8865d6`, already in this tree |
 
 4.8-beta4 was the newest 4.8 snapshot on godot-builds when the sync ran
@@ -109,6 +109,51 @@ PhysX, Blast and Flow SDKs were not rebuilt.
   hash-buffer file) pass. See the
   [unit-test baseline](/project/unit-test-baseline.md).
 
+# NVIDIA
+
+NVIDIA force-pushed its branch: `49a825dc52` rewrites the same three
+squashed commits (`Miscellaneous`, `Dependencies`, `Pathtracer + DLSS`)
+on the same upstream base as `135dff3887` (merge base `c3e6b2c093` for
+old head, new head and upstream alike). The tree diff
+`135dff3887..49a825dc52` is therefore exactly NVIDIA's new work: 210
+files, +28,322/-3,744 lines. It is not merged; chosen groups are ported
+from that diff as their own commits (`git diff 135dff3887 49a825dc52 --
+<paths>`, `git apply --3way`, with `--exclude=core/templates/rid_owner.h`
+as a guard).
+
+The diff was sorted into 17 feature groups. A trial apply on `dev` left
+57 files conflicted, 30 of them (107 hunks) in the path tracer core
+rewrite, which the fork's own path tracer, DDGI and GPU-driven Forward+
+work also rewrote.
+
+| Group | What | Outcome |
+| --- | --- | --- |
+| N1 | Windows crash handler (abort, pure-call, invalid-parameter hooks, stack overflow reserve) and `backtrace_capture()`/`backtrace_format()` | Ported, `c940f8c0ba`; 4 files, no conflict |
+| N2 | Faster editor filesystem scan: `DirAccess::current_modified_time()` read during enumeration, `get_next()` non-virtual over `_get_next_entry()`, one listing of `.godot/imported` | Ported, `bdb3398d56`; 12 files, no conflict, all four `DirAccess` subclasses in one commit |
+| N3 | Lock-free `RID_Alloc::owns()` on every CPU | Skipped: duplicates D012, and would make the non-x86-64 fallback lock-free, which upstream reverted (godotengine/godot#114900); it merges silently, hence the exclude guard |
+| N4 | `.gitignore` ignores every hidden root folder | Skipped: would ignore new files under `.github/` |
+| N5-N17 | DLSS/Reflex changes, `Camera3D` interpolated getters, shader render modes, Label3D glyph hulls, volumetric fog sampling (`thirdparty/fast_noise`, BSD-3-Clause), path tracer fog, decals, materials, dynamic geometry, RenderingDevice changes, shadow renderers, RT validation, the path tracer core rewrite | Deferred to their own plan series after the Phase 2 baselines, built as C++20 |
+
+The range `135dff3887..49a825dc52` stays partly pending: the next NVIDIA
+intake starts from the same diff, minus N1 and N2.
+
+Checks: both groups applied with 0 conflicted files and now equal
+NVIDIA's files where `dev` had no other change. No third-party code came
+in. `rendering_shader_container.h` is not touched, so `CONTAINER_VERSION`
+stays 6. `ray_query_features` appears 10 times in
+`drivers/vulkan/rendering_device_driver_vulkan.cpp` before and after (no
+Vulkan file is touched). The `core/` files of both groups are rows in
+CUSTOM_BUILD.md's "Diverged core files" table (owner NVIDIA).
+
+After the port: the editor builds with no errors (MSVC 14.51,
+`production=yes`); smoke passes after each group (PhysX game and editor,
+path tracer room on Vulkan, DDGI interior); `--test` gives 1497 cases,
+0 failed, 3 skipped, the same as post-sync (see the
+[unit-test baseline](/project/unit-test-baseline.md)). The path tracer
+test scene renders in both modes; an intermittent exit error seen there
+is in [PATHTRACER_TESTING.md](../../PATHTRACER_TESTING.md) (findings
+log, 2026-11-20).
+
 # Covers
 
 * The merge `d08c7580f4` (whole upstream delta), in particular
@@ -116,4 +161,6 @@ PhysX, Blast and Flow SDKs were not rebuilt.
   `core/templates/rid_owner.h`, `core/templates/hashfuncs.cpp`,
   `core/math/dynamic_bvh.h`, `core/os/memory.h`, `SConstruct`
 * `modules/godot_physx/` (commit `2b7e93d07e`)
-* `CUSTOM_BUILD.md` sync state log
+* `CUSTOM_BUILD.md` sync state log and "Diverged core files"
+* `core/error/error_backtrace.*`, `platform/windows/crash_handler_windows*` (`c940f8c0ba`)
+* `core/io/dir_access.*`, `core/io/file_access_pack.*`, the `DirAccess` subclasses in `drivers/` and `platform/android/`, `editor/file_system/editor_file_system.*` (`bdb3398d56`)

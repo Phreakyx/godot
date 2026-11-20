@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482 with 3 skipped.
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync and post-NVIDIA 1497/1497, 3 skipped each.
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -37,6 +37,7 @@ off as old. No full `--test` run of this fork had been recorded before.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | pre-sync | `143b8865d6` | 1482 | 1482 | 0 | 3 | 490282 passed, 0 failed | `SUCCESS!` |
 | post-sync | `2b7e93d07e` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
+| post-NVIDIA | `bdb3398d56` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -52,6 +53,7 @@ Doctest summary of the pre-sync run, verbatim:
 | --- | --- | --- | --- | --- |
 | pre-sync | none | | | |
 | post-sync | none | | | |
+| post-NVIDIA | none | | | |
 
 The three skipped cases are skipped on purpose in the source, not by this
 build: `Validate tests / Pending tests are skipped`
@@ -71,6 +73,11 @@ additions to `tests/core/io/test_scenes.cpp` and
 `tests/scene/test_button.cpp`). No case failed; the same three are
 skipped, and the same three `ERROR: Drawing is only allowed ...` prints
 appear. Same build command and machine, about 20 s wall time.
+
+The post-NVIDIA tree (NVIDIA groups N1 and N2, see
+[the sync](/project/fork-sync-2026-11.md)) adds no test case and changes
+no result: same counts, same three skipped, same three `ERROR: Drawing is
+only allowed ...` prints, about 21 s wall time.
 
 # Smoke on the same tree
 
