@@ -1,5 +1,35 @@
 # Update log
 
+## 2026-11-20 (benchmark protocol and three-binary compare)
+
+* **Added**: [benchmark protocol](/tooling/benchmark-protocol.md), written
+  before any floor or share is measured, linked from `CUSTOM_BUILD.md`
+  "Test"; runner README `devtools/bench/README.md`.
+* **Changed**: `bench.py compare` runs the previous commit (built in a git
+  worktree under `devtools/out/bench/wt/` with `build.ps1 -SourceRoot`), the
+  candidate (`-Variant`/`-Defines`) and the same-source control, alternating
+  the order every other round, and judges the candidate against the control
+  only. `bench.py check` and every series read the power plan by GUID,
+  parking on AC and DC, idle compilers, bench-CPU load and Game Mode, hold an
+  OS file lock, check `WorkerThreadPool: 14 threads` per game binary, time
+  the cold round and plan the rounds within the 30-minute budget, record the
+  effective clock per round and write the full run metadata. `aa
+  --write-floors` stores floors with their machine state; `compare` prints
+  `RE-MEASURE-AA` when the compiler, BIOS, microcode, OS build or n changed.
+  `build.ps1 -Bench -Mono` now generates the glue with the bench .NET editor.
+* **Finding**: with everyday desktop apps open, the bench CPUs (P-cores 1-7)
+  are 15-24% busy (mean `% Processor Utility`), with two P-cores at 40-80%;
+  the E-cores stay near idle. The runner refuses above 10%, so floors and
+  shares need those apps closed; the smoke runs of this step used
+  `--max-load 50`.
+* **Measured** (i9-14900K, MSVC 14.51, editor, n=5, smoke only):
+  `scene:instance:10000` previous 8.53 ms, candidate
+  (`FORK_BACKEND_SELFTEST=1`) 8.55 ms, control 8.49 ms, candidate +0.72%
+  against the control and previous -0.22%; `scene:churn:10000` A/A floor
+  1.44% (frame) and 0.35% (peak working set), then candidate +0.71%:
+  WITHIN-NOISE. Effective clock of the bench CPUs 5.0-5.5 GHz, no round
+  flagged.
+
 ## 2026-11-20 (benchmark runner, first slice)
 
 * **Changed**: tooling only, no concept yet (the protocol page comes with

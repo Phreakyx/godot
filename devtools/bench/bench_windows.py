@@ -1,12 +1,20 @@
-"""Windows parts of devtools/bench/bench.py: P-core mask, pinned launch, OS counters, power plan, build.
+"""Windows parts of devtools/bench/bench.py: P-core mask, pinned launch, OS counters, machine checks, build.
 
 Everything here only reads system settings; the runner changes nothing but its own affinity.
 """
 
+import csv
 import ctypes
 import ctypes.wintypes as w
+import io
+import msvcrt
+import os
 import re
+import statistics
 import subprocess
+import threading
+import time
+import winreg
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +71,22 @@ def p_core_mask():
     return mask
 
 
+def mask_cpus(mask):
+    return [cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1]
+
+
+def set_home_affinity(bench_mask):
+    """Keep the runner and its helpers (typeperf, powershell, git) off the measured CPUs; run_pinned returns here."""
+    me = _k.GetCurrentProcess()
+    own, system = ctypes.c_size_t(), ctypes.c_size_t()
+    if not _k.GetProcessAffinityMask(me, ctypes.byref(own), ctypes.byref(system)):
+        raise OSError(ctypes.get_last_error(), "GetProcessAffinityMask failed")
+    home = system.value & ~bench_mask
+    if not home or not _k.SetProcessAffinityMask(me, home):
+        raise OSError(ctypes.get_last_error(), f"SetProcessAffinityMask {hex(home)} failed")
+    return home
+
+
 def run_pinned(args, cwd, mask, timeout):
     """Start args with the runner's affinity set to mask (inherited at creation), then read the OS counters."""
     me = _k.GetCurrentProcess()
@@ -77,7 +101,7 @@ def run_pinned(args, cwd, mask, timeout):
             errors="replace",
         )
     finally:
-        _k.SetProcessAffinityMask(me, previous.value)
+        _k.SetProcessAffinityMask(me, previous.value)  # back to the home mask
     # Private Popen handle: the only place that touches it, so a Python change breaks one function.
     handle = w.HANDLE(int(proc._handle))
     child, _ = ctypes.c_size_t(), ctypes.c_size_t()
@@ -111,7 +135,7 @@ def _powercfg(*args):
 
 
 def check_power_plan():
-    """Read the active plan and core parking; raise with the fix commands on a mismatch (never set anything)."""
+    """Read the active plan and core parking (AC and DC); raise with the fix commands on a mismatch (never set)."""
     found = {"scheme": None}
     problems = []
     match = re.search(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", _powercfg("/getactivescheme"))
@@ -120,12 +144,18 @@ def check_power_plan():
         problems.append(f"active power plan is {found['scheme']}, not {PLAN_GUID}")
     for setting in PARKING_SETTINGS:
         text = _powercfg("/qh", "SCHEME_CURRENT", "SUB_PROCESSOR", setting)
-        ac = re.search(r"Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)", text)
-        found[setting] = int(ac.group(1), 16) if ac else None
-        if found[setting] != 100:
-            problems.append(f"{setting} (AC) is {found[setting]}, not 100: core parking is on")
+        for power in ("AC", "DC"):
+            value = re.search(rf"Current {power} Power Setting Index:\s*0x([0-9a-fA-F]+)", text)
+            key = f"{setting}_{power}"
+            found[key] = int(value.group(1), 16) if value else None
+            if found[key] != 100:
+                problems.append(f"{setting} ({power}) is {found[key]}, not 100: core parking is on")
     if problems:
-        fix = [f"powercfg /setacvalueindex {PLAN_GUID} SUB_PROCESSOR {s} 100" for s in PARKING_SETTINGS]
+        fix = [
+            f"powercfg /set{power}valueindex {PLAN_GUID} SUB_PROCESSOR {setting} 100"
+            for setting in PARKING_SETTINGS
+            for power in ("ac", "dc")
+        ]
         fix.append(f"powercfg /setactive {PLAN_GUID}")
         raise RuntimeError(
             "Machine not in benchmark state: " + "; ".join(problems)
@@ -147,18 +177,147 @@ def ensure_idle():
         raise RuntimeError(f"Compiler or SCons still running ({', '.join(active.split())}); stop it and run again.")
 
 
-def build_args(target, variant):
+def typeperf_values(text, columns):
+    """typeperf CSV samples as float rows. Only values are kept: the header holds the host name (Pitfall 7)."""
+    rows = []
+    for row in csv.reader(io.StringIO(text)):
+        if len(row) != columns + 1:
+            continue  # blank lines, "Exiting, please wait..." and other status lines
+        try:
+            rows.append([float(value) for value in row[1:]])
+        except ValueError:
+            continue  # the header with the counter paths, or a blank first sample of a rate counter
+    return rows
+
+
+def bench_cpu_load(mask):
+    """Mean % Processor Utility of the bench CPUs over 3 seconds."""
+    counters = [rf"\Processor Information(0,{cpu})\% Processor Utility" for cpu in mask_cpus(mask)]
+    out = subprocess.run(["typeperf", *counters, "-sc", "3"], capture_output=True, text=True, errors="replace").stdout
+    rows = typeperf_values(out, len(counters))
+    if not rows:
+        raise RuntimeError("typeperf returned no samples")
+    return statistics.mean(value for row in rows for value in row)
+
+
+class ClockSampler:
+    """Effective clock of the bench CPUs during a round: mean % Processor Performance x Processor Frequency.
+
+    typeperf samples once a second, so a round shorter than that gets the one sample that ends after it.
+    """
+
+    def __init__(self, mask):
+        counters = [rf"\Processor Information(0,{cpu})\% Processor Performance" for cpu in mask_cpus(mask)]
+        counters.append(r"\Processor Information(_Total)\Processor Frequency")
+        self.columns = len(counters)
+        self.proc = subprocess.Popen(
+            ["typeperf", *counters, "-si", "1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            errors="replace",
+        )
+        self.lines = []
+        self.reader = threading.Thread(target=lambda: self.lines.extend(self.proc.stdout), daemon=True)
+        self.reader.start()
+
+    def stop(self):
+        deadline = time.monotonic() + 3
+        while not typeperf_values("".join(self.lines), self.columns) and time.monotonic() < deadline:
+            time.sleep(0.05)  # wait for the first sample of a short round
+        self.proc.terminate()  # our own child; typeperf writes each sample as it takes it
+        self.proc.wait()
+        self.reader.join(timeout=5)
+        rows = typeperf_values("".join(self.lines), self.columns)
+        if not rows:
+            raise RuntimeError("no clock samples")
+        return statistics.mean(statistics.mean(row[:-1]) / 100 * row[-1] for row in rows)
+
+
+def _reg(root, path, name):
+    with winreg.OpenKey(root, path) as key:
+        return winreg.QueryValueEx(key, name)[0]
+
+
+def game_mode():
+    # AutoGameModeEnabled is absent until Game Mode is toggled once; the probe then reports unavailable.
+    return _reg(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\GameBar", "AutoGameModeEnabled")
+
+
+_CPU_KEY = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+
+
+def cpu_name():
+    return _reg(winreg.HKEY_LOCAL_MACHINE, _CPU_KEY, "ProcessorNameString").strip()
+
+
+def microcode():
+    raw = _reg(winreg.HKEY_LOCAL_MACHINE, _CPU_KEY, "Update Revision")
+    value = int.from_bytes(raw, "little")
+    return hex(value >> 32 if len(raw) == 8 else value)  # 8 bytes: the revision is the high DWORD
+
+
+def bios():
+    return _reg(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\BIOS", "BIOSVersion").strip()
+
+
+def os_build():
+    key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+    return f"{_reg(winreg.HKEY_LOCAL_MACHINE, key, 'CurrentBuild')}.{_reg(winreg.HKEY_LOCAL_MACHINE, key, 'UBR')}"
+
+
+def _vswhere(prop):
+    exe = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
+    command = [str(exe), "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"]
+    return subprocess.run(command + ["-property", prop], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def msvc_toolset():
+    # The newest toolset of the newest Visual Studio: the one SCons picks without MSVC_VERSION.
+    tools = Path(_vswhere("installationPath")) / "VC/Tools/MSVC"
+    return max((d.name for d in tools.iterdir()), key=lambda v: [int(x) for x in v.split(".")])
+
+
+def vs_version():
+    return _vswhere("catalog_productDisplayVersion")
+
+
+def acquire_lock(path):
+    """One runner at a time. The OS drops the lock when the process dies, so a crash leaves no stale lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    try:
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        raise RuntimeError("Another bench.py is running (devtools/out/bench/.lock); wait for it to end.") from None
+    return handle
+
+
+def build_args(target, variant, defines=None, source_root=None):
     args = ["-Bench", "-Target", target]
-    return args + ["-Variant", variant] if variant else args
+    if variant:
+        args += ["-Variant", variant]
+    if defines:
+        args += ["-Defines", defines]
+    if source_root:
+        args += ["-SourceRoot", str(source_root)]
+    return args
 
 
-def build(target, variant):
+def scons_args(target, variant, defines=None):
+    """The SCons arguments of build.ps1 -Bench (kept in step with Invoke-Scons there), for meta.json."""
+    suffix = ".".join(part for part in ("bench", variant) if part)
+    args = [f"target={target}", "production=yes", "debug_symbols=yes", "disable_path_overrides=no"]
+    args = ["platform=windows"] + args + [f"extra_suffix={suffix}"]
+    return args + [f"cppdefines={defines}"] if defines else args
+
+
+def build(target, variant, defines=None, source_root=None):
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "devtools/build/build.ps1"]
-    result = subprocess.run(command + build_args(target, variant), cwd=ROOT)
+    result = subprocess.run(command + build_args(target, variant, defines, source_root), cwd=ROOT)
     if result.returncode:
-        raise RuntimeError(f"Build failed: build.ps1 {' '.join(build_args(target, variant))}")
+        shown = build_args(target, variant, defines, "<worktree>" if source_root else None)
+        raise RuntimeError(f"Build failed: build.ps1 {' '.join(shown)}")
 
 
-def engine_exe(target, suffix):
+def engine_exe(target, suffix, root=ROOT):
     # The real exe: the .console.exe wrapper is another process with its own PID and memory.
-    return ROOT / "bin" / f"godot.windows.{target}.x86_64.{suffix}.exe"
+    return Path(root) / "bin" / f"godot.windows.{target}.x86_64.{suffix}.exe"

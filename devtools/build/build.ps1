@@ -23,6 +23,9 @@
 #                     --script), extra_suffix bench[.<Variant>][.tests], so it never
 #                     rebuilds or replaces the daily binaries:
 #                     bin\godot.windows.<target>.x86_64.bench[.<Variant>].exe
+#   ... -SourceRoot <dir>
+#                     build another checkout (bench.py's git worktree of the previous
+#                     commit): SCons, custom.py, bin\ and the --version call all use <dir>
 #
 # Run it from PowerShell or cmd (from Git Bash: powershell.exe -File ...), and
 # close any editor running from bin\ first (the link fails with "Access is denied").
@@ -36,9 +39,11 @@ param(
 	[string]$Variant,
 	[string]$Defines,
 	[switch]$Dev,
-	[switch]$Bench
+	[switch]$Bench,
+	[string]$SourceRoot
 )
 . "$PSScriptRoot\..\common.ps1"
+if ($SourceRoot) { $RepoRoot = (Resolve-Path $SourceRoot).Path }
 if ($Defines -and -not $Variant) { throw "-Defines needs -Variant <name>, so the candidate gets its own objects and binary and the control stays untouched." }
 Set-Location $RepoRoot
 # Git Bash sets these; platform/windows/detect.py then skips the D3D12 build_deps folder.
@@ -52,6 +57,8 @@ if (-not (Test-Path (Join-Path $RepoRoot "custom.py"))) {
 	Write-Host "No custom.py: building without PhysX, Blast and Flow. Run devtools\setup\setup_dev_windows.ps1 to set them up." -ForegroundColor Yellow
 }
 if ($Jobs -le 0) { $Jobs = [Environment]::ProcessorCount }
+# extra_suffix without ".tests": the binary name part Get-Editor takes as -Variant.
+$binVariant = (@($(if ($Bench) { "bench" }), $Variant) | Where-Object { $_ }) -join "."
 
 function Invoke-Scons([string]$SconsTarget, [bool]$WithMono) {
 	$sconsArgs = @("-m", "SCons", "-j$Jobs", "platform=windows", "target=$SconsTarget")
@@ -75,7 +82,7 @@ function Invoke-Scons([string]$SconsTarget, [bool]$WithMono) {
 
 function Build-MonoAssemblies {
 	Write-Host "== C# glue and assemblies" -ForegroundColor Cyan
-	& (Get-Editor -Mono -Tests:$Tests -Variant $Variant -Dev:$Dev) --headless --generate-mono-glue modules\mono\glue
+	& (Get-Editor -Mono -Tests:$Tests -Variant $binVariant -Dev:$Dev) --headless --generate-mono-glue modules\mono\glue
 	if ($LASTEXITCODE -ne 0) { throw "Generating the C# glue failed." }
 	& $pythonExe @pythonArgs modules/mono/build_scripts/build_assemblies.py --godot-output-dir=./bin --godot-platform=windows
 	if ($LASTEXITCODE -ne 0) { throw "Building the C# assemblies failed." }
@@ -103,7 +110,6 @@ switch ($Target) {
 		Build-MonoAssemblies
 	}
 }
-$binVariant = (@($(if ($Bench) { "bench" }), $Variant) | Where-Object { $_ }) -join "."
 if ($Target -eq "template_release") {
 	# Same name order as Get-Editor: target, ".dev", arch, extra_suffix, ".mono".
 	$built = Join-Path $RepoRoot "bin\godot.windows.template_release$(if ($Dev) { '.dev' }).x86_64$(if ($binVariant) { ".$binVariant" })$(if ($Tests) { '.tests' })$(if ($Mono) { '.mono' }).console.exe"

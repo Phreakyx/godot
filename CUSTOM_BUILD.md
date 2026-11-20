@@ -615,6 +615,13 @@ to the control (`build.ps1 -Tests`). `[Fork][Backends]` prints the macro values
 each binary was built with. Never interrupt a variant build: variants share the
 generated headers.
 
+Performance is judged with `devtools/bench/bench.py`: `check` reads the machine
+state, `aa` measures the A/A noise floors, and `compare` runs the previous
+build, the candidate and its same-source control pinned to P-cores 1-7 and
+prints a verdict against the control. The rules, the machine checks and what
+every run records are in
+[kb/tooling/benchmark-protocol.md](kb/tooling/benchmark-protocol.md).
+
 Linux: `devtools/test/smoke_linux.sh` runs the same pass rule against every
 `bin/godot.linuxbsd.editor.x86_64*` editor (GCC and Clang): the editor and a
 game start on Vulkan and PhysX (CPU) initializes. See "Build (Linux)".
