@@ -1,0 +1,5 @@
+GDTEST_OK
+Erase current key: visited ["a"], left { "b": 2, "c": 3 }
+Erase a not yet visited key: visited ["a", "c"], left { "a": 1, "c": 3 }
+Insert a key: visited ["a", "b", "c", "d"], left { "a": 1, "b": 2, "c": 3, "d": 4 }
+String and StringName key: size 1, value 2, key is String true

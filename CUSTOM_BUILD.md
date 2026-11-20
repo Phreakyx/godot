@@ -336,6 +336,19 @@ straight line otherwise.
     today's HashMap, AHashMap, HashSet, RBMap, RBSet and List behavior; an
     upstream change that breaks one needs a look before the pin is updated. See
     [kb/project/container-contracts.md](kb/project/container-contracts.md).
+  - Layout asserts for the C# glue: `static_assert`s on the CowData header
+    offsets in `core/templates/cowdata.h` (outside any `#ifdef`, so editor and
+    templates check them) and on the leading fields of `ArrayPrivate`
+    (`core/variant/array.cpp`) and `DictionaryPrivate`
+    (`core/variant/dictionary.cpp`). They mirror `InteropStructs.cs` and the
+    offset formula of `godotsharp_initialize_marshaling_information()` in
+    `modules/mono/glue/runtime_interop.cpp`, and compare formulas, never
+    literal offsets (`DATA_OFFSET` is 24 with MSVC and 32 with GCC). When
+    upstream changes the CowData header or these structs, update the C#
+    structs, the formula and the asserts together, and the release notes say
+    "new export templates required". `tests/fork/test_fork_layouts.cpp` reads
+    the same headers at run time. See
+    [kb/project/container-contracts.md](kb/project/container-contracts.md).
 
 ## Diverged core files
 
@@ -375,9 +388,12 @@ fork's change when upstream lands the same).
 | `core/object/ref_counted.h` | Fork | C++20: cross-type `Ref<T>` == / != (#100749) | Take upstream's when #100749 lands |
 | `core/os/spin_lock.h` | Fork | C++20: no pre-C++20 `ATOMIC_VAR_INIT` branch (#100749) | Take upstream's when #100749 lands |
 | `core/typedefs.h` | Fork | C++20: `static_assert(__cplusplus >= 202002L)` (#100749) | Take upstream's when #100749 lands |
+| `core/variant/array.cpp` | Fork | `static_assert`s on the `ArrayPrivate` fields C# reads (`InteropStructs.cs`) | Keep; same rule as `cowdata.h` |
+| `core/variant/dictionary.cpp` | Fork | `static_assert`s on the `DictionaryPrivate` fields C# reads (`InteropStructs.cs`) | Keep; same rule as `cowdata.h` |
 | `core/variant/variant.h` | Fork | C++20: templated `Variant` comparison operators (#100749) | Take upstream's when #100749 lands |
 | `core/math/dynamic_bvh.h` | Fork | SSE `Volume` layout and kernels on x86-64 single precision (`DYNAMIC_BVH_SSE`, D014) | Port upstream `Volume` changes into both the SSE and the scalar code |
 | `core/templates/a_hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
+| `core/templates/cowdata.h` | Fork | `static_assert`s pinning the header offsets to the C# formula (`runtime_interop.cpp`) | Keep; when upstream changes the header, update C#, the formula and the asserts together |
 | `core/templates/fork_backends.h` | Fork | New file: compile-time container backend switch (`FORK_BACKEND_*`, 0 = upstream) | Keep |
 | `core/templates/hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
 | `core/templates/hash_set.h` | Fork | One allocation per table (`_allocate_block()`, `_free_block()`, D013); byte hash for String keys | Port upstream allocation, resize and copy changes to the block layout |

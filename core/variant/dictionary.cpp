@@ -49,6 +49,14 @@ struct DictionaryPrivate {
 	Variant *typed_fallback = nullptr; // Allows a typed dictionary to return dummy values when attempting an invalid access.
 };
 
+// Fork: C# mirrors the leading fields (InteropStructs.cs DictionaryPrivate); see CUSTOM_BUILD.md.
+GODOT_GCC_WARNING_PUSH_AND_IGNORE("-Winvalid-offsetof")
+GODOT_CLANG_WARNING_PUSH_AND_IGNORE("-Winvalid-offsetof")
+static_assert(offsetof(DictionaryPrivate, refcount) == 0);
+static_assert(offsetof(DictionaryPrivate, read_only) == sizeof(void *));
+GODOT_CLANG_WARNING_POP
+GODOT_GCC_WARNING_POP
+
 Dictionary::ConstIterator Dictionary::begin() const {
 	return _p->variant_map.begin();
 }

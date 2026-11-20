@@ -53,6 +53,17 @@ struct ArrayPrivate {
 			array(p_init) {}
 };
 
+// Fork: C# mirrors the leading fields (InteropStructs.cs ArrayPrivate, VariantVector); see CUSTOM_BUILD.md.
+GODOT_GCC_WARNING_PUSH_AND_IGNORE("-Winvalid-offsetof")
+GODOT_CLANG_WARNING_PUSH_AND_IGNORE("-Winvalid-offsetof")
+static_assert(sizeof(SafeRefCount) == sizeof(uint32_t));
+static_assert(offsetof(ArrayPrivate, refcount) == 0);
+static_assert(sizeof(Vector<Variant>) == 2 * sizeof(void *));
+static_assert(offsetof(ArrayPrivate, array) == sizeof(void *));
+static_assert(offsetof(ArrayPrivate, read_only) == 3 * sizeof(void *));
+GODOT_CLANG_WARNING_POP
+GODOT_GCC_WARNING_POP
+
 void Array::_ref(const Array &p_from) const {
 	ArrayPrivate *_fp = p_from._p;
 

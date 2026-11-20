@@ -85,6 +85,13 @@ private:
 	static constexpr size_t SIZE_OFFSET = Memory::get_aligned_address(CAPACITY_OFFSET + sizeof(USize), alignof(USize));
 	static constexpr size_t DATA_OFFSET = Memory::get_aligned_address(SIZE_OFFSET + sizeof(USize), Memory::MAX_ALIGN);
 
+	// Fork: C# reads this header (InteropStructs.cs) with the offsets of godotsharp_initialize_marshaling_information() (runtime_interop.cpp), which repeats this formula with uint64_t; see CUSTOM_BUILD.md.
+	static_assert(sizeof(SafeNumeric<USize>) == sizeof(uint64_t));
+	static_assert(REF_COUNT_OFFSET == 0);
+	static_assert(CAPACITY_OFFSET == Memory::get_aligned_address(sizeof(SafeNumeric<uint64_t>), alignof(uint64_t)));
+	static_assert(SIZE_OFFSET == Memory::get_aligned_address(CAPACITY_OFFSET + sizeof(uint64_t), alignof(uint64_t)));
+	static_assert(DATA_OFFSET == Memory::get_aligned_address(SIZE_OFFSET + sizeof(uint64_t), Memory::MAX_ALIGN));
+
 	mutable T *_ptr = nullptr;
 
 	// internal helpers

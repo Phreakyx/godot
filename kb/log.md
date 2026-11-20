@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-11-20 (CowData, Variant containers and C# layouts)
+
+* **Changed**: [container contracts](/project/container-contracts.md) pin
+  CowData, String, Packed arrays, Array, Dictionary and StringName (24 new
+  `[Fork]` cases and a GDScript `for k in dict` mutation script), and the
+  layouts the C# glue reads: `static_assert`s in `core/templates/cowdata.h`,
+  `core/variant/array.cpp` and `core/variant/dictionary.cpp`, tied to the
+  `runtime_interop.cpp` formula, plus a run-time header read. No suspected
+  bug found.
+* **Changed**: [unit-test baseline](/project/unit-test-baseline.md) has the
+  contracts (MSVC) row: 1564 cases, 0 failed, 3 skipped.
+* **Changed**: `CUSTOM_BUILD.md` ("Fork-specific code to preserve" and
+  "Diverged core files" for the three layout-assert hunks).
+
 ## 2026-11-20 (container contracts)
 
 * **Added**: [container contracts and the backend switch](/project/container-contracts.md):

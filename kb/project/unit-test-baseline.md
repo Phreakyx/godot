@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, 3 skipped each.
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each.
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -39,6 +39,7 @@ off as old. No full `--test` run of this fork had been recorded before.
 | post-sync | `2b7e93d07e` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 | post-NVIDIA | `bdb3398d56` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 | C++20 (MSVC) | `dev` after `6f3534edba` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
+| contracts (MSVC) | `dev` after `c7dc4f6683` | 1564 | 1564 | 0 | 3 | 594947 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -56,6 +57,7 @@ Doctest summary of the pre-sync run, verbatim:
 | post-sync | none | | | |
 | post-NVIDIA | none | | | |
 | C++20 (MSVC) | none | | | |
+| contracts (MSVC) | none | | | |
 
 The three skipped cases are skipped on purpose in the source, not by this
 build: `Validate tests / Pending tests are skipped`
@@ -84,6 +86,14 @@ only allowed ...` prints, about 21 s wall time.
 The C++20 (MSVC) tree ([the C++20 switch](/project/cpp20-switch.md),
 `/std:c++20`, every C++ file recompiled) changes no result either: same
 counts, same three skipped, same three prints.
+
+The contracts (MSVC) tree ([container contracts](/project/container-contracts.md))
+adds 67 `[Fork]` cases in `tests/fork/` (43 for the hash, tree and list
+containers, 20 for CowData, String, Packed arrays, Array, Dictionary and
+StringName, 4 layout reads) and one GDScript script under
+`modules/gdscript/tests/scripts/runtime/fork/`. 1564 cases (1497 plus 67),
+0 failed, the same three skipped and the same three prints; no case that
+passed before fails. Log: `devtools/out/tests/contracts-msvc.log`.
 
 # Smoke on the same tree
 
