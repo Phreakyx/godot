@@ -243,6 +243,78 @@ class GdbenchCopy(unittest.TestCase):
             bench.gdbench_copy("extends Node\n", None)
 
 
+def micro_row(case, operations="100", checksum="7", live_bytes="64", allocs="2"):
+    return {"case": case, "ns_per_op": "1.5", "operations": operations, "live_bytes": live_bytes, "allocs": allocs,
+            "checksum": checksum}
+
+
+class Micro(unittest.TestCase):
+    def test_a_checksum_change_between_samples_of_one_side_is_non_repeatable(self):
+        refs = {"control": [micro_row("hashmap_i64_hit_16")]}
+        with self.assertRaisesRegex(RuntimeError, "Non-repeatable.*checksum"):
+            bench.micro_check(refs, "control", [micro_row("hashmap_i64_hit_16", checksum="8")], "control",
+                              bench.MICRO_PARITY)
+
+    def test_an_operations_change_between_samples_of_one_side_is_non_repeatable(self):
+        refs = {"control": [micro_row("list_i64_erase_4096")]}
+        with self.assertRaisesRegex(RuntimeError, "Non-repeatable.*operations"):
+            bench.micro_check(refs, "control", [micro_row("list_i64_erase_4096", operations="99")], "control",
+                              bench.MICRO_PARITY)
+
+    def test_identical_samples_pass_and_the_first_becomes_the_reference(self):
+        refs = {}
+        bench.micro_check(refs, "control", [micro_row("rbset_str_miss_0")], "control", bench.MICRO_PARITY)
+        bench.micro_check(refs, "control", [micro_row("rbset_str_miss_0")], "control", bench.MICRO_PARITY)
+        self.assertEqual(list(refs), ["control"])
+
+    def test_compare_sides_may_differ_in_memory_but_not_in_work(self):
+        refs = {"control": [micro_row("hashset_i64_insert_256")]}
+        cross = ("operations", "checksum")
+        bench.micro_check(refs, "candidate", [micro_row("hashset_i64_insert_256", live_bytes="32")], "control", cross)
+        with self.assertRaisesRegex(RuntimeError, "different workloads"):
+            bench.micro_check(refs, "previous", [micro_row("hashset_i64_insert_256", checksum="1")], "control", cross)
+
+    def test_hash_byte_checksums_are_not_compared_across_sides(self):
+        refs = {"control": [micro_row("hash_bytes_8")]}
+        bench.micro_check(refs, "candidate", [micro_row("hash_bytes_8", checksum="9")], "control", ("checksum",))
+
+    def test_case_names_parse_into_four_parts(self):
+        self.assertEqual(bench.parse_case("hashmap_ptr_churn_1048576"), ("hashmap", "ptr", "churn", 1048576))
+        self.assertEqual(bench.parse_case("ahashmap_i64_miss_0"), ("ahashmap", "i64", "miss", 0))
+        self.assertEqual(bench.parse_case("ctl_unordered_dense_i64_hit_32768"),
+                         ("ctl_unordered_dense", "i64", "hit", 32768))
+        self.assertEqual(bench.parse_case("vector_str_copy_32768"), ("vector", "str", "copy", 32768))
+
+    def test_non_matrix_cases_do_not_parse(self):
+        for name in ("string_copy_detach_16", "hash_bytes_8", "hashmap_int_hit_16", "hashmap_i64_sort_16"):
+            self.assertIsNone(bench.parse_case(name), name)
+
+    def test_ratio_to_the_fastest_matching_control(self):
+        medians = {"hashmap_i64_hit_256": 10.0, "ctl_std_map_i64_hit_256": 2.0, "ctl_boost_flat_i64_hit_256": 4.0,
+                   "ctl_std_umap_i64_hit_256": 5.0, "ctl_boost_flat_i64_hit_4096": 1.0, "rbmap_i64_hit_256": 3.0,
+                   "rbmap_ptr_hit_256": 3.0, "list_i64_push_256": 2.0}
+        self.assertEqual(bench.fastest_controls(medians), {
+            "hashmap_i64_hit_256": (2.5, "ctl_boost_flat_i64_hit_256"),  # std::map is ordered: not a hash control
+            "rbmap_i64_hit_256": (1.5, "ctl_std_map_i64_hit_256"),
+        })
+
+    def test_layout_sentinel_counts_control_rows_beyond_their_floor(self):
+        summary = [
+            {"workload": "micro/ctl_std_map_i64_hit_256", "n": 11, "median_diff": 0.05, "floor": 0.02},
+            {"workload": "micro/ctl_std_map_i64_hit_4096", "n": 11, "median_diff": -0.01, "floor": 0.02},
+            {"workload": "micro/ctl_std_map_i64_miss_4096", "n": 11, "median_diff": 0.5, "floor": ""},
+            {"workload": "micro/hashmap_i64_hit_256", "n": 11, "median_diff": 0.5, "floor": 0.02},
+        ]
+        self.assertEqual(bench.layout_sentinel(summary), (1, 2))
+
+    def test_harness_csv_parses_and_a_failed_process_raises(self):
+        output = "case," + ",".join(bench.MICRO_FIELDS) + "\nhashmap_i64_hit_16,2.5,1600,640,3,12\n"
+        result = {"output": output, "returncode": 0, "timed_out": False}
+        self.assertEqual(bench.micro_rows(result)[0]["allocs"], "3")
+        with self.assertRaisesRegex(RuntimeError, "BENCH_FAIL"):
+            bench.micro_rows({**result, "output": output + "BENCH_FAIL: correctness check\n", "returncode": 2})
+
+
 @unittest.skipUnless(bench.osb is not None and bench.os.name == "nt", "Windows adapter")
 class TypeperfParsing(unittest.TestCase):
     def test_only_sample_values_are_kept(self):

@@ -58,4 +58,5 @@ What worked is in [successes](/successes/).
 * [Warm A/B runs on a new exe measured the driver cache](/mistakes/warm-runs-on-a-new-exe.md) - cold run first for every build; NVIDIA's driver cache is per exe
 * [A relative benchmark-file path went to the project folder](/mistakes/relative-path-after-project-chdir.md) - pass absolute paths to the engine; a FLOOR line that reads INCOMPLETE is not a pass
 * [A level driver quit right after freeing the level's audio](/mistakes/quit-right-after-freeing-audio.md) - free the scene, keep the tree running a fixed wall time, then quit; run a new driver several times alone first
+* [A source pin named the tag object, not its commit](/mistakes/tag-object-as-commit-pin.md) - pin the `^{}` commit of an annotated tag; keep the rev-parse check; check an archive's sha256 against a second source
 * [A version name change didn't reach the exe after an incremental build](/mistakes/version-name-incremental-build.md) - after changing version info in methods.py, delete the objects that use core/version.h (editor and tests builds); check the name in the output

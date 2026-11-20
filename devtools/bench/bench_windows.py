@@ -324,6 +324,43 @@ def build(target, variant, defines=None, source_root=None):
         raise RuntimeError(f"Build failed: build.ps1 {' '.join(shown)}")
 
 
+# The container micro-benchmark (bench.py micro): the same flags on every side. /EHsc because the
+# third-party controls (Boost) need exceptions; every side gets it, controls or not.
+MICRO_FLAGS = [
+    "/O2", "/MT", "/Gy", "/Gw", "/EHsc", "/std:c++20", "/Zc:__cplusplus", "/GR-", "/DDEBUG_ENABLED",
+    "/DTOOLS_ENABLED", "/DWINDOWS_ENABLED", "/DNOMINMAX", "/D_CRT_SECURE_NO_WARNINGS", "/DFORK_ALLOC_COUNTERS=1",
+]
+MICRO_LINK = ["/link", "/OPT:REF", "/OPT:ICF", "/INCREMENTAL:NO"]
+
+
+def msvc_env():
+    """vcvars64.bat of the newest Visual Studio with the x64 C++ tools."""
+    vcvars = Path(_vswhere("installationPath")) / "VC/Auxiliary/Build/vcvars64.bat"
+    if not vcvars.is_file():
+        raise RuntimeError("MSVC vcvars64.bat not found")
+    return vcvars
+
+
+def compile_micro(out_dir, inputs, include_dirs, defines):
+    """cl inputs into out_dir/bench.exe through a build.cmd; returns the cl version from its banner."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exe = out_dir / "bench.exe"
+    exe.unlink(missing_ok=True)
+    args = ["cl", *MICRO_FLAGS, *(f"/D{d}" for d in defines), *(f"/I{p}" for p in include_dirs),
+            f"/Fo{out_dir}\\", f"/Fe{exe}", *map(str, inputs), *MICRO_LINK]
+    command = out_dir / "build.cmd"
+    command.write_text(f'@call "{msvc_env()}" >nul\n@if errorlevel 1 exit /b %errorlevel%\n'
+                       + subprocess.list2cmdline(args) + "\n@exit /b %errorlevel%\n", encoding="utf-8")
+    result = subprocess.run(["cmd", "/d", "/c", str(command)], cwd=ROOT, capture_output=True, text=True,
+                            errors="replace")
+    log = result.stdout + result.stderr
+    (out_dir / "build.log").write_text(log, encoding="utf-8")
+    if result.returncode or not exe.is_file():
+        raise RuntimeError(f"Micro build failed; see {out_dir / 'build.log'}\n{log[-4000:]}")
+    match = re.search(r"Compiler Version (\S+)", log)
+    return match.group(1) if match else "unavailable"
+
+
 def engine_exe(target, suffix, root=ROOT):
     # The real exe: the .console.exe wrapper is another process with its own PID and memory.
     return Path(root) / "bin" / f"godot.windows.{target}.x86_64.{suffix}.exe"

@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-11-21 (container micro-benchmarks with third-party controls)
+
+* **Added**: `bench.py micro` and `devtools/bench/micro/containers_bench.cpp`
+  (BENCH-04): the real Godot containers in one standalone MSVC process per
+  side (`--aa`: control and a second control build; `--prev`: previous
+  headers, candidate with `--defines`, control), alternating pinned
+  rounds, parity of operations, checksum, live bytes and allocations, a
+  floor or verdict per case. 793 Godot cases (HashMap, AHashMap, HashSet,
+  RBMap, RBSet with `i64`, `ptr` and `str` keys, seven ops; List, Vector,
+  LocalVector; N = 0 to 1048576) and 256 `ctl_*` rows of eight
+  third-party maps fetched at pins into `devtools/out/bench/src/`
+  (unordered_dense v5.3.3 MIT, gtl v1.3.1 Apache-2.0, emhash v1.3.0 MIT,
+  the Boost 1.92.0 archive BSL-1.0 checked by size and sha256), never
+  vendored. Comparisons print `LAYOUT-SENTINEL`; every run prints `RATIO`
+  to the fastest matching control. See the
+  [benchmark protocol](/tooling/benchmark-protocol.md) "Micro tier".
+* **Mistake**: [a source pin named the tag object, not its commit](/mistakes/tag-object-as-commit-pin.md).
+* **Measured** (smoke only, i9-14900K, MSVC 19.51.36260, n = 11,
+  `--max-load 50`, bench CPUs about 20% busy, so none of these is a
+  floor): one process 11.8-12.5 s; control medians HashMap `i64` hit at
+  32768 14.2 ns (4.8x boost flat), AHashMap 9.5 ns (3.2x), HashMap `str`
+  hit at 4096 23.2 ns (1.5x), AHashMap 18.6 ns (1.2x), RBMap `i64` hit at
+  4096 43.9 ns (1.04x gtl btree), HashMap `i64` insert at 32768 54.5 ns
+  (4.9x unordered_dense). A/A floors (largest of 11 paired differences):
+  median 24% for Godot rows and 43% for control rows at that load. A
+  same-source comparison (n = 5) printed 5 of 256 control rows moved: at
+  this load the sentinel also fires on noise.
+
 ## 2026-11-21 (real level: the Godot TPS demo)
 
 * **Added**: the runner's workload `level` (the D-08 real level): the

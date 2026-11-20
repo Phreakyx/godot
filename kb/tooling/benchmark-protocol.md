@@ -24,6 +24,21 @@ sources:
   - id: tps-demo
     resource: https://github.com/godotengine/tps-demo/tree/a82f15448e9b015440d3bbdf5e10801b260c4e9f
     title: Godot TPS demo at the pinned commit (MIT code, CC-BY 3.0 assets; fetched, never vendored)
+  - id: containers-bench
+    resource: ../../devtools/bench/micro/containers_bench.cpp
+    title: The container micro-benchmark harness (bench.py micro)
+  - id: unordered-dense
+    resource: https://github.com/martinus/unordered_dense/tree/7c58a8b7a48e790fe72f6508eb3b46317cbba9d5
+    title: ankerl::unordered_dense v5.3.3 (MIT; micro control, fetched, never vendored)
+  - id: gtl
+    resource: https://github.com/greg7mdp/gtl/tree/b9a2586edd9f052b6d071c751fe188b0e71bd2ee
+    title: gtl v1.3.1 (Apache-2.0; micro control, fetched, never vendored)
+  - id: emhash
+    resource: https://github.com/ktprime/emhash/tree/e84fa51009e5040a82801290313b22976bfa56de
+    title: emhash v1.3.0 (MIT; micro control, fetched, never vendored)
+  - id: boost
+    resource: https://github.com/boostorg/boost/releases/tag/boost-1.92.0
+    title: Boost 1.92.0 b2-nodocs archive (BSL-1.0; micro control, fetched, never vendored)
 ---
 
 # Ground rules
@@ -281,6 +296,110 @@ Cheap workloads (a process under 3 s) get n = 11; costly ones n = 5.
 - **Order.** `summary.csv`, `counts.csv` and the printed summary go by
   workload, then case, then build type, then metric.
 
+# Micro tier: container micro-benchmarks (BENCH-04)
+
+`bench.py micro` builds `devtools/bench/micro/containers_bench.cpp` once
+per side with MSVC and runs every case in one process. The harness uses
+Godot's real container headers, `memory.cpp`, `fork_alloc_counters.cpp`,
+`hashfuncs.cpp` and four String methods copied verbatim from
+`ustring.cpp` (`operator==`, `hash()`, both `operator<`); only
+diagnostics are stubbed, and any diagnostic fails the run.
+
+- **Sides.** `--aa`: the control (working tree) and a second control build
+  in its own directory. `--prev <ref>`: previous (the container headers,
+  `hashfuncs.cpp` and `ustring.cpp` of `<ref>` in an include directory
+  before the tree), candidate (working tree plus `--defines`, as `/D`) and
+  control (working tree). All sides use the same flags: `/O2 /MT /Gy /Gw
+  /EHsc /std:c++20 /Zc:__cplusplus /GR- /DDEBUG_ENABLED /DTOOLS_ENABLED
+  /DWINDOWS_ENABLED /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS
+  /DFORK_ALLOC_COUNTERS=1`, linked with `/OPT:REF /OPT:ICF`. `/EHsc` is
+  there because Boost needs exceptions; every side gets it. `meta.json`
+  records the flags, defines, the `cl` version and the sha256 of every
+  source per side; the tree sides are hashed again before the first sample
+  and the series stops if a file changed after its build.
+- **Rounds.** One warm-up pair (round 0, discarded), then `--samples`
+  rounds (default 11, at least 5), odd rounds in side order, even rounds
+  reversed, each process pinned to the bench CPUs. Every case is an item
+  `micro/<case>` with the metric `ns_per_op` and the build type
+  `standalone`: `aa` prints `FLOOR micro/<case> ns_per_op standalone` and
+  `--write-floors` stores it like any floor; `--prev` prints `VERDICT`
+  lines (`--target` names the cases judged by the accept rule, the others
+  get the regression rule).
+- **Parity.** Every case prints `ns_per_op`, `operations`, `live_bytes`
+  (Godot bytes held by one container of the case at its end, read
+  untimed), `allocs` (Godot allocations in the timed region) and an
+  order-independent checksum. The series stops when a side's processes
+  differ in operations, checksum, live bytes or allocations
+  (non-repeatable), or when a side's operations or checksum differ from
+  the first side's (`hash_bytes_*` checksums excepted: a candidate may
+  change the byte hash). In `aa` live bytes and allocations must match
+  across sides too; in a comparison they are a result: `counts.csv` holds
+  both per case and `COUNTS` lines name every case where the candidate
+  differs from the control (`INCREASE` or `NO-INCREASE`).
+- **Matrix.** Cases are `<container>_<key>_<op>_<N>`. HashMap, AHashMap,
+  HashSet, RBMap and RBSet with keys `i64` (64-bit integers from an odd
+  multiplier, inserted in index order, queried in a shuffled order), `ptr`
+  (addresses into one arena, shuffled) and `str` (16 ASCII decimal digits,
+  compared with String `==`; non-ASCII keys are not part of the suite);
+  ops `insert`, `hit`, `miss`, `erase`, `churn` (erase one, insert one),
+  `iterate`, `copy`. List (`i64`): `push`, `iterate`, `copy`, `erase` (by
+  element). Vector and LocalVector of `i64` and `str`: `push`, `iterate`,
+  `copy` (Vector copies are detached with `ptrw()`). N = 0, 1, 16, 256,
+  4096, 32768, 1048576. Plus `string_copy_detach_16`/`_128` and
+  `hash_bytes_8` to `_65536` from the old harness. StringName and Variant
+  keys need the engine and run in-engine (02-07).
+- **Work per case.** About 2^17 element operations: lookups, iterations
+  and erases repeat over small containers; at large N, lookups and erases
+  touch 2^17 keys of the container (in query order) and churn swaps 2^15
+  keys out and back. N = 0 runs 2^17 lookups, iterations, copies, erase
+  calls or constructions on the empty container (operations above 0,
+  live bytes 0). One process takes about 12 s with the controls.
+- **Left out** (to keep one process under 15 s, or not applicable):
+  `copy` at N = 1048576 for every container; every RBMap and RBSet `str`
+  case at N = 1048576; `hit` and `churn` at N = 0 (no key to find or
+  erase).
+- **Third-party controls.** `ctl_<lib>_<key>_<op>_<N>` rows (keys `i64`
+  and `str`, ops `insert`, `hit`, `miss`, `iterate`, N = 256 to 1048576)
+  for ankerl::unordered_dense::map (`unordered_dense`, v5.3.3,
+  `7c58a8b7a4`, MIT), boost::unordered_flat_map and unordered_node_map
+  (`boost_flat`, `boost_node`; Boost 1.92.0 `b2-nodocs` release archive,
+  sha256 `e2a814b3a1...`, equal to GitHub's asset digest, BSL-1.0),
+  gtl::flat_hash_map and gtl::btree_map (`gtl_flat`, `gtl_btree`; v1.3.1,
+  `b9a2586edd`, Apache-2.0), emhash8::HashMap (`emhash8`; v1.3.0, commit
+  `e84fa51009`, MIT; the tag object is `2f6301b972`), `std::map` and
+  `std::unordered_map` (`std_map`, `std_umap`). `str` keys are Godot
+  Strings with `String::hash()` (each library mixes it) and `==` or `<`.
+  They are fetched into `devtools/out/bench/src/` (git pins checked with
+  `rev-parse`, the archive by size and sha256 on every use, extracted with
+  tarfile's `data` filter), never vendored or tracked. A micro series
+  fetches them itself and defines `BENCH_CONTROLS`, the same on every
+  side. Controls use the CRT allocator, so their `live_bytes` and
+  `allocs` read 0.
+- **Layout sentinel.** The controls are the same code on every side, so a
+  control row that moves measured code layout (Pitfall 2 of the research).
+  A comparison prints `LAYOUT-SENTINEL: <k> of <m> control rows moved`:
+  the control rows whose candidate-vs-control median difference is beyond
+  their floor. With k above 0 the Godot rows of that run are not evidence.
+  The first same-source comparison (a no-op define, n = 5 floors from a
+  5-round A/A run, bench CPUs 15-43% busy) printed 5 of 256: at that load
+  and n the sentinel also fires on noise, so 02-10 re-checks its rate at
+  the default load with n = 11 floors. The side binaries are never
+  byte-identical (MSVC writes the output path and a timestamp), so a moved
+  control can't be told from a layout change by hashing the exes.
+- **Ratio to the fastest control.** For each Godot case with control rows
+  of the same key, op and N, the summary prints `RATIO` (and
+  `summary.csv` the columns `fastest_control`, `ratio_to_fastest_control`)
+  from the control binary's medians: RBMap and RBSet against `gtl_btree`
+  and `std_map`, the hash containers against the hash controls (sets
+  against maps). 02-10 uses it as the "best plausible speedup" of D-07.
+- **Never decides alone.** A micro row never accepts or rejects a
+  candidate; acceptance comes from the engine workloads. Micro rows feed
+  the max-gain estimate and the layout sentinel.
+- **One runner at a time.** `micro` takes the same lock as `aa` and
+  `compare`; `summary.csv` is written last, so an interrupted series has
+  none and is never read as a result.
+- The old driver `devtools/test/core_templates_bench.py` stays until 02-13.
+
 # Budget (D-03)
 
 At most 30 minutes of measurement per compiler (MSVC; GCC and Clang each),
@@ -328,7 +447,13 @@ python devtools/bench/bench.py aa --workloads scene:instance:10000,scene:churn:1
 python devtools/bench/bench.py aa --workloads script:script,gdbench,editor_startup --rounds 5
 python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev \
     --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
+python devtools/bench/bench.py micro --aa --write-floors
+python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
 ```
+
+`micro` takes `--aa` or `--prev`, and `--name`, `--defines`, `--target`
+(`micro/<case>` items), `--samples`, `--floors`, `--write-floors`,
+`--max-load`, `--out`; it always builds its sides (seconds each).
 
 Options of `aa` and `compare`: `--workloads`, `--builds` (default
 `editor,template_release`), `--rounds`, `--budget`, `--floors`,
@@ -345,6 +470,9 @@ build lives in `devtools/out/bench/wt/<sha7>/` with its own objects; after
 deleting that folder, run `git worktree prune`. A `level` series writes a
 570 MB `.pck` into its series directory, and the fetched TPS demo with its
 import cache takes about 1.5 GB in `devtools/out/bench/src/tps-demo/`.
+The micro controls take about 0.5 GB in `devtools/out/bench/src/` (Boost:
+the 73 MB archive and its 443 MB, 49,000-file tree); a micro series keeps
+its side builds in `<series>/build/`.
 
 # Lessons this protocol applies
 

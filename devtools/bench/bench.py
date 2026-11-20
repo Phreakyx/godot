@@ -26,7 +26,9 @@ import re
 import shutil
 import statistics
 import subprocess
+import tarfile
 import time
+import urllib.request
 from pathlib import Path
 
 if os.name == "nt":
@@ -237,7 +239,39 @@ PINS = {
         "commit": "a82f15448e9b015440d3bbdf5e10801b260c4e9f",
         "license": "MIT code, CC-BY 3.0 assets",
     },
+    # Container micro-benchmark controls (bench.py micro), compiled into every side; include: the include root.
+    "unordered_dense": {
+        "url": "https://github.com/martinus/unordered_dense",
+        "commit": "7c58a8b7a48e790fe72f6508eb3b46317cbba9d5",
+        "version": "v5.3.3",
+        "license": "MIT",
+        "include": "include",
+    },
+    "gtl": {
+        "url": "https://github.com/greg7mdp/gtl",
+        "commit": "b9a2586edd9f052b6d071c751fe188b0e71bd2ee",
+        "version": "v1.3.1",
+        "license": "Apache-2.0",
+        "include": "include",
+    },
+    "emhash": {
+        "url": "https://github.com/ktprime/emhash",
+        "commit": "e84fa51009e5040a82801290313b22976bfa56de",  # v1.3.0^{} (the tag object is 2f6301b972)
+        "version": "v1.3.0",
+        "license": "MIT",
+        "include": "include",
+    },
+    "boost": {  # a release archive, not a git pin: size and sha256 checked on every use (T-02-17)
+        "url": "https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-b2-nodocs.tar.gz",
+        "archive": "boost-1.92.0-b2-nodocs.tar.gz",
+        "size": 73484649,
+        "sha256": "e2a814b3a158ab482c7a3d330f8bf5a7a8423d258a4e2fb396996e00fcee2111",  # = GitHub's asset digest
+        "version": "1.92.0",
+        "license": "BSL-1.0",
+        "include_marker": "boost/unordered/unordered_flat_map.hpp",
+    },
 }
+CONTROLS = ("unordered_dense", "gtl", "emhash", "boost")
 # The gdbench subset (BENCH-03): file at the godot-benchmarks pin -> ITERATIONS (None keeps upstream's value).
 # Copies change only `extends Benchmark` (to RefCounted) and that constant. Upstream's values took 27 s of
 # timed calls (55 s per process with the warm-up calls, template_release); these keep a process near 10 s.
@@ -268,6 +302,40 @@ def fetch_git(name):
         raise RuntimeError(f"{path.relative_to(ROOT).as_posix()} is at {head}, not the pin {pin['commit']}:"
                            " delete it and run bench.py fetch")
     return path
+
+
+def fetch_archive(name):
+    """The pinned archive, downloaded into a new directory, checked (size, sha256) and extracted with the data filter."""
+    pin = PINS[name]
+    path = OUT / "src" / name / pin["version"]
+    if not (path / ".extracted").is_file():
+        shutil.rmtree(path, ignore_errors=True)
+        partial = path.with_name(path.name + ".partial")
+        shutil.rmtree(partial, ignore_errors=True)
+        partial.mkdir(parents=True)
+        print(f"FETCH {name}: downloading {pin['url']}", flush=True)
+        urllib.request.urlretrieve(pin["url"], partial / pin["archive"])
+        _check_archive(name, partial / pin["archive"])
+        with tarfile.open(partial / pin["archive"]) as archive:
+            archive.extractall(partial / "x", filter="data")  # no absolute paths, links or traversal
+        (partial / ".extracted").write_text(pin["sha256"] + "\n", encoding="utf-8")
+        partial.rename(path)
+    _check_archive(name, path / pin["archive"])
+    return path
+
+
+def _check_archive(name, archive):
+    pin = PINS[name]
+    size = archive.stat().st_size
+    if size != pin["size"]:
+        raise RuntimeError(f"{rel(archive)} is {size} bytes, not {pin['size']}: delete it and run bench.py fetch")
+    digest = sha_file(archive)
+    if digest != pin["sha256"]:
+        raise RuntimeError(f"{rel(archive)} has sha256 {digest}, not the pin {pin['sha256']}")
+
+
+def fetch(name):
+    return fetch_git(name) if "commit" in PINS[name] else fetch_archive(name)
 
 
 def gdbench_copy(text, iterations):
@@ -561,7 +629,7 @@ def item_def(spec, name, params, label):
 
 
 def runs_on(name, build):
-    return build in WORKLOADS[name].get("builds", (build,))
+    return build in WORKLOADS.get(name, {}).get("builds", (build,))  # micro is not in WORKLOADS
 
 
 # --- machine checks (D-13: read, refuse with the fix, never change) ---
@@ -990,6 +1058,276 @@ def summarize_counts(mode, items, builds, counts):
     return summary
 
 
+# --- container micro-benchmark (BENCH-04): one standalone process prints every case ---
+
+MICRO_SOURCE = ROOT / "devtools/bench/micro/containers_bench.cpp"
+# The previous side compiles these from --prev (an include directory before the tree); the rest comes from the tree.
+MICRO_HEADERS = (
+    "core/templates/vector.h", "core/templates/cowdata.h", "core/templates/a_hash_map.h", "core/templates/hash_map.h",
+    "core/templates/hash_set.h", "core/templates/hashfuncs.h", "core/templates/hashfuncs.cpp",
+    "core/templates/rb_map.h", "core/templates/rb_set.h", "core/templates/list.h", "core/templates/local_vector.h",
+    "core/string/ustring.h", "core/string/ustring.cpp",
+)
+# Not the whole String TU (it needs Variant, translation and OS): only these definitions, verbatim.
+STRING_METHODS = (
+    "bool String::operator==(const String &p_str) const",
+    "uint32_t String::hash() const",
+    "bool String::operator<(const char32_t *p_str) const",
+    "bool String::operator<(const String &p_str) const",
+)
+MICRO_TREE_INPUTS = ("core/os/memory.cpp", "core/os/fork_alloc_counters.cpp", "core/profiling/profiling.gen.h")
+MICRO_FIELDS = ("ns_per_op", "operations", "live_bytes", "allocs", "checksum")
+MICRO_PARITY = ("operations", "checksum", "live_bytes", "allocs")
+MICRO_BUILD = "standalone"  # the build field of a micro floor key
+MICRO_KEYS = ("i64", "ptr", "str")
+MICRO_OPS = ("insert", "hit", "miss", "erase", "churn", "iterate", "copy", "push")
+CONTROL_OPS = ("insert", "hit", "miss", "iterate")
+ORDERED_CONTAINERS = ("rbmap", "rbset")
+ORDERED_CONTROLS = ("gtl_btree", "std_map")
+HASH_CASES = "hash_bytes_"  # a candidate may change the byte hash, so their checksums are not compared across sides
+
+
+def parse_case(name):
+    """(container, key, op, N) of a matrix case <container>_<key>_<op>_<N>, or None (string_copy_*, hash_bytes_*)."""
+    parts = name.rsplit("_", 3)
+    if len(parts) != 4 or parts[1] not in MICRO_KEYS or parts[2] not in MICRO_OPS or not parts[3].isdigit():
+        return None
+    return parts[0], parts[1], parts[2], int(parts[3])
+
+
+def micro_mismatch(ref, rows, fields, skip_checksum=False):
+    """The first difference between two harness outputs on fields, or None."""
+    if [r["case"] for r in ref] != [r["case"] for r in rows]:
+        return "the case list differs"
+    for a, b in zip(ref, rows):
+        for field in fields:
+            if field == "checksum" and skip_checksum and a["case"].startswith(HASH_CASES):
+                continue
+            if a[field] != b[field]:
+                return f"{a['case']} {field} {a[field]} != {b[field]}"
+    return None
+
+
+def micro_check(refs, label, rows, first, cross):
+    """Stop the series unless rows repeat the label's first process exactly and do the first side's work."""
+    refs.setdefault(label, rows)
+    problem = micro_mismatch(refs[label], rows, MICRO_PARITY)
+    if problem:
+        raise RuntimeError(f"Non-repeatable workload in {label}: {problem}")
+    problem = micro_mismatch(refs[first], rows, cross, skip_checksum=True)
+    if problem:
+        raise RuntimeError(f"{label} and {first} ran different workloads: {problem}")
+
+
+def micro_rows(result):
+    """The harness CSV as row dicts; a failed process raises (micro processes are deterministic)."""
+    lines = result["output"].splitlines()
+    fail = next((line for line in lines if line.startswith("BENCH_FAIL")), None)
+    if result["timed_out"] or result["returncode"] or fail:
+        reason = fail or ("timeout" if result["timed_out"] else f"exit code {result['returncode']}")
+        raise RuntimeError(f"Micro harness failed: {reason}")
+    header = "case," + ",".join(MICRO_FIELDS)
+    if header not in lines:
+        raise RuntimeError(f"No harness header {header!r} in the output")
+    rows = []
+    for line in lines[lines.index(header) + 1 :]:
+        values = line.split(",")
+        if len(values) != len(MICRO_FIELDS) + 1:
+            raise RuntimeError(f"Bad harness line {line!r}")
+        row = dict(zip(("case", *MICRO_FIELDS), values))
+        if not (math.isfinite(float(row["ns_per_op"])) and float(row["ns_per_op"]) > 0 and int(row["operations"]) > 0):
+            raise RuntimeError(f"Invalid timing: {line}")
+        rows.append(row)
+    return rows
+
+
+def fastest_controls(medians):
+    """case -> (ratio of its median to the fastest matching ctl_ row, that row) for Godot cases with controls.
+    Ordered containers (RBMap, RBSet) are matched with the ordered controls only, hash containers with the hash ones."""
+    out = {}
+    for case, ns in medians.items():
+        parsed = parse_case(case)
+        if not parsed or parsed[0].startswith("ctl_") or parsed[2] not in CONTROL_OPS:
+            continue
+        container, key, op, n = parsed
+        ordered = container in ORDERED_CONTAINERS
+        ctl = {c: v for c, v in medians.items() if c.startswith("ctl_") and parse_case(c)[1:] == (key, op, n)
+               and (parse_case(c)[0][len("ctl_"):] in ORDERED_CONTROLS) == ordered}
+        if ctl:
+            best = min(ctl, key=ctl.get)
+            out[case] = (ns / ctl[best], best)
+    return out
+
+
+def layout_sentinel(summary):
+    """(control rows beyond their floor, control rows with a floor) in a compare summary (Pitfall 2)."""
+    rows = [r for r in summary if r["workload"].startswith("micro/ctl_") and r["floor"] != "" and r["n"]]
+    return sum(abs(r["median_diff"]) > r["floor"] for r in rows), len(rows)
+
+
+def extract_string_methods(ustring_cpp, dest):
+    text = ustring_cpp.read_text(encoding="utf-8")
+    methods = []
+    for signature in STRING_METHODS:
+        found = re.findall(r"^" + re.escape(signature) + r" \{\n.*?^\}", text, re.MULTILINE | re.DOTALL)
+        if len(found) != 1:
+            raise RuntimeError(f"Cannot extract the String method {signature} from {ustring_cpp}")
+        methods.append(found[0])
+    dest.write_text('#include "core/string/ustring.h"\n\n' + "\n\n".join(methods) + "\n", encoding="utf-8")
+
+
+def sha_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def rel(path):
+    path = Path(path)
+    return path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else path.as_posix()
+
+
+def control_includes():
+    """(include directories, pin info) of the third-party controls, fetched and checked against their pins."""
+    dirs, info = [], {}
+    for name in CONTROLS:
+        pin, path = PINS[name], fetch(name)
+        if "include_marker" in pin:
+            found = sorted((path / "x").glob(f"*/{pin['include_marker']}"))
+            if len(found) != 1:
+                raise RuntimeError(f"No single {pin['include_marker']} in {rel(path)}: the archive changed shape")
+            include = found[0].parents[len(Path(pin["include_marker"]).parts) - 1]
+        else:
+            include = path / pin["include"]
+        dirs.append(include)
+        info[name] = {"version": pin["version"], "license": pin["license"], "url": pin["url"],
+                      **{k: pin[k] for k in ("commit", "sha256") if k in pin}, "include": rel(include)}
+    return dirs, info
+
+
+def build_micro(side, build_dir, controls):
+    """Compile one side; returns its meta entry (sources and their sha256)."""
+    shutil.rmtree(build_dir, ignore_errors=True)
+    build_dir.mkdir(parents=True)
+    src = ROOT
+    if side["prev"]:
+        src = build_dir / "src"  # the container headers at --prev, shadowing the tree
+        for name in MICRO_HEADERS:
+            try:
+                content = git("show", f"{side['commit']}:{name}")
+            except subprocess.CalledProcessError:
+                continue  # absent at that commit: the tree's copy is used (recorded below)
+            (src / name).parent.mkdir(parents=True, exist_ok=True)
+            (src / name).write_bytes(content)
+    string_methods = build_dir / "string_methods.cpp"
+    extract_string_methods(src / "core/string/ustring.cpp", string_methods)
+    modern = int("uint64_t hash_buffer64(" in (src / "core/templates/hashfuncs.h").read_text(encoding="utf-8"))
+    inputs = [MICRO_SOURCE, ROOT / "core/os/memory.cpp", ROOT / "core/os/fork_alloc_counters.cpp", string_methods,
+              src / "core/templates/hashfuncs.cpp"]
+    includes = ([src] if src != ROOT else []) + [ROOT, ROOT / "platform/windows"] + controls
+    defines = [f"BENCH_MODERN_HASH={modern}"] + (["BENCH_CONTROLS"] if controls else []) + side["defines"]
+    cl_version = osb.compile_micro(build_dir, inputs, includes, defines)
+    sources = {rel(ROOT / name): sha_file(ROOT / name) for name in (rel(MICRO_SOURCE), *MICRO_TREE_INPUTS)}
+    for name in MICRO_HEADERS:
+        path = src / name if (src / name).is_file() else ROOT / name
+        sources[name] = sha_file(path) + ("" if path.is_relative_to(build_dir) or not side["prev"] else " (tree)")
+    return {"label": side["label"], "commit": side["commit"], "exe": rel(build_dir / "bench.exe"),
+            "defines": defines, "flags": osb.MICRO_FLAGS + osb.MICRO_LINK, "cl_version": cl_version,
+            "sources": sources}
+
+
+def run_micro(args, sides):
+    mask = osb.p_core_mask()
+    checks, problems = run_checks(mask, args.max_load)
+    if problems:
+        raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
+    out = Path(args.out).resolve()
+    controls, control_info = control_includes()
+    print(f"CONTROLS {', '.join(control_info) or 'none (run bench.py fetch)'}", flush=True)
+    built = {}
+    for side in sides:
+        print(f"BUILD micro {side['label']}", flush=True)
+        built[side["label"]] = build_micro(side, out / "build" / side.get("dir", side["label"]), controls)
+    labels = [side["label"] for side in sides]
+    checks["home_mask"] = hex(osb.set_home_affinity(mask))
+    meta = {**machine_meta(mask), **checks, "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "runner_args": vars(args), "binaries": list(built.values()), "controls": control_info}
+    (out / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+    # The tree sides must still match what was built ("changed after build").
+    for side in sides:
+        if side["prev"]:
+            continue
+        for name, digest in built[side["label"]]["sources"].items():
+            if sha_file(ROOT / name) != digest:
+                raise RuntimeError(f"{name} changed after the {side['label']} build")
+
+    raw, values, clocks, refs = [], {}, {}, {}
+    cross = MICRO_PARITY if args.aa else ("operations", "checksum")  # compare: memory is a result, not a failure
+
+    def run_round(rnd, order):
+        osb.ensure_idle()
+        sampler = probe(lambda: osb.ClockSampler(mask))
+        for position, label in enumerate(order, 1):
+            result = osb.run_pinned([str(ROOT / built[label]["exe"])], ROOT, mask, TIMEOUT_S)
+            if result["child_mask"] != mask:
+                raise RuntimeError(f"Child affinity {hex(result['child_mask'])}, expected {hex(mask)}")
+            rows = micro_rows(result)
+            micro_check(refs, label, rows, labels[0], cross)
+            tag = "cold" if rnd == 0 else f"r{rnd}"
+            print(f"[{tag}] micro {label:9} cases={len(rows)} wall_s={result['wall_s']:.2f}"
+                  f" peak_ws_mb={result['peak_ws_bytes'] / 1048576:.0f}", flush=True)
+            for row in rows:
+                raw.append({"round": rnd, "position": position, "binary": label, **row,
+                            "wall_s": f"{result['wall_s']:.3f}"})
+                if rnd > 0:
+                    values.setdefault((f"micro/{row['case']}", "ns_per_op", MICRO_BUILD, label), {})[rnd] = \
+                        float(row["ns_per_op"])
+        clocks[rnd] = UNAVAILABLE if sampler == UNAVAILABLE else probe(sampler.stop)
+
+    print(f"ORDER round 1: {', '.join(labels)}; even rounds reversed", flush=True)
+    run_round(0, labels)  # the warm-up pair (cold), discarded
+    print_rules(args.samples)
+    for rnd in range(1, args.samples + 1):
+        run_round(rnd, labels if rnd % 2 else labels[::-1])
+    flags = clock_flags(clocks)
+    for entry in raw:
+        mhz = clocks[entry["round"]]
+        entry["clock_mhz"] = mhz if mhz == UNAVAILABLE else f"{mhz:.0f}"
+        entry["clock_flag"] = flags[entry["round"]]
+    write_csv(out / "raw.csv", raw)
+    meta["clock_mhz"] = {str(r): (m if m == UNAVAILABLE else round(m)) for r, m in clocks.items()}
+    (out / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+
+    cases = [row["case"] for row in refs[labels[0]]]
+    items = [(f"micro/{case}", ("micro", "micro", [], {"case": case, "metrics": ("ns_per_op",), "counts": (),
+                                                        "info": (), "time": "ns_per_op"})) for case in cases]
+    n_of, builds = {"micro": args.samples}, [MICRO_BUILD]
+    summary = summarize_aa(args, items, builds, values, n_of, meta) if args.aa else \
+        summarize_compare(args, items, builds, values, n_of, meta)
+    medians = {case: statistics.median(values[(f"micro/{case}", "ns_per_op", MICRO_BUILD, "control")].values())
+               for case in cases}
+    ratios = fastest_controls(medians)
+    for row in summary:
+        ratio, best = ratios.get(row["workload"][len("micro/"):], ("", ""))
+        row["fastest_control"], row["ratio_to_fastest_control"] = best, ratio
+        if best:
+            print(f"RATIO {row['workload']}: {ratio:.2f}x the fastest control ({best}, control binary medians)")
+    if not args.aa:
+        moved, total = layout_sentinel(summary)
+        print(f"LAYOUT-SENTINEL: {moved} of {total} control rows moved" + (
+            " (the run measured code layout, Pitfall 2)" if moved else "") + ("" if total else " (no control floors)"))
+        count_rows = []
+        for case in cases:
+            ctrl, cand = (next(r for r in refs[label] if r["case"] == case) for label in ("control", "candidate"))
+            for field in ("live_bytes", "allocs"):
+                token = "INCREASE" if int(cand[field]) > int(ctrl[field]) else "NO-INCREASE"
+                count_rows.append({"workload": f"micro/{case}", "metric": field, "control": ctrl[field],
+                                   "candidate": cand[field], "verdict": token})
+                if cand[field] != ctrl[field]:
+                    print(f"COUNTS micro/{case} {field}: control {ctrl[field]}, candidate {cand[field]}: {token}")
+        write_csv(out / "counts.csv", count_rows)
+    write_csv(out / "summary.csv", summary)
+    print(f"\nraw.csv, summary.csv and meta.json in {out}")
+
+
 def run_check(args):
     mask = osb.p_core_mask()
     values, problems = run_checks(mask, args.max_load)
@@ -1015,7 +1353,17 @@ def main():
     aa = sub.add_parser("aa", help="A/A noise floor: control against a same-source twin")
     compare = sub.add_parser("compare", help="previous, candidate and same-source control; verdict against the control")
     sub.add_parser("fetch", help="fetch every pinned third-party source into devtools/out/bench/src/ and check it")
-    for parsed in (check, aa, compare):
+    micro = sub.add_parser("micro", help="container micro-benchmark: --aa, or previous, candidate and control")
+    micro.add_argument("--aa", action="store_true", help="A/A floors: the control against a second control build")
+    micro.add_argument("--name", default="cand", help="candidate label (its build directory)")
+    micro.add_argument("--defines", default="", help="space-separated macros for the candidate (/D)")
+    micro.add_argument("--prev", default=None, help="git ref of the previous side's container headers")
+    micro.add_argument("--target", default="", help="comma list of micro/<case> items judged by the accept rule")
+    micro.add_argument("--samples", type=int, default=11, help="rounds after the warm-up pair (at least 5)")
+    micro.add_argument("--floors", default=str(DEFAULT_FLOORS))
+    micro.add_argument("--write-floors", action="store_true", help="merge the measured floors into --floors")
+    micro.add_argument("--out", default=None)
+    for parsed in (check, aa, compare, micro):
         parsed.add_argument("--max-load", type=float, default=MAX_LOAD_PCT,
                             help="refuse above this mean %% busy of the bench CPUs; floors and shares use the default")
     for series in (aa, compare):
@@ -1038,10 +1386,12 @@ def main():
         raise SystemExit(run_check(args))
     if args.command == "fetch":
         for name, pin in PINS.items():
-            path = fetch_git(name)
-            shown = path.relative_to(ROOT).as_posix()
-            print(f"FETCH {name} {pin['commit']} ({pin['license']}) in {shown}: HEAD is the pin")
+            shown = rel(fetch(name))
+            what = "HEAD is the pin" if "commit" in pin else "size and sha256 are the pin"
+            print(f"FETCH {name} {pin.get('commit', pin.get('sha256'))} ({pin['license']}) in {shown}: {what}")
         return
+    if args.command == "micro":
+        return main_micro(parser, args)
     if args.rounds is not None and args.rounds < MIN_ROUNDS:
         parser.error(f"Use at least {MIN_ROUNDS} rounds: the sign test cannot pass below that")
     specs = args.workloads.split(",")
@@ -1065,6 +1415,11 @@ def main():
         candidate = {**control, "label": "candidate", "suffix": f"bench.{args.name}", "variant": args.name,
                      "defines": args.defines or None}
         sides = [{**control, "label": "previous", "commit": prev}, candidate, control]
+    locked(args, run_series, sides)
+
+
+def locked(args, run, sides):
+    """One runner at a time; a series directory per run. An interrupted series writes no summary.csv."""
     lock = osb.acquire_lock(OUT / ".lock")  # held until the process ends
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime()) + "-" + args.command
     if args.out is None:
@@ -1072,9 +1427,30 @@ def main():
     else:
         Path(args.out).mkdir(parents=True, exist_ok=True)
     try:
-        run_series(args, sides)
+        run(args, sides)
     finally:
         lock.close()
+
+
+def main_micro(parser, args):
+    if args.samples < MIN_ROUNDS:
+        parser.error(f"Use at least {MIN_ROUNDS} samples: the sign test cannot pass below that")
+    if args.aa == bool(args.prev):
+        parser.error("Pass either --aa or --prev")
+    if not (ROOT / "core/profiling/profiling.gen.h").is_file():
+        parser.error("Missing core/profiling/profiling.gen.h (SCons-generated): build Godot once first")
+    head = git("rev-parse", "HEAD").decode().strip()
+    control = {"label": "control", "commit": head, "prev": False, "defines": []}
+    if args.aa:
+        sides = [control, {**control, "label": "aa"}]
+    else:
+        try:
+            prev = git("rev-parse", "--verify", f"{args.prev}^{{commit}}").decode().strip()
+        except subprocess.CalledProcessError:
+            parser.error(f"--prev {args.prev} is not a commit")
+        sides = [{**control, "label": "previous", "commit": prev, "prev": True},
+                 {**control, "label": "candidate", "dir": args.name, "defines": args.defines.split()}, control]
+    locked(args, run_micro, sides)
 
 
 if __name__ == "__main__":
