@@ -1,5 +1,26 @@
 # Update log
 
+## 2026-11-20 (benchmark runner, first slice)
+
+* **Changed**: tooling only, no concept yet (the protocol page comes with
+  the rest of the Phase 2 runner). `devtools/bench/bench.py aa` builds a
+  control and an A/A twin of editor and `template_release`
+  (`build.ps1 -Bench`: `debug_symbols=yes disable_path_overrides=no`,
+  suffix `bench`/`bench.aa`, the daily binaries untouched), runs them
+  pinned to P-cores 1-7 (mask `0xfffc`, found by EfficiencyClass) on the
+  benchmark power plan with parking off, reads peak working set and CPU
+  time from the OS, and prints the sign-test rule and an A/A floor.
+  `test_bench.py` checks the sign test, verdict and skip rules.
+* **Finding**: a template build on a project the editor never opened
+  prints `ERROR: Could not load global script cache.`; the runner writes an
+  empty cache into the bench project's ignored `.godot/` so its error rule
+  can stay strict.
+* **Measured** (i9-14900K, MSVC, n=5, smoke check only, not a floor to
+  judge with): `scene:instance:10000` frame p50 8.1-8.6 ms (editor) and
+  7.1-7.7 ms (`template_release`); largest A/A paired difference 1.1% and
+  5.3% (editor, two series) and 5.8% (`template_release`); peak working
+  set 114 MB / 94 MB, floor 0.7-0.8%.
+
 ## 2026-11-20 (phase 1 review fixes)
 
 * **Added**: mistake [a one-element array return ran the command "p"](/mistakes/powershell-one-element-array-return.md)

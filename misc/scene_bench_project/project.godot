@@ -19,3 +19,9 @@ window/vsync/vsync_mode=0
 
 renderer/rendering_method="forward_plus"
 rendering_device/driver.windows="vulkan"
+
+[threading]
+
+; devtools/bench/bench.py pins its runs to 14 logical CPUs (P-cores 1-7 with both
+; hyperthreads), so the worker pool gets no more threads than that.
+worker_pool/max_threads=14

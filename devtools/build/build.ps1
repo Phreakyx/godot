@@ -7,6 +7,7 @@
 #   devtools\build\build.ps1 -Target templates  # release and debug export templates
 #   devtools\build\build.ps1 -Target templates -Mono
 #   devtools\build\build.ps1 -Target release    # everything a GitHub release needs
+#   devtools\build\build.ps1 -Target template_release   # only the release template
 #   ... -Jobs 10      parallel jobs (default: all cores)
 #   ... -KeepGoing    scons -k: report all compile errors in one pass
 #   ... -Tests        unit-test build (tests=yes, own objects), run with --test:
@@ -17,11 +18,16 @@
 #                     next to the control. -Defines takes several, space-separated.
 #   ... -Dev          dev_build=yes instead of production=yes (DEV_ASSERT compiled in):
 #                     bin\godot.windows.editor.dev.x86_64[.tests].console.exe
+#   ... -Bench        benchmark build (devtools/bench/bench.py): debug_symbols=yes and
+#                     disable_path_overrides=no (template_release then takes --path and
+#                     --script), extra_suffix bench[.<Variant>][.tests], so it never
+#                     rebuilds or replaces the daily binaries:
+#                     bin\godot.windows.<target>.x86_64.bench[.<Variant>].exe
 #
 # Run it from PowerShell or cmd (from Git Bash: powershell.exe -File ...), and
 # close any editor running from bin\ first (the link fails with "Access is denied").
 param(
-	[ValidateSet("editor", "templates", "release")]
+	[ValidateSet("editor", "templates", "release", "template_release")]
 	[string]$Target = "editor",
 	[switch]$Mono,
 	[int]$Jobs = 0,
@@ -29,7 +35,8 @@ param(
 	[switch]$Tests,
 	[string]$Variant,
 	[string]$Defines,
-	[switch]$Dev
+	[switch]$Dev,
+	[switch]$Bench
 )
 . "$PSScriptRoot\..\common.ps1"
 if ($Defines -and -not $Variant) { throw "-Defines needs -Variant <name>, so the candidate gets its own objects and binary and the control stays untouched." }
@@ -52,7 +59,10 @@ function Invoke-Scons([string]$SconsTarget, [bool]$WithMono) {
 	if ($WithMono) { $sconsArgs += "module_mono_enabled=yes" }
 	if ($KeepGoing) { $sconsArgs += "-k" }
 	if ($Tests) { $sconsArgs += @("tests=yes", "object_prefix=t_") }
-	$suffix = @($Variant, $(if ($Tests) { "tests" })) | Where-Object { $_ }
+	# debug_symbols is not part of the binary suffix: without the bench suffix it
+	# would rebuild every object and replace the daily binaries.
+	if ($Bench) { $sconsArgs += @("debug_symbols=yes", "disable_path_overrides=no") }
+	$suffix = @($(if ($Bench) { "bench" }), $Variant, $(if ($Tests) { "tests" })) | Where-Object { $_ }
 	if ($suffix) { $sconsArgs += "extra_suffix=$($suffix -join '.')" }
 	if ($Defines) { $sconsArgs += "cppdefines=$Defines" }
 	$label = "$SconsTarget$(if ($WithMono) { ' (.NET)' })"
@@ -76,6 +86,9 @@ switch ($Target) {
 		Invoke-Scons "editor" $Mono
 		if ($Mono) { Build-MonoAssemblies }
 	}
+	"template_release" {
+		Invoke-Scons "template_release" $Mono
+	}
 	"templates" {
 		Invoke-Scons "template_release" $Mono
 		Invoke-Scons "template_debug" $Mono
@@ -90,4 +103,12 @@ switch ($Target) {
 		Build-MonoAssemblies
 	}
 }
-& (Get-Editor -Mono:$Mono -Tests:$Tests -Variant $Variant -Dev:$Dev) --version
+$binVariant = (@($(if ($Bench) { "bench" }), $Variant) | Where-Object { $_ }) -join "."
+if ($Target -eq "template_release") {
+	# Same name order as Get-Editor: target, ".dev", arch, extra_suffix, ".mono".
+	$built = Join-Path $RepoRoot "bin\godot.windows.template_release$(if ($Dev) { '.dev' }).x86_64$(if ($binVariant) { ".$binVariant" })$(if ($Tests) { '.tests' })$(if ($Mono) { '.mono' }).console.exe"
+	if (-not (Test-Path $built)) { throw "Missing $built after the build." }
+	& $built --version
+} else {
+	& (Get-Editor -Mono:$Mono -Tests:$Tests -Variant $binVariant -Dev:$Dev) --version
+}
