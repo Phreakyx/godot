@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-11-21 (real level: the Godot TPS demo)
+
+* **Added**: the runner's workload `level` (the D-08 real level): the
+  Godot TPS demo (godotengine/tps-demo, MIT code, CC-BY 3.0 assets) at
+  `a82f15448e`, fetched by `bench.py fetch`, never vendored; once per
+  series the control editor bench build imports it and exports one `.pck`
+  (`--export-pack`, a preset written into the fetched copy, no templates
+  needed) that every binary runs with `--main-pack`, `override.cfg` next to
+  it. `devtools/bench/workloads/real_level.gd` pins the demo's settings,
+  spawns 32 extra robots through `spawn_robot()`, flies its own camera by
+  frame index and reports load, instancing, main-thread and render-thread
+  CPU per frame; GPU time is stored, never judged. See the
+  [benchmark protocol](/tooling/benchmark-protocol.md) "Workloads".
+* **Mistake**: [a level driver quit right after freeing the level's audio](/mistakes/quit-right-after-freeing-audio.md).
+* **Measured** (smoke only, i9-14900K, MSVC 14.51, n=5, `--max-load 50`,
+  bench CPUs 19-29% busy, so none of these is a floor): load 0.53-0.55 s,
+  instancing 75-90 ms, main thread 2.9-3.1 ms and render CPU 1.5-1.6 ms per
+  frame (p50), GPU 2.6 ms, peak 1.39-1.42 GB; the same `.pck` SHA-256 in
+  both series. A/A floors: load 1.5-2.8%, instancing 2.8-7.0%, render CPU
+  3.3-5.7%, peak memory under 0.5%, main thread 7.4-10.3%. Allocation
+  counts vary by up to 0.2% between rounds (not deterministic).
+
 ## 2026-11-21 (GDScript, godot-benchmarks and editor startup workloads)
 
 * **Added**: the runner's workloads `script:<nodes|script|instance>` (the

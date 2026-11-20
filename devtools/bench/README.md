@@ -22,10 +22,17 @@ python devtools/bench/test_bench.py
   `scene:<scenario>:<count>` (`workloads/scene.gd`), `script:<nodes|script|instance>`
   (`workloads/script.gd`), `gdbench` (`workloads/gdbench.gd`: the godot-benchmarks subset and
   `workloads/gdbench_dictionary.gd`, one item per case `gdbench/<file stem>.<method>`) and
-  `editor_startup` (editor only, on a per-binary copy of `misc/large_world_test_project`).
+  `editor_startup` (editor only, on a per-binary copy of `misc/large_world_test_project`) and
+  `level` (`workloads/real_level.gd` on the Godot TPS demo: load, instancing, main-thread and
+  render-thread CPU per frame along a fixed camera path; windowed on Vulkan, so close GPU-heavy
+  programs first).
 - `fetch` fetches the pinned third-party sources (`PINS` in `bench.py`: godot-benchmarks
-  `ff8e67af1e`, MIT) into `devtools/out/bench/src/` and refuses a checkout whose HEAD is not the
-  pin. A `gdbench` series fetches it too.
+  `ff8e67af1e`, MIT; tps-demo `a82f15448e`, MIT code and CC-BY 3.0 assets, 470 MB) into
+  `devtools/out/bench/src/` and refuses a checkout whose HEAD is not the pin. A `gdbench` or
+  `level` series fetches what it needs too.
+- A `level` series first imports the fetched demo with the control editor bench build and exports
+  `devtools/out/bench/<series>/tps-demo.pck` with `override.cfg` next to it (about 570 MB per
+  series; delete old series directories). Every binary runs that `.pck` with `--main-pack`.
 - `--skip-build` reuses the binaries in `bin/` (and the previous build's worktree in
   `devtools/out/bench/wt/<sha7>/`); `--rounds` fixes n; `--budget` is the minutes of measurement
   allowed (default 30); `--floors` is the floors file (default `devtools/bench/floors.json`).

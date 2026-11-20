@@ -232,6 +232,11 @@ PINS = {
         "commit": "ff8e67af1eac6054f011ee7137163b64bd0bf7fb",
         "license": "MIT",
     },
+    "tps-demo": {  # the real level (D-08): 470 MB, no LFS
+        "url": "https://github.com/godotengine/tps-demo",
+        "commit": "a82f15448e9b015440d3bbdf5e10801b260c4e9f",
+        "license": "MIT code, CC-BY 3.0 assets",
+    },
 }
 # The gdbench subset (BENCH-03): file at the godot-benchmarks pin -> ITERATIONS (None keeps upstream's value).
 # Copies change only `extends Benchmark` (to RefCounted) and that constant. Upstream's values took 27 s of
@@ -319,6 +324,77 @@ def prepare_editor_projects(out, labels):
             shutil.copy2(ROOT / rel, target)
 
 
+LEVEL_SCRIPT = ROOT / "devtools/bench/workloads/real_level.gd"
+LEVEL_ROBOTS = 32  # extra robots on top of the level's 4 (real_level.gd --robots)
+LEVEL_FRAMES = 600
+LEVEL_PRESET = """[preset.0]
+
+name="bench"
+platform="Windows Desktop"
+runnable=true
+export_filter="all_resources"
+include_filter=""
+exclude_filter=""
+export_path=""
+encrypt_pck=false
+encrypt_directory=false
+
+[preset.0.options]
+"""
+# Next to the .pck: what the project leaves to the machine, pinned without editing project.godot. The
+# project asks for fullscreen, D3D12, HDR output and "Bullet" (a Godot 3 name; DEFAULT is GodotPhysics3D).
+LEVEL_OVERRIDE = f"""[application]
+
+run/max_fps=0
+
+[display]
+
+window/size/mode=0
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/window_width_override=1920
+window/size/window_height_override=1080
+window/vsync/vsync_mode=0
+window/hdr/request_hdr_output=false
+
+[physics]
+
+3d/physics_engine="GodotPhysics3D"
+
+[rendering]
+
+rendering_device/driver.windows="vulkan"
+
+[threading]
+
+worker_pool/max_threads={GAME_WORKERS}
+"""
+
+
+def prepare_level(out, mask):
+    """D-10: the control editor imports the fetched copy and exports one .pck for every binary of the series."""
+    src, pin = fetch_git("tps-demo"), PINS["tps-demo"]
+    editor = osb.engine_exe("editor", "bench")
+    if not editor.is_file():
+        raise RuntimeError(f"Missing {editor.relative_to(ROOT)}: the level is exported with the control editor")
+    pck = out / "tps-demo.pck"
+    pck.unlink(missing_ok=True)
+    (src / "export_presets.cfg").write_text(LEVEL_PRESET, encoding="utf-8")  # gitignored by the demo
+    for step in (["--import"], ["--export-pack", "bench", str(pck)]):
+        result = osb.run_pinned([str(editor), "--headless", "--path", str(src), *step], ROOT, mask, 3600)
+        if result["returncode"] != 0 or result["timed_out"]:
+            tail = "\n".join(result["output"].splitlines()[-20:])
+            raise RuntimeError(f"Level {step[0]} failed (exit {result['returncode']}):\n{tail}")
+    if not pck.is_file():
+        raise RuntimeError(f"--export-pack wrote no {pck.name}")
+    (out / "override.cfg").write_text(LEVEL_OVERRIDE, encoding="utf-8")
+    changed = git("status", "--porcelain", root=src).decode().splitlines()
+    return pck, {"repository": pin["url"], "commit": pin["commit"], "license": pin["license"],
+                 "pck_sha256": hashlib.sha256(pck.read_bytes()).hexdigest(), "pck_bytes": pck.stat().st_size,
+                 "editor_changed_files": len(changed), "robots": LEVEL_ROBOTS, "frames": LEVEL_FRAMES,
+                 "exported_by": editor.name}
+
+
 def prepare_scene_project():
     # Template builds print "ERROR: Could not load global script cache." without the cache an editor import
     # writes. The bench project has no global classes: an empty list, in its gitignored .godot/ folder.
@@ -349,6 +425,13 @@ def script_command(exe, params, ctx):
 
 def gdbench_command(exe, params, ctx):
     return _game(exe, "gdbench.gd", [f"--files={ctx['gdbench'].as_posix()}", f"--extra={GDBENCH_EXTRA.as_posix()}"])
+
+
+def level_command(exe, params, ctx):
+    # Windowed on Vulkan (render-thread CPU needs a window); no audio device, so no audio thread or sound.
+    return [str(exe), "--main-pack", str(ctx["level"]), "--script", str(LEVEL_SCRIPT), "--fixed-fps", "60",
+            "--rendering-driver", "vulkan", "--resolution", "1920x1080", "--audio-driver", "Dummy", "--",
+            f"--frames={LEVEL_FRAMES}", f"--robots={LEVEL_ROBOTS}"]
 
 
 def _editor_json(ctx):
@@ -387,6 +470,12 @@ WORKLOADS = {
     "editor_startup": {"command": editor_command, "metrics": ("wall_ms", "peak_ws_mb"), "counts": (),
                        "info": ("main_start_ms", "first_scan_ms"), "read": editor_fields, "bench_line": False,
                        "builds": ("editor",), "costly": True, "editor_mode": True},
+    # D-09: load and CPU frame times are judged; GPU time and the wall frame time are stored, never judged.
+    "level": {"command": level_command,
+              "metrics": ("main_ms_p50", "instance_ms", "load_ms", "peak_ws_mb", "render_cpu_ms_p50"),
+              "counts": ("load_allocs", "fly_allocs", "fly_reallocs"),
+              "info": ("first_frame_ms", "main_ms_p95", "render_cpu_ms_p95", "gpu_ms_p50", "wall_ms"),
+              "costly": True},
 }
 
 
@@ -579,6 +668,10 @@ def run_series(args, sides):
         ctx["gdbench"], gdbench_info = prepare_gdbench()
     if "editor_startup" in names:
         prepare_editor_projects(out, labels)
+    if "level" in names:
+        ctx["level"], level_info = prepare_level(out, mask)
+        print(f"LEVEL {level_info['pck_sha256'][:16]} ({level_info['pck_bytes'] / 1048576:.0f} MB),"
+              f" {level_info['editor_changed_files']} files changed by the editor in the copy", flush=True)
     meta = {
         **machine_meta(mask), **checks,
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -597,6 +690,8 @@ def run_series(args, sides):
     }
     if "gdbench" in names:
         meta["gdbench"] = gdbench_info
+    if "level" in names:
+        meta["level"] = level_info
 
     raw, values, clocks, cold_s = [], {}, {}, {}  # values: (item, metric, build, label) -> {round: value}
     counts = {}  # (item, count, build, label) -> {round: count}; a binary without the counter has none
@@ -638,6 +733,7 @@ def run_series(args, sides):
                     shown.append(f"{metric}={'n/a' if count is None else count}")
             for metric in d["info"]:  # printed and stored, never judged
                 value = (item_fields or {}).get(metric)
+                value = None if value is None else float(value)  # BENCH line fields are strings
                 raw.append(row(rnd, position, label, build, name, d["case"], metric,
                                "" if value is None else repr(value), int(value is None), reason or "", result, wall))
                 if rnd > 0 and value is not None:

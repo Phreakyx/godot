@@ -17,10 +17,13 @@ sources:
     title: How to run the runner
   - id: bench-workloads
     resource: ../../devtools/bench/workloads/
-    title: Workload drivers (scene.gd, script.gd, gdbench.gd, gdbench_dictionary.gd)
+    title: Workload drivers (scene.gd, script.gd, gdbench.gd, gdbench_dictionary.gd, real_level.gd)
   - id: godot-benchmarks
     resource: https://github.com/godotengine/godot-benchmarks/tree/ff8e67af1eac6054f011ee7137163b64bd0bf7fb
     title: godot-benchmarks at the pinned commit (MIT; fetched, never vendored)
+  - id: tps-demo
+    resource: https://github.com/godotengine/tps-demo/tree/a82f15448e9b015440d3bbdf5e10801b260c4e9f
+    title: Godot TPS demo at the pinned commit (MIT code, CC-BY 3.0 assets; fetched, never vendored)
 ---
 
 # Ground rules
@@ -174,6 +177,7 @@ Cheap workloads (a process under 3 s) get n = 11; costly ones n = 5.
 | `script:<nodes\|script\|instance>` | `devtools/bench/workloads/script.gd`: the three `core_workload.gd` modes (10,000 nodes with 200 freed and re-added per frame and a group call; 2,000 agents with Dictionary stats, `%` formatting and String joins; a 2,000-node scene instanced and freed per frame), 120 frames after 30 warm-up | `frame_ms_p50`, `peak_ws_mb` | `allocs`, `reallocs` | by the cold round | both |
 | `gdbench` | `devtools/bench/workloads/gdbench.gd`: a godot-benchmarks subset and the fork's Dictionary benchmark, one process, every case once to warm up and once timed | `time_ms` per case, `peak_ws_mb` per process | `allocs`, `reallocs` per case | costly | both |
 | `editor_startup` | headless `--editor --quit` on a copy of `misc/large_world_test_project`, with `--benchmark-file` | `wall_ms` (process creation to exit), `peak_ws_mb` | none | costly | editor only |
+| `level` | `devtools/bench/workloads/real_level.gd` on the Godot TPS demo `.pck`: load, instancing, 32 extra robots, 600 frames of a camera path after 120 warm-up, windowed on Vulkan | `load_ms`, `instance_ms`, `main_ms_p50`, `render_cpu_ms_p50`, `peak_ws_mb` | `load_allocs`, `fly_allocs`, `fly_reallocs` | costly | both |
 
 - **Scene project.** `scene`, `script` and `gdbench` run headless in
   `misc/scene_bench_project` with `--fixed-fps 60` (14 workers).
@@ -214,6 +218,66 @@ Cheap workloads (a process under 3 s) get n = 11; costly ones n = 5.
   from the JSON go to `raw.csv` and are printed as `INFO` medians, never
   judged. On `template_release` the floor and verdict lines read
   `n/a (editor only)`.
+- **Real level (D-08 to D-10).** The Godot TPS demo
+  ([godotengine/tps-demo](https://github.com/godotengine/tps-demo), MIT
+  code, CC-BY 3.0 assets) at commit `a82f15448e`
+  (`a82f15448e9b015440d3bbdf5e10801b260c4e9f`): real game code (robot AI,
+  AnimationTree, physics, particles) in a large lit level. `bench.py fetch`
+  (and every `level` series) fetches it into
+  `devtools/out/bench/src/tps-demo/a82f154/` and refuses it unless HEAD is
+  the pin; nothing of it is vendored. Once per series the control editor
+  bench build (`godot.windows.editor.x86_64.bench.exe`) runs
+  `--headless --path <copy> --import`, writes a minimal `export_presets.cfg`
+  (Windows Desktop, all resources; the demo ships none and ignores the
+  file) into the copy and runs `--export-pack bench <series>/tps-demo.pck`;
+  no export templates are needed for a pack. Every binary of the series, on
+  editor and `template_release`, runs that one `.pck` with `--main-pack`.
+  `meta.json` `level` records its SHA-256, its size and the number of
+  files the editor changed in the copy (`git status --porcelain`).
+  `override.cfg` next to the `.pck` pins what the project leaves open
+  without editing it: 14 workers, vsync off, `max_fps` 0, windowed
+  1920x1080, no HDR output, Vulkan, and `GodotPhysics3D` (the project names
+  "Bullet", a Godot 3 engine). The command adds `--fixed-fps 60
+  --rendering-driver vulkan --resolution 1920x1080 --audio-driver Dummy`.
+- **What the level driver pins.** Every option of the demo's `Settings`
+  autoload is set to the demo's defaults before the level loads (a
+  `user://settings.ini` from playing the demo is ignored), then windowed,
+  no vsync, no fps cap, VoxelGI at low quality. After `level.gd` and the
+  forklifts call `randomize()` in `_ready`, the driver seeds the RNG, puts
+  the player on spawn point 1 and shows forklift model 1. The player gets
+  no input (its `InputSynchronizer` stops; the mouse is not captured) and
+  the window takes no input events. 32 extra robots (`--robots`, in
+  `meta.json`) are spawned through the level's own `spawn_robot()` on a
+  2 m ring around its four robot spawn points (36 robots in all). A
+  `Camera3D` of the driver flies one closed loop through the four robot
+  spawn points and the first player spawn point, 2 m up, over the warm-up
+  and measured frames; its position is a function of the frame index only.
+- **What the level measures.** `load_ms` is `load()` of
+  `res://level/level.tscn`; `instance_ms` is `instantiate()`, `add_child()`
+  (the level's `_ready`: GI setup, its four robots, the player) and the
+  extra robots; `load_allocs` counts the allocations of both. Over the 600
+  measured frames: `main_ms` is the physics step plus the process step, each
+  from the SceneTree's own callback (which runs first) to a marker node with
+  the highest priority (which runs last); `render_cpu_ms` is
+  `viewport_get_measured_render_time_cpu()` of the root viewport plus
+  `get_frame_setup_time_cpu()`; `fly_allocs` and `fly_reallocs` count the
+  measured frames. Judged: `load_ms`, `instance_ms`, `main_ms_p50`,
+  `render_cpu_ms_p50` and `peak_ws_mb`, and the counts by the count rule.
+  `first_frame_ms`, the p95 values, `gpu_ms_p50` (viewport GPU time) and
+  `wall_ms` are `INFO` only: GPU time and the wall frame time follow the
+  renderer, so they never judge a core change
+  ([renderer-bound frames](/mistakes/renderer-bound-frame-for-scene-changes.md)).
+  The level runs windowed, so close GPU-heavy programs before measuring.
+- **Level counts are not deterministic.** The first two A/A runs
+  (2026-11-21) gave `load_allocs` within 31 of 1.1 million and
+  `fly_allocs` within 1,300 of 0.7 million (0.2%) across twins and rounds
+  (resource loading and rendering use worker threads, and the robots fire
+  at the idle player); only `fly_reallocs` was identical. Its COUNTS lines
+  read `COUNT-NONDETERMINISTIC` with the spread, so the level's counts are
+  reported, never judged by "any increase" (Pitfall 4 of the research).
+- **Exit.** The driver frees the level after the BENCH line and keeps the
+  tree running 500 ms before it quits, so the audio thread has removed the
+  music's playback ([quit right after freeing audio](/mistakes/quit-right-after-freeing-audio.md)).
 - **Order.** `summary.csv`, `counts.csv` and the printed summary go by
   workload, then case, then build type, then metric.
 
@@ -278,7 +342,9 @@ their workloads and options to [the runner README](../../devtools/bench/README.m
 
 Each bench variant keeps about 3 GB of objects in `bin/obj`. A previous
 build lives in `devtools/out/bench/wt/<sha7>/` with its own objects; after
-deleting that folder, run `git worktree prune`.
+deleting that folder, run `git worktree prune`. A `level` series writes a
+570 MB `.pck` into its series directory, and the fetched TPS demo with its
+import cache takes about 1.5 GB in `devtools/out/bench/src/tps-demo/`.
 
 # Lessons this protocol applies
 
@@ -291,7 +357,10 @@ deleting that folder, run `git worktree prune`.
 - [Copy benchmark retained-byte omission](/mistakes/copy-benchmark-retained-bytes.md),
   [benchmark snapshot dependencies](/mistakes/benchmark-snapshot-dependencies.md),
   [a benchmark ran with the feature it measures inactive](/mistakes/bench-without-the-feature-active.md)
-- [A relative benchmark-file path went to the project folder](/mistakes/relative-path-after-project-chdir.md)
+- [A relative benchmark-file path went to the project folder](/mistakes/relative-path-after-project-chdir.md),
+  [a level driver quit right after freeing the level's audio](/mistakes/quit-right-after-freeing-audio.md)
+- [Ran a GI test with auto exposure and real-time timing](/mistakes/uncontrolled-test-conditions.md)
+  (the level driver pins every setting the demo leaves to the player)
 - [A test scene that could not quit](/mistakes/test-scene-without-hard-quit.md),
   [single-flag benchmark runs measured the defaults](/mistakes/powershell-single-arg-splat.md)
 - Successes: [control build for layout effects](/successes/control-build-for-layout-effects.md),
