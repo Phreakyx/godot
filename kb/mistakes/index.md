@@ -56,4 +56,5 @@ What worked is in [successes](/successes/).
 * [A benchmark ran with the feature it measures inactive](/mistakes/bench-without-the-feature-active.md) - check counters and timings are nonzero before printing numbers; shared mesh+material batches CLOD objects out of CLOD
 * [Separate runs had an order bias; a draw count was taken for the cost](/mistakes/separate-runs-order-bias.md) - alternate A/B settings inside one process with an A/A floor; remove the suspected counter and measure again before naming a cause
 * [Warm A/B runs on a new exe measured the driver cache](/mistakes/warm-runs-on-a-new-exe.md) - cold run first for every build; NVIDIA's driver cache is per exe
+* [A relative benchmark-file path went to the project folder](/mistakes/relative-path-after-project-chdir.md) - pass absolute paths to the engine; a FLOOR line that reads INCOMPLETE is not a pass
 * [A version name change didn't reach the exe after an incremental build](/mistakes/version-name-incremental-build.md) - after changing version info in methods.py, delete the objects that use core/version.h (editor and tests builds); check the name in the output

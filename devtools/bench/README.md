@@ -11,14 +11,21 @@ The rules, the machine checks and what each run records are in
 
 ```
 python devtools/bench/bench.py check
+python devtools/bench/bench.py fetch
 python devtools/bench/bench.py aa --workloads scene:instance:10000 --builds editor,template_release --write-floors
 python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev \
     --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
 python devtools/bench/test_bench.py
 ```
 
-- Workloads: `scene:<scenario>:<count>` (`devtools/bench/workloads/scene.gd`, project
-  `misc/scene_bench_project`).
+- Workloads (judged metrics, class and build types in the protocol's "Workloads"):
+  `scene:<scenario>:<count>` (`workloads/scene.gd`), `script:<nodes|script|instance>`
+  (`workloads/script.gd`), `gdbench` (`workloads/gdbench.gd`: the godot-benchmarks subset and
+  `workloads/gdbench_dictionary.gd`, one item per case `gdbench/<file stem>.<method>`) and
+  `editor_startup` (editor only, on a per-binary copy of `misc/large_world_test_project`).
+- `fetch` fetches the pinned third-party sources (`PINS` in `bench.py`: godot-benchmarks
+  `ff8e67af1e`, MIT) into `devtools/out/bench/src/` and refuses a checkout whose HEAD is not the
+  pin. A `gdbench` series fetches it too.
 - `--skip-build` reuses the binaries in `bin/` (and the previous build's worktree in
   `devtools/out/bench/wt/<sha7>/`); `--rounds` fixes n; `--budget` is the minutes of measurement
   allowed (default 30); `--floors` is the floors file (default `devtools/bench/floors.json`).

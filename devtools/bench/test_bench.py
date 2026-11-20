@@ -54,7 +54,7 @@ class Verdict(unittest.TestCase):
         self.assertEqual(bench.paired_diffs(control, candidate), [-0.1, 0.1])
 
 
-class Counts(unittest.TestCase):
+class CountVerdict(unittest.TestCase):
     def test_any_increase_is_flagged(self):
         self.assertEqual(bench.count_verdict({"a": 100, "b": 50}, {"a": 90, "b": 51}, True), "ALLOC-INCREASE")
 
@@ -120,25 +120,32 @@ class BudgetPlan(unittest.TestCase):
         self.assertAlmostEqual(bench.budget_minutes([(2.0, 11), (6.0, 5)], 3, 2), (22 + 30) * 6 / 60)
 
 
-def _result(line):
-    return {"output": line + "\n", "timed_out": False, "returncode": 0, "peak_ws_bytes": 1 << 20}
+def _result(line, returncode=0):
+    return {"output": line + "\n", "timed_out": False, "returncode": returncode, "peak_ws_bytes": 1 << 20,
+            "wall_s": 1.5}
+
+
+def _counts(line, names):
+    fields, reason = bench.process_fields("scene:churn:10", "scene", _result(line), {})["scene:churn:10"]
+    return bench.count_values(fields, names)
 
 
 class Counts(unittest.TestCase):
     def test_counts_are_not_time_or_memory_metrics(self):
-        self.assertEqual(bench.COUNT_METRICS["scene"], ("allocs", "reallocs"))
-        self.assertFalse(set(bench.COUNT_METRICS["scene"]) & set(bench.WORKLOADS["scene"][1]))
+        for name, w in bench.WORKLOADS.items():
+            self.assertFalse(set(w["counts"]) & set(w["metrics"]), name)
+        self.assertEqual(bench.WORKLOADS["scene"]["counts"], ("allocs", "reallocs"))
 
     def test_counts_are_read_from_the_bench_line_zero_included(self):
-        counts = bench.parse_counts(_result("BENCH: frame_ms_p50=1.0 allocs=1200 reallocs=0"), ("allocs", "reallocs"))
+        counts = _counts("BENCH: frame_ms_p50=1.0 allocs=1200 reallocs=0", ("allocs", "reallocs"))
         self.assertEqual(counts, {"allocs": 1200, "reallocs": 0})
 
     def test_missing_field_is_not_available_not_zero(self):
-        counts = bench.parse_counts(_result("BENCH: frame_ms_p50=1.0"), ("allocs", "reallocs"))
+        counts = _counts("BENCH: frame_ms_p50=1.0", ("allocs", "reallocs"))
         self.assertEqual(counts, {"allocs": None, "reallocs": None})
 
     def test_failed_sample_has_no_counts(self):
-        counts = bench.parse_counts(_result("BENCH_FAIL: boom"), ("allocs",))
+        counts = _counts("BENCH_FAIL: boom", ("allocs",))
         self.assertEqual(counts, {"allocs": None})
 
     def test_aa_identical(self):
@@ -179,6 +186,61 @@ class SeriesMetadata(unittest.TestCase):
         self.assertEqual(bench.probe(lambda: 1 / 0), "unavailable")
         self.assertEqual(bench.probe(lambda: ""), "unavailable")
         self.assertEqual(bench.probe(lambda: 0), 0)  # Game Mode off is a value, not a missing one
+
+
+GD = "gdbench"
+
+
+class MultiCase(unittest.TestCase):
+    LINES = ("BENCH: workload=gdbench case=a.benchmark_x time_ms=2.0\n"
+             "BENCH: workload=gdbench case=b.benchmark_x time_ms=3.0")
+
+    def test_same_method_in_two_files_is_two_cases(self):
+        fields = bench.process_fields(GD, GD, _result(self.LINES), {})
+        self.assertEqual(sorted(fields), [GD, "gdbench/a.benchmark_x", "gdbench/b.benchmark_x"])
+        self.assertEqual(fields["gdbench/b.benchmark_x"][0]["time_ms"], "3.0")
+        self.assertEqual(bench.item_def(GD, GD, [], "gdbench/a.benchmark_x")["case"], "a.benchmark_x")
+
+    def test_expected_case_missing_is_failed_not_dropped(self):
+        expected = {"gdbench/a.benchmark_x", "gdbench/c.benchmark_y"}
+        fields = bench.process_fields(GD, GD, _result(self.LINES), {}, expected)
+        self.assertIsNone(fields["gdbench/c.benchmark_y"][0])
+        self.assertIn("missing", fields["gdbench/c.benchmark_y"][1])
+
+    def test_bench_fail_fails_every_expected_case(self):
+        result = _result("BENCH_FAIL: empty.gd has no benchmark_ methods", returncode=1)
+        fields = bench.process_fields(GD, GD, result, {}, {"gdbench/a.benchmark_x"})
+        self.assertEqual({reason for _, reason in fields.values()}, {"BENCH_FAIL: empty.gd has no benchmark_ methods"})
+        self.assertEqual(bench.metric_values(*fields["gdbench/a.benchmark_x"], ("time_ms",)),
+                         {"time_ms": (None, "BENCH_FAIL: empty.gd has no benchmark_ methods")})
+
+    def test_order_is_workload_then_case(self):
+        items = {}
+        for spec, label in (("scene:instance:10", "scene:instance:10"), (GD, "gdbench/b.x"), (GD, "gdbench/a.x"),
+                            (GD, GD), ("scene:churn:10", "scene:churn:10")):
+            name, params = bench.parse_workload(spec)
+            items[label] = (spec, name, params, bench.item_def(spec, name, params, label))
+        self.assertEqual([label for label, _ in bench.sorted_items(items)],
+                         [GD, "gdbench/a.x", "gdbench/b.x", "scene:churn:10", "scene:instance:10"])
+
+    def test_editor_startup_is_editor_only(self):
+        self.assertTrue(bench.runs_on("editor_startup", "editor"))
+        self.assertFalse(bench.runs_on("editor_startup", "template_release"))
+        self.assertTrue(bench.runs_on("gdbench", "template_release"))
+        self.assertEqual(bench.only_on("editor_startup"), "n/a (editor only)")
+
+
+class GdbenchCopy(unittest.TestCase):
+    def test_only_extends_and_iterations_change_line_endings_kept(self):
+        text = "extends Benchmark\r\n\r\nconst ITERATIONS = 1_000_000\r\nfunc benchmark_a() -> void:\r\n\tpass\r\n"
+        copy, changed = bench.gdbench_copy(text, 1000)
+        self.assertEqual(changed, 2)
+        self.assertEqual(copy, text.replace("extends Benchmark", "extends RefCounted").replace("1_000_000", "1000"))
+        self.assertEqual(bench.gdbench_copy(text, None)[1], 1)
+
+    def test_no_benchmark_base_is_refused(self):
+        with self.assertRaises(RuntimeError):
+            bench.gdbench_copy("extends Node\n", None)
 
 
 @unittest.skipUnless(bench.osb is not None and bench.os.name == "nt", "Windows adapter")

@@ -1,6 +1,7 @@
 """Benchmark runner: same-source builds, pinned alternating rounds, paired differences and verdicts.
 
   python devtools/bench/bench.py check
+  python devtools/bench/bench.py fetch
   python devtools/bench/bench.py aa --workloads scene:instance:10000 --builds editor,template_release
   python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
       --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
@@ -223,16 +224,99 @@ def load_floors(path):
 
 # --- workloads ---
 
+# Third-party sources, fetched into devtools/out/bench/src/<name>/<sha7>/ at a pinned commit and refused
+# unless HEAD is the pin; never vendored (T-02-10).
+PINS = {
+    "godot-benchmarks": {
+        "url": "https://github.com/godotengine/godot-benchmarks",
+        "commit": "ff8e67af1eac6054f011ee7137163b64bd0bf7fb",
+        "license": "MIT",
+    },
+}
+# The gdbench subset (BENCH-03): file at the godot-benchmarks pin -> ITERATIONS (None keeps upstream's value).
+# Copies change only `extends Benchmark` (to RefCounted) and that constant. Upstream's values took 27 s of
+# timed calls (55 s per process with the warm-up calls, template_release); these keep a process near 10 s.
+GDBENCH_FILES = {
+    "benchmarks/gdscript/string_format.gd": 100_000,  # upstream 1_000_000 (8.9 s)
+    "benchmarks/gdscript/string_manipulation.gd": 100_000,  # upstream 1_000_000 (11.9 s)
+    "benchmarks/gdscript/array.gd": 200_000,  # upstream 2_000_000 (3.6 s)
+    "benchmarks/gdscript/alloc.gd": 25_000,  # upstream 100_000 (1.8 s)
+    "benchmarks/core/string_name.gd": None,
+    "benchmarks/core/signal.gd": None,
+}
+GDBENCH_EXTRA = ROOT / "devtools/bench/workloads/gdbench_dictionary.gd"  # the fork's own (no upstream one)
+EDITOR_PROJECT = "misc/large_world_test_project"  # only ever opened as a copy under the series directory
 
-def scene_command(exe, scenario, count):
-    count = int(count)
-    # 100k-node runs take up to a second or more per frame (instancing): fewer frames, as the old driver.
-    frames, warmup = (30, 5) if count >= 100000 else (120, 30)
-    return [
-        str(exe), "--headless", "--path", str(ROOT / "misc/scene_bench_project"), "--fixed-fps", "60",
-        "--script", str(ROOT / "devtools/bench/workloads/scene.gd"), "--",
-        f"--scenario={scenario}", f"--count={count}", f"--frames={frames}", f"--warmup={warmup}",
-    ]
+
+def fetch_git(name):
+    """The pinned checkout in a directory of its own; a reused directory is checked the same way."""
+    pin = PINS[name]
+    path = OUT / "src" / name / pin["commit"][:7]
+    if not path.is_dir():
+        path.mkdir(parents=True)
+        git("init", "-q", root=path)
+        git("fetch", "-q", "--depth", "1", pin["url"], pin["commit"], root=path)
+        git("checkout", "-q", "FETCH_HEAD", root=path)
+    # Without its own .git (a partial fetch) rev-parse finds the fork's HEAD, which is not the pin either.
+    head = probe(lambda: git("rev-parse", "HEAD", root=path).decode().strip())
+    if head != pin["commit"]:
+        raise RuntimeError(f"{path.relative_to(ROOT).as_posix()} is at {head}, not the pin {pin['commit']}:"
+                           " delete it and run bench.py fetch")
+    return path
+
+
+def gdbench_copy(text, iterations):
+    """(copy, changed line count) of one upstream file: only the extends line and the ITERATIONS constant change."""
+    lines = text.splitlines(keepends=True)
+    out = []
+    for line in lines:
+        body = line.rstrip("\r\n")
+        end = line[len(body):]
+        if body == "extends Benchmark":
+            body = "extends RefCounted"
+        elif iterations is not None and re.fullmatch(r"const ITERATIONS = [\d_]+", body):
+            body = f"const ITERATIONS = {iterations}"
+        out.append(body + end)
+    if not any(line == "extends Benchmark" for line in text.splitlines()):
+        raise RuntimeError("no `extends Benchmark` line: the upstream file changed shape")
+    return "".join(out), sum(a != b for a, b in zip(lines, out))
+
+
+def prepare_gdbench():
+    """The subset, copied from the pinned checkout into devtools/out/bench/gdbench/<sha7>/ for every series."""
+    src, pin = fetch_git("godot-benchmarks"), PINS["godot-benchmarks"]
+    dest = OUT / "gdbench" / pin["commit"][:7]
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    files = {}
+    for rel, iterations in GDBENCH_FILES.items():
+        name = Path(rel).name
+        if name in files:
+            raise RuntimeError(f"Two subset files named {name}: case names would collide")
+        source = (src / rel).read_bytes().decode("utf-8")
+        try:
+            text, changed = gdbench_copy(source, iterations)
+        except RuntimeError as error:
+            raise RuntimeError(f"{rel}: {error}") from None
+        (dest / name).write_bytes(text.encode("utf-8"))
+        upstream = re.search(r"^const ITERATIONS = ([\d_]+)", source, re.M)
+        files[name] = {"source": rel, "changed_lines": changed, "iterations": iterations,
+                       "upstream_iterations": upstream.group(1) if upstream else None}
+    info = {"repository": pin["url"], "commit": pin["commit"], "license": pin["license"], "files": files,
+            "extra": GDBENCH_EXTRA.relative_to(ROOT).as_posix()}
+    return dest, info
+
+
+def prepare_editor_projects(out, labels):
+    """A fresh mirror of the tracked test project per binary: the editor imports and writes into its own copy."""
+    tracked = git("ls-files", "-z", "--", EDITOR_PROJECT).decode().split("\0")
+    for label in labels:
+        dest = out / "editor_project" / label
+        shutil.rmtree(dest, ignore_errors=True)
+        for rel in filter(None, tracked):
+            target = dest / Path(rel).relative_to(EDITOR_PROJECT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / rel, target)
 
 
 def prepare_scene_project():
@@ -244,12 +328,66 @@ def prepare_scene_project():
         cache.write_text("list=[]\n", encoding="utf-8")
 
 
-# name -> (command builder, judged metrics with the time metric first, editor mode). Editor-mode runs start
-# 32 workers whatever the project says (D-12 exception): their count is recorded, not checked.
-WORKLOADS = {"scene": (scene_command, SCENE_METRICS, False)}
-# Allocation counts per workload (bench builds only, fork/alloc_count): judged by the count rule, never by the
-# time or memory rules (D-06).
-COUNT_METRICS = {"scene": ("allocs", "reallocs")}
+def _game(exe, script, user_args):
+    return [
+        str(exe), "--headless", "--path", str(ROOT / "misc/scene_bench_project"), "--fixed-fps", "60",
+        "--script", str(ROOT / "devtools/bench/workloads" / script), "--", *user_args,
+    ]
+
+
+def scene_command(exe, params, ctx):
+    scenario, count = params[0], int(params[1])
+    # 100k-node runs take up to a second or more per frame (instancing): fewer frames, as the old driver.
+    frames, warmup = (30, 5) if count >= 100000 else (120, 30)
+    return _game(exe, "scene.gd", [f"--scenario={scenario}", f"--count={count}", f"--frames={frames}",
+                                   f"--warmup={warmup}"])
+
+
+def script_command(exe, params, ctx):
+    return _game(exe, "script.gd", [f"--mode={params[0]}", "--frames=120", "--warmup=30"])
+
+
+def gdbench_command(exe, params, ctx):
+    return _game(exe, "gdbench.gd", [f"--files={ctx['gdbench'].as_posix()}", f"--extra={GDBENCH_EXTRA.as_posix()}"])
+
+
+def _editor_json(ctx):
+    return ctx["out"] / "editor_startup" / f"{ctx['label']}-{ctx['round']}.json"
+
+
+def editor_command(exe, params, ctx):
+    json_path = _editor_json(ctx)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.unlink(missing_ok=True)
+    project = ctx["out"] / "editor_project" / ctx["label"]
+    return [str(exe), "--headless", "--editor", "--quit", "--path", str(project), "--benchmark-file", str(json_path)]
+
+
+def editor_fields(ctx):
+    """Main::Start and First Scan from the editor's --benchmark-file JSON (seconds), in ms."""
+    try:
+        marks = json.loads(_editor_json(ctx).read_text(encoding="utf-8"))
+        return {"main_start_ms": marks["[Startup] Main::Start"] * 1000,
+                "first_scan_ms": marks["[Editor] First Scan"] * 1000}, None
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return None, f"benchmark file: {type(error).__name__} {error}"
+
+
+SCENE_COUNTS = ("allocs", "reallocs")  # bench builds only (fork/alloc_count); judged by the count rule (D-06)
+# name -> definition. metrics: judged per process, the time metric first; counts: allocation counts;
+# cases: the process prints one BENCH line per case, each its own item <spec>/<case> with case_metrics and
+# case_counts; info: printed and stored, never judged; builds: the build types it runs on (others read n/a);
+# costly: n = 5 whatever the cold round takes; editor_mode: starts 32 workers whatever the project says (D-12
+# exception), so the count is recorded, not checked.
+WORKLOADS = {
+    "scene": {"command": scene_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS},
+    "script": {"command": script_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS},
+    "gdbench": {"command": gdbench_command, "metrics": ("peak_ws_mb",), "counts": (), "cases": True,
+                "case_metrics": ("time_ms",), "case_counts": SCENE_COUNTS, "costly": True},
+    "editor_startup": {"command": editor_command, "metrics": ("wall_ms", "peak_ws_mb"), "counts": (),
+                       "info": ("main_start_ms", "first_scan_ms"), "read": editor_fields, "bench_line": False,
+                       "builds": ("editor",), "costly": True, "editor_mode": True},
+}
 
 
 def parse_workload(spec):
@@ -259,8 +397,8 @@ def parse_workload(spec):
     return name, params
 
 
-def bench_fields(result):
-    """(BENCH line fields, None) for a good sample, or (None, reason) for a failed one."""
+def bench_lines(result, need_line=True):
+    """(fields of every BENCH line, None) for a good process, or (None, reason) for a failed one."""
     lines = result["output"].splitlines()
     errors = [line for line in lines if line.startswith("ERROR") and "screen reader support driver" not in line]
     bench = [line for line in lines if line.startswith("BENCH: ")]
@@ -275,23 +413,41 @@ def bench_fields(result):
         reason = next(line for line in lines if line.startswith("BENCH_FAIL"))
     elif result["returncode"] != 0:
         reason = f"exit code {result['returncode']}"
-    elif not bench:
+    elif need_line and not bench:
         reason = "no BENCH line"
     if reason:
         return None, reason.strip()
-    return dict(re.findall(r"(\w+)=(\S+)", bench[0][len("BENCH: ") :])), None
+    return [dict(re.findall(r"(\w+)=(\S+)", line[len("BENCH: ") :])) for line in bench], None
 
 
-def parse_sample(result, metrics):
+def process_fields(spec, name, result, ctx, expected=()):
+    """Item label -> (fields, reason) for one process. A multi-case workload's cases are items <spec>/<case>;
+    a case in expected (the cold round's) but absent from this process is failed, never left out."""
+    w = WORKLOADS[name]
+    lines, reason = bench_lines(result, w.get("bench_line", True))
+    extra = {}
+    if reason is None and "read" in w:
+        extra, reason = w["read"](ctx)
+    if reason:
+        return {spec: (None, reason), **{case: (None, reason) for case in sorted(expected)}}
+    proc = {"peak_ws_mb": result["peak_ws_bytes"] / 1048576, "wall_ms": result["wall_s"] * 1000, **extra}
+    if not w.get("cases"):
+        return {spec: ({**(lines[0] if lines else {}), **proc}, None)}
+    by_case = {f"{spec}/{line['case']}": line for line in lines if "case" in line}
+    out = {spec: (proc, None)}
+    for case in sorted(set(expected) | set(by_case)):
+        out[case] = (by_case[case], None) if case in by_case else (None, "case missing (seen in the cold round)")
+    return out
+
+
+def metric_values(fields, reason, metrics):
     """Metric -> (value, reason); value None means failed. Never turns a failure into a number."""
-    values, reason = bench_fields(result)
     if reason:
         return {m: (None, reason) for m in metrics}
-    values["peak_ws_mb"] = result["peak_ws_bytes"] / 1048576
     sample = {}
     for metric in metrics:
         try:
-            value = float(values[metric])
+            value = float(fields[metric])
         except (KeyError, ValueError):
             sample[metric] = (None, f"{metric} missing or not a number")
             continue
@@ -299,11 +455,24 @@ def parse_sample(result, metrics):
     return sample
 
 
-def parse_counts(result, names):
+def count_values(fields, names):
     """Count -> int, or None (n/a) when the sample failed or the binary has no counter. Zero is a count."""
-    values, _ = bench_fields(result)
-    values = values or {}
-    return {name: int(values[name]) if values.get(name, "").isdigit() else None for name in names}
+    fields = fields or {}
+    return {name: int(fields[name]) if str(fields.get(name, "")).isdigit() else None for name in names}
+
+
+def item_def(spec, name, params, label):
+    """An item's floor case and fields; time is the metric the accept rule judges (None: no time metric)."""
+    w = WORKLOADS[name]
+    if label == spec:
+        return {"case": ":".join(params), "metrics": w["metrics"], "counts": w["counts"], "info": w.get("info", ()),
+                "time": None if w.get("cases") else w["metrics"][0]}
+    return {"case": label[len(spec) + 1 :], "metrics": w["case_metrics"], "counts": w["case_counts"], "info": (),
+            "time": w["case_metrics"][0]}
+
+
+def runs_on(name, build):
+    return build in WORKLOADS[name].get("builds", (build,))
 
 
 # --- machine checks (D-13: read, refuse with the fix, never change) ---
@@ -401,10 +570,15 @@ def run_series(args, sides):
     missing = [str(exe.relative_to(ROOT)) for exe in exes.values() if not exe.is_file()]
     if missing:
         raise RuntimeError(f"Missing {', '.join(missing)}; run without --skip-build")
-    if any(name == "scene" for _, name, _ in workloads):
-        prepare_scene_project()
     checks["home_mask"] = hex(osb.set_home_affinity(mask))  # the runner and its helpers stay off the bench CPUs
-    out = Path(args.out)
+    out = Path(args.out).resolve()  # absolute: the engine resolves relative paths from the --path project
+    ctx = {"out": out}  # per process: + label and round
+    names = {name for _, name, _ in workloads}
+    prepare_scene_project()
+    if "gdbench" in names:
+        ctx["gdbench"], gdbench_info = prepare_gdbench()
+    if "editor_startup" in names:
+        prepare_editor_projects(out, labels)
     meta = {
         **machine_meta(mask), **checks,
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -421,9 +595,58 @@ def run_series(args, sides):
             for s in sides
         ],
     }
+    if "gdbench" in names:
+        meta["gdbench"] = gdbench_info
 
-    raw, values, clocks, cold_s = [], {}, {}, {}  # values: (spec, metric, build, label) -> {round: value}
-    counts = {}  # (spec, count, build, label) -> {round: count}; a binary without the counter has none
+    raw, values, clocks, cold_s = [], {}, {}, {}  # values: (item, metric, build, label) -> {round: value}
+    counts = {}  # (item, count, build, label) -> {round: count}; a binary without the counter has none
+    # item label -> (spec, name, params, item_def): every workload's process item, plus the cases found.
+    items = {spec: (spec, name, params, item_def(spec, name, params, spec)) for spec, name, params in workloads}
+    expected = {}  # spec -> the case items its cold round printed (multi-case workloads)
+
+    def row(rnd, position, label, build, name, case, metric, value, failed, reason, result, wall):
+        return {
+            "round": rnd, "position": position, "binary": label, "build": build, "workload": name, "case": case,
+            "metric": metric, "value": value, "failed": failed, "reason": reason, "cpu_s": repr(result["cpu_s"]),
+            "wall_s": f"{wall:.3f}",
+        }
+
+    def record(rnd, position, label, build, spec, name, params, result, wall, call):
+        """Rows for one process; returns what the progress line shows."""
+        fields = process_fields(spec, name, result, call, expected.get(spec, ()))
+        if rnd == 0 and WORKLOADS[name].get("cases"):
+            expected.setdefault(spec, set()).update(k for k, (f, _) in fields.items() if k != spec and f is not None)
+        shown, failed_cases = [], []
+        for item, (item_fields, reason) in fields.items():
+            d = item_def(spec, name, params, item)
+            items.setdefault(item, (spec, name, params, d))
+            for metric, (value, why) in metric_values(item_fields, reason, d["metrics"]).items():
+                raw.append(row(rnd, position, label, build, name, d["case"], metric,
+                               "" if value is None else repr(value), int(value is None), why or "", result, wall))
+                if rnd > 0 and value is not None:
+                    values.setdefault((item, metric, build, label), {})[rnd] = value
+                if item == spec:
+                    shown.append(f"{metric}={value:.3f}" if value is not None else f"{metric}=FAILED ({why})")
+                elif value is None:
+                    failed_cases.append(f"{item}: {why}")
+            for metric, count in count_values(item_fields, d["counts"]).items():
+                raw.append(row(rnd, position, label, build, name, d["case"], metric, "" if count is None else count,
+                               0, "n/a" if count is None else "", result, wall))
+                if rnd > 0 and count is not None:
+                    counts.setdefault((item, metric, build, label), {})[rnd] = count
+                if item == spec:
+                    shown.append(f"{metric}={'n/a' if count is None else count}")
+            for metric in d["info"]:  # printed and stored, never judged
+                value = (item_fields or {}).get(metric)
+                raw.append(row(rnd, position, label, build, name, d["case"], metric,
+                               "" if value is None else repr(value), int(value is None), reason or "", result, wall))
+                if rnd > 0 and value is not None:
+                    values.setdefault((item, metric, build, label), {})[rnd] = value
+                if item == spec and value is not None:
+                    shown.append(f"{metric}={value:.1f}")
+        if len(fields) > 1:
+            shown.append(f"cases={len(fields) - 1} failed={len(failed_cases)}")
+        return shown, failed_cases
 
     def run_round(rnd, order, specs):
         osb.ensure_idle()
@@ -431,74 +654,76 @@ def run_series(args, sides):
         position = 0
         for build in builds:
             for spec, name, params in specs:
-                command_for, metrics, _ = WORKLOADS[name]
+                if not runs_on(name, build):
+                    continue
                 for label in order:
                     position += 1
+                    call = {**ctx, "label": label, "round": f"r{rnd}"}
+                    command = WORKLOADS[name]["command"](exes[build, label], params, call)
                     start = time.perf_counter()
-                    result = osb.run_pinned(command_for(exes[build, label], *params), ROOT, mask, TIMEOUT_S)
+                    result = osb.run_pinned(command, ROOT, mask, TIMEOUT_S)
                     wall = time.perf_counter() - start
                     if result["child_mask"] != mask:
                         raise RuntimeError(f"Child affinity {hex(result['child_mask'])}, expected {hex(mask)}")
                     if rnd == 0:
                         cold_s[spec] = max(cold_s.get(spec, 0.0), wall)
-                    shown = []
-                    for metric, (value, reason) in parse_sample(result, metrics).items():
-                        raw.append({
-                            "round": rnd, "position": position, "binary": label, "build": build, "workload": name,
-                            "case": ":".join(params), "metric": metric, "value": "" if value is None else repr(value),
-                            "failed": int(value is None), "reason": reason or "", "cpu_s": repr(result["cpu_s"]),
-                            "wall_s": f"{wall:.3f}",
-                        })
-                        shown.append(f"{metric}={value:.3f}" if value is not None else f"{metric}=FAILED ({reason})")
-                        if rnd > 0 and value is not None:
-                            values.setdefault((spec, metric, build, label), {})[rnd] = value
-                    for metric, count in parse_counts(result, COUNT_METRICS.get(name, ())).items():
-                        raw.append({
-                            "round": rnd, "position": position, "binary": label, "build": build, "workload": name,
-                            "case": ":".join(params), "metric": metric, "value": "" if count is None else count,
-                            "failed": 0, "reason": "n/a" if count is None else "", "cpu_s": repr(result["cpu_s"]),
-                            "wall_s": f"{wall:.3f}",
-                        })
-                        shown.append(f"{metric}={'n/a' if count is None else count}")
-                        if rnd > 0 and count is not None:
-                            counts.setdefault((spec, metric, build, label), {})[rnd] = count
+                    shown, failed_cases = record(rnd, position, label, build, spec, name, params, result, wall, call)
                     tag = "cold" if rnd == 0 else f"r{rnd}"
                     print(f"[{tag}] {build:16} {spec} {label:9} {' '.join(shown)} cpu_s={result['cpu_s']:.2f}",
                           flush=True)
+                    for line in failed_cases[:3]:
+                        print(f"  FAILED {line}", flush=True)
         clocks[rnd] = UNAVAILABLE if sampler == UNAVAILABLE else probe(sampler.stop)
         shown = clocks[rnd] if clocks[rnd] == UNAVAILABLE else f"{clocks[rnd]:.0f} MHz"
         print(f"[{'cold' if rnd == 0 else f'r{rnd}'}] effective clock of the bench CPUs: {shown}", flush=True)
 
     print(f"ORDER round 1: {', '.join(labels)}; even rounds reversed", flush=True)
-    run_round(0, labels, workloads)  # cold, discarded (driver and file caches per exe)
+    run_round(0, labels, workloads)  # cold, discarded (driver and file caches per exe; editor_startup imports)
+    for spec, name, _ in workloads:
+        if WORKLOADS[name].get("cases") and not expected.get(spec):
+            reasons = sorted({r["reason"] for r in raw if r["workload"] == name and r["failed"]})
+            raise RuntimeError(f"{spec} printed no cases in the cold round: {'; '.join(reasons) or 'no BENCH lines'}")
 
     # D-12: game runs must start GAME_WORKERS workers; editor-mode runs start 32 and are recorded only.
-    spec, name, params = workloads[0]
-    command_for, _, editor_mode = WORKLOADS[name]
-    workers = {f"{b}/{s}": worker_count(command_for(exes[b, s], *params), mask) for b in builds for s in labels}
-    meta["workers"] = workers
-    if editor_mode:
-        meta["editor_workers"] = workers
-    print(f"WORKERS {spec}: {', '.join(f'{k}={v}' for k, v in workers.items())}")
-    wrong = {k: v for k, v in workers.items() if v != GAME_WORKERS}
-    if not editor_mode and wrong:
+    found = {False: {}, True: {}}
+    for editor_mode in found:
+        first = next((w for w in workloads if bool(WORKLOADS[w[1]].get("editor_mode")) == editor_mode), None)
+        if first is None:
+            continue
+        spec, name, params = first
+        for b in (b for b in builds if runs_on(name, b)):
+            for s in labels:
+                command = WORKLOADS[name]["command"](exes[b, s], params, {**ctx, "label": s, "round": "workers"})
+                found[editor_mode][f"{b}/{s}"] = worker_count(command, mask)
+        print(f"WORKERS {spec}: {', '.join(f'{k}={v}' for k, v in found[editor_mode].items())}")
+    meta["workers"] = found[False]
+    if found[True]:
+        meta["editor_workers"] = found[True]
+    wrong = {k: v for k, v in found[False].items() if v != GAME_WORKERS}
+    if wrong:
         raise RuntimeError(
             f"Game runs must start {GAME_WORKERS} worker threads, found {wrong}: check [threading]"
             " worker_pool/max_threads in misc/scene_bench_project/project.godot"
         )
 
     # D-03: plan the rounds from the cold round and refuse a plan over the budget.
-    n_of = {spec: args.rounds or plan_rounds(cold_s[spec]) for spec, _, _ in workloads}
+    def costly(spec, name):
+        return WORKLOADS[name].get("costly") or cold_s.get(spec, 0.0) >= CHEAP_S
+
+    n_of = {spec: args.rounds or (5 if costly(spec, name) else plan_rounds(cold_s.get(spec, 0.0)))
+            for spec, name, _ in workloads}
     print(f"\nPLAN {'workload':28} {'s/process':>9} {'class':>6} {'n':>3} {'k':>3} {'processes':>9} {'minutes':>7}")
-    for spec, _, _ in workloads:
-        n = n_of[spec]
-        processes = n * len(sides) * len(builds)
-        cls = "cheap" if cold_s[spec] < CHEAP_S else "costly"
-        print(f"PLAN {spec:28} {cold_s[spec]:9.2f} {cls:>6} {n:3} {wins_needed(n):3} {processes:9}"
-              f" {processes * cold_s[spec] / 60:7.1f}")
-    total = budget_minutes([(cold_s[s], n_of[s]) for s, _, _ in workloads], len(sides), len(builds))
+    total = 0.0
+    for spec, name, _ in workloads:
+        n, run_builds = n_of[spec], [b for b in builds if runs_on(name, b)]
+        processes = n * len(sides) * len(run_builds)
+        minutes = budget_minutes([(cold_s.get(spec, 0.0), n)], len(sides), len(run_builds))
+        total += minutes
+        print(f"PLAN {spec:28} {cold_s.get(spec, 0.0):9.2f} {'costly' if costly(spec, name) else 'cheap':>6} {n:3}"
+              f" {wins_needed(n):3} {processes:9} {minutes:7.1f}")
     print(f"PLAN total {total:.1f} min of measurement (budget {args.budget:g} min per compiler)", flush=True)
-    meta["plan"] = {s: {"seconds": round(cold_s[s], 3), "n": n_of[s], "k": wins_needed(n_of[s])} for s in n_of}
+    meta["plan"] = {s: {"seconds": round(cold_s.get(s, 0.0), 3), "n": n_of[s], "k": wins_needed(n_of[s])}
+                    for s in n_of}
     meta["plan_minutes"] = round(total, 2)
     (out / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
     if total > args.budget:
@@ -512,39 +737,63 @@ def run_series(args, sides):
         run_round(rnd, order, [w for w in workloads if n_of[w[0]] >= rnd])
 
     flags = clock_flags(clocks)
-    for row in raw:
-        mhz = clocks[row["round"]]
-        row["clock_mhz"] = mhz if mhz == UNAVAILABLE else f"{mhz:.0f}"
-        row["clock_flag"] = flags[row["round"]]
+    for entry in raw:
+        mhz = clocks[entry["round"]]
+        entry["clock_mhz"] = mhz if mhz == UNAVAILABLE else f"{mhz:.0f}"
+        entry["clock_flag"] = flags[entry["round"]]
     flagged = [rnd for rnd, flag in flags.items() if flag == 1]
     if flagged:
         print(f"CLOCK rounds {flagged} are more than {CLOCK_TOLERANCE:.0%} off the median clock (flagged in raw.csv)")
     write_csv(out / "raw.csv", raw)
     meta["clock_mhz"] = {str(r): (m if m == UNAVAILABLE else round(m)) for r, m in clocks.items()}
     (out / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
-    summary = summarize_aa(args, workloads, builds, values, n_of, meta) if mode == "aa" else \
-        summarize_compare(args, workloads, builds, values, n_of, meta)
+    ordered = sorted_items(items)
+    summary = summarize_aa(args, ordered, builds, values, n_of, meta) if mode == "aa" else \
+        summarize_compare(args, ordered, builds, values, n_of, meta)
     write_csv(out / "summary.csv", summary)
-    count_rows = summarize_counts(mode, workloads, builds, counts)
+    count_rows = summarize_counts(mode, ordered, builds, counts)
     if count_rows:
         write_csv(out / "counts.csv", count_rows)
     print(f"\nraw.csv, summary.csv and meta.json in {out}")
 
 
-def summarize_aa(args, workloads, builds, values, n_of, meta):
+def sorted_items(items):
+    """BENCH-06 order: workload, then case; summaries then go by build type, then metric (both sorted)."""
+    return sorted(items.items(), key=lambda kv: (kv[1][1], kv[1][3]["case"], kv[0]))
+
+
+def only_on(name):
+    return f"n/a ({' and '.join(WORKLOADS[name]['builds'])} only)"
+
+
+def print_info(item, d, build, values, labels):
+    for metric in sorted(d["info"]):
+        medians = {label: values.get((item, metric, build, label)) for label in labels}
+        shown = ", ".join(f"{label} {statistics.median(v.values()):.1f}" if v else f"{label} n/a"
+                          for label, v in medians.items())
+        print(f"INFO {item} {metric} {build}: {shown} (median; not judged)")
+
+
+def summarize_aa(args, items, builds, values, n_of, meta):
     summary, floors = [], load_floors(args.floors)
     machine, date = floor_meta(meta), time.strftime("%Y-%m-%d")
     print()
-    for spec, name, params in workloads:
-        for metric in WORKLOADS[name][1]:
-            for build in builds:  # build types are never pooled
-                control = values.get((spec, metric, build, "control"), {})
-                twin = values.get((spec, metric, build, "aa"), {})
+    for item, (spec, name, params, d) in items:
+        for build in sorted(builds):  # build types are never pooled
+            for metric in sorted(d["metrics"]):
+                if not runs_on(name, build):
+                    print(f"FLOOR {item} {metric} {build}: {only_on(name)}")
+                    summary.append({"workload": item, "metric": metric, "build": build, "n": 0, "control_median": "",
+                                    "aa_median": "", "median_diff": "", "wins": "", "losses": "",
+                                    "floor": only_on(name)})
+                    continue
+                control = values.get((item, metric, build, "control"), {})
+                twin = values.get((item, metric, build, "aa"), {})
                 diffs = paired_diffs(control, twin)
                 wins, losses = wins_losses(diffs)
                 floor = floor_from_aa(diffs) if len(diffs) >= MIN_ROUNDS else None
                 row = {
-                    "workload": spec, "metric": metric, "build": build, "n": len(diffs),
+                    "workload": item, "metric": metric, "build": build, "n": len(diffs),
                     "control_median": statistics.median(control.values()) if control else "",
                     "aa_median": statistics.median(twin.values()) if twin else "",
                     "median_diff": statistics.median(diffs) if diffs else "",
@@ -552,16 +801,17 @@ def summarize_aa(args, workloads, builds, values, n_of, meta):
                 }
                 summary.append(row)
                 if diffs:
-                    print(f"{spec} {metric} {build}: control {row['control_median']:.3f}, aa {row['aa_median']:.3f},"
+                    print(f"{item} {metric} {build}: control {row['control_median']:.3f}, aa {row['aa_median']:.3f},"
                           f" median diff {row['median_diff'] * 100:+.2f}%, wins {wins} losses {losses}")
                 shown = "INCOMPLETE" if floor is None else f"{floor * 100:.2f}%"
-                print(f"FLOOR {spec} {metric} {build}: {shown} (n={len(diffs)})")
+                print(f"FLOOR {item} {metric} {build}: {shown} (n={len(diffs)})")
                 if floor is not None:
-                    case = ":".join(params)
-                    floors[floor_key(name, case, metric, build, COMPILER)] = {
-                        "workload": name, "case": case, "metric": metric, "build": build, "compiler": COMPILER,
+                    floors[floor_key(name, d["case"], metric, build, COMPILER)] = {
+                        "workload": name, "case": d["case"], "metric": metric, "build": build, "compiler": COMPILER,
                         "floor": floor, "n": n_of[spec], "date": date, **machine,
                     }
+            if runs_on(name, build):
+                print_info(item, d, build, values, ("control", "aa"))
     if args.write_floors:
         Path(args.floors).parent.mkdir(parents=True, exist_ok=True)
         Path(args.floors).write_text(json.dumps(floors, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -569,7 +819,7 @@ def summarize_aa(args, workloads, builds, values, n_of, meta):
     return summary
 
 
-def summarize_compare(args, workloads, builds, values, n_of, meta):
+def summarize_compare(args, items, builds, values, n_of, meta):
     floors = load_floors(args.floors)
     machine = floor_meta(meta)
     targets = set(args.target.split(","))
@@ -579,58 +829,67 @@ def summarize_compare(args, workloads, builds, values, n_of, meta):
     def median(series):
         return statistics.median(series.values()) if series else float("nan")
 
-    for spec, name, params in workloads:
-        metrics = WORKLOADS[name][1]
-        for metric in metrics:
-            for build in builds:
-                prev, cand, ctrl = (values.get((spec, metric, build, label), {})
+    for item, (spec, name, params, d) in items:
+        for build in sorted(builds):
+            for metric in sorted(d["metrics"]):
+                # The accept rule judges the target's time metric; memory and other workloads get the regression rule.
+                is_target = spec in targets and metric == d["time"]
+                if not runs_on(name, build):
+                    print(f"VERDICT {item} {metric} {build}: {only_on(name)}")
+                    summary.append({
+                        "workload": item, "metric": metric, "build": build, "n": 0, "previous_median": "",
+                        "candidate_median": "", "control_median": "", "median_diff": "", "previous_median_diff": "",
+                        "wins": "", "losses": "", "floor": "", "rule": "accept" if is_target else "regression",
+                        "verdict": only_on(name),
+                    })
+                    continue
+                prev, cand, ctrl = (values.get((item, metric, build, label), {})
                                     for label in ("previous", "candidate", "control"))
                 diffs, prev_diffs = paired_diffs(ctrl, cand), paired_diffs(ctrl, prev)
                 wins, losses = wins_losses(diffs)
-                # The accept rule judges the target's time metric; memory and other workloads get the regression rule.
-                is_target = spec in targets and metric == metrics[0]
-                floor = lookup_floor(floors, floor_key(name, ":".join(params), metric, build, COMPILER), machine,
-                                     n_of[spec])
+                floor = lookup_floor(floors, floor_key(name, d["case"], metric, build, COMPILER), machine, n_of[spec])
                 token = verdict(diffs, None if isinstance(floor, str) else floor, is_target)
                 if token == "NO-FLOOR":
                     token = floor  # NO-FLOOR, or RE-MEASURE-AA when the machine changed since the A/A run
                 med = statistics.median(diffs) if diffs else float("nan")
                 prev_med = statistics.median(prev_diffs) if prev_diffs else float("nan")
                 shown_floor = floor if isinstance(floor, str) else f"{floor * 100:.2f}%"
-                print(f"{spec} {metric} {build}: previous {median(prev):.3f}, candidate {median(cand):.3f},"
+                print(f"{item} {metric} {build}: previous {median(prev):.3f}, candidate {median(cand):.3f},"
                       f" control {median(ctrl):.3f}; candidate vs control {med * 100:+.2f}%"
                       f" (wins {wins} losses {losses} of {len(diffs)}, k={wins_needed(len(diffs))});"
                       f" previous vs control {prev_med * 100:+.2f}%; floor {shown_floor};"
                       f" {'accept' if is_target else 'regression'} rule")
-                print(f"VERDICT {spec} {metric} {build}: {token}", flush=True)
+                print(f"VERDICT {item} {metric} {build}: {token}", flush=True)
                 summary.append({
-                    "workload": spec, "metric": metric, "build": build, "n": len(diffs),
+                    "workload": item, "metric": metric, "build": build, "n": len(diffs),
                     "previous_median": median(prev), "candidate_median": median(cand), "control_median": median(ctrl),
                     "median_diff": med, "previous_median_diff": prev_med, "wins": wins, "losses": losses,
                     "floor": "" if isinstance(floor, str) else floor, "rule": "accept" if is_target else "regression",
                     "verdict": token,
                 })
+            if runs_on(name, build):
+                print_info(item, d, build, values, ("previous", "candidate", "control"))
     return summary
 
 
-def summarize_counts(mode, workloads, builds, counts):
+def summarize_counts(mode, items, builds, counts):
     """COUNTS lines: A/A determinism in aa mode, the D-06 count rule (candidate vs control) in compare mode."""
     summary = []
-    for spec, name, _ in workloads:
-        for metric in COUNT_METRICS.get(name, ()):
-            for build in builds:
-                series = {label: counts.get((spec, metric, build, label), {})
+    for item, (_, name, _, d) in items:
+        for build in sorted(b for b in builds if runs_on(name, b)):
+            for metric in sorted(d["counts"]):
+                series = {label: counts.get((item, metric, build, label), {})
                           for label in ("control", "aa", "previous", "candidate")}
                 shown = {label: f"{min(s.values())}..{max(s.values())}" if s else "n/a" for label, s in series.items()}
                 if mode == "aa":
                     token = aa_counts(series["control"], series["aa"])
-                    print(f"COUNTS {spec} {metric} {build}: {token} (control {shown['control']}, aa {shown['aa']})")
+                    print(f"COUNTS {item} {metric} {build}: {token} (control {shown['control']}, aa {shown['aa']})")
                 else:
                     token = compare_counts(series["control"], series["candidate"])
-                    print(f"COUNTS {spec} {metric} {build}: previous {shown['previous']}, candidate"
+                    print(f"COUNTS {item} {metric} {build}: previous {shown['previous']}, candidate"
                           f" {shown['candidate']}, control {shown['control']}")
-                    print(f"VERDICT {spec} {metric} {build}: {token}", flush=True)
-                summary.append({"workload": spec, "metric": metric, "build": build, "verdict": token,
+                    print(f"VERDICT {item} {metric} {build}: {token}", flush=True)
+                summary.append({"workload": item, "metric": metric, "build": build, "verdict": token,
                                 **{f"{label}_counts": shown[label] for label in series}})
     return summary
 
@@ -659,6 +918,7 @@ def main():
     check = sub.add_parser("check", help="read and print the machine state the series need; change nothing")
     aa = sub.add_parser("aa", help="A/A noise floor: control against a same-source twin")
     compare = sub.add_parser("compare", help="previous, candidate and same-source control; verdict against the control")
+    sub.add_parser("fetch", help="fetch every pinned third-party source into devtools/out/bench/src/ and check it")
     for parsed in (check, aa, compare):
         parsed.add_argument("--max-load", type=float, default=MAX_LOAD_PCT,
                             help="refuse above this mean %% busy of the bench CPUs; floors and shares use the default")
@@ -680,6 +940,12 @@ def main():
         parser.error("No OS adapter for this platform yet")
     if args.command == "check":
         raise SystemExit(run_check(args))
+    if args.command == "fetch":
+        for name, pin in PINS.items():
+            path = fetch_git(name)
+            shown = path.relative_to(ROOT).as_posix()
+            print(f"FETCH {name} {pin['commit']} ({pin['license']}) in {shown}: HEAD is the pin")
+        return
     if args.rounds is not None and args.rounds < MIN_ROUNDS:
         parser.error(f"Use at least {MIN_ROUNDS} rounds: the sign test cannot pass below that")
     specs = args.workloads.split(",")

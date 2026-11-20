@@ -15,6 +15,12 @@ sources:
   - id: bench-readme
     resource: ../../devtools/bench/README.md
     title: How to run the runner
+  - id: bench-workloads
+    resource: ../../devtools/bench/workloads/
+    title: Workload drivers (scene.gd, script.gd, gdbench.gd, gdbench_dictionary.gd)
+  - id: godot-benchmarks
+    resource: https://github.com/godotengine/godot-benchmarks/tree/ff8e67af1eac6054f011ee7137163b64bd0bf7fb
+    title: godot-benchmarks at the pinned commit (MIT; fetched, never vendored)
 ---
 
 # Ground rules
@@ -155,6 +161,62 @@ is from another machine state or n).
   and Clang floors and shares (compilers held with `IgnorePkg`). No
   candidate is accepted without the Linux numbers.
 
+# Workloads
+
+Every workload runs a fixed number of frames or calls, never a time, so
+operation and allocation counts are the same for fast and slow builds.
+Peak memory (`peak_ws_mb`) is the OS peak working set of the process.
+Cheap workloads (a process under 3 s) get n = 11; costly ones n = 5.
+
+| Workload id | What it runs | Judged | Counts | Class | Builds |
+| --- | --- | --- | --- | --- | --- |
+| `scene:<scenario>:<count>` | `devtools/bench/workloads/scene.gd`: node scenarios (instancing, churn, transforms), 120 frames after 30 warm-up | `frame_ms_p50`, `peak_ws_mb` | `allocs`, `reallocs` | by the cold round | both |
+| `script:<nodes\|script\|instance>` | `devtools/bench/workloads/script.gd`: the three `core_workload.gd` modes (10,000 nodes with 200 freed and re-added per frame and a group call; 2,000 agents with Dictionary stats, `%` formatting and String joins; a 2,000-node scene instanced and freed per frame), 120 frames after 30 warm-up | `frame_ms_p50`, `peak_ws_mb` | `allocs`, `reallocs` | by the cold round | both |
+| `gdbench` | `devtools/bench/workloads/gdbench.gd`: a godot-benchmarks subset and the fork's Dictionary benchmark, one process, every case once to warm up and once timed | `time_ms` per case, `peak_ws_mb` per process | `allocs`, `reallocs` per case | costly | both |
+| `editor_startup` | headless `--editor --quit` on a copy of `misc/large_world_test_project`, with `--benchmark-file` | `wall_ms` (process creation to exit), `peak_ws_mb` | none | costly | editor only |
+
+- **Scene project.** `scene`, `script` and `gdbench` run headless in
+  `misc/scene_bench_project` with `--fixed-fps 60` (14 workers).
+- **godot-benchmarks subset.** `bench.py fetch` (and every `gdbench`
+  series) fetches [godotengine/godot-benchmarks](https://github.com/godotengine/godot-benchmarks)
+  at commit `ff8e67af1e` (`ff8e67af1eac6054f011ee7137163b64bd0bf7fb`,
+  MIT) into `devtools/out/bench/src/godot-benchmarks/ff8e67a/` and refuses
+  to use it unless `git rev-parse HEAD` is that commit. It is never
+  vendored: each series copies `benchmarks/gdscript/string_format.gd`,
+  `string_manipulation.gd`, `array.gd`, `alloc.gd` and
+  `benchmarks/core/string_name.gd`, `signal.gd` into
+  `devtools/out/bench/gdbench/ff8e67a/`, changing only `extends Benchmark`
+  to `extends RefCounted` and, in the first four, the `ITERATIONS` constant
+  (to 100,000, 100,000, 200,000 and 25,000; upstream's values made one
+  process take 55 s). `meta.json` lists each file with its changed-line
+  count (1 or 2) and both values; the String cases keep upstream's text.
+  The driver seeds the global RNG before every call (`alloc.gd` uses
+  `randi()`).
+- **Dictionary benchmark.** `devtools/bench/workloads/gdbench_dictionary.gd`
+  is the fork's own (upstream has none at the pin): insert, lookup hit,
+  lookup miss, erase (of a copy), iterate and duplicate with String,
+  StringName, int and Vector2 keys at 1,000 and 100,000 entries, 100,000
+  entry operations per case, fixed keys.
+- **Cases.** Files run in file name order and methods in name order; each
+  method is its own item named `gdbench/<file stem>.<method>`, so methods
+  with the same name in two files stay apart (`FLOOR gdbench/string_format.benchmark_x time_ms editor: ...`).
+  A file with no `benchmark_` methods, or that does not load, prints
+  `BENCH_FAIL` and fails the whole sample; a script error fails it too. A
+  case the cold round printed and a later sample lacks is failed ("case
+  missing"), never left out; a cold round with no cases stops the series.
+- **Editor startup.** Each series mirrors the tracked files of
+  `misc/large_world_test_project` into
+  `devtools/out/bench/<series>/editor_project/<binary>/` (deleted and copied
+  again), so the tracked project is never opened by the editor. The cold
+  round is the import of each copy by its own binary. `meta.json` records
+  `editor_workers` (32, the D-12 exception). `main_start_ms`
+  (`[Startup] Main::Start`) and `first_scan_ms` (`[Editor] First Scan`)
+  from the JSON go to `raw.csv` and are printed as `INFO` medians, never
+  judged. On `template_release` the floor and verdict lines read
+  `n/a (editor only)`.
+- **Order.** `summary.csv`, `counts.csv` and the printed summary go by
+  workload, then case, then build type, then metric.
+
 # Budget (D-03)
 
 At most 30 minutes of measurement per compiler (MSVC; GCC and Clang each),
@@ -197,7 +259,9 @@ commit.
 
 ```
 python devtools/bench/bench.py check
+python devtools/bench/bench.py fetch
 python devtools/bench/bench.py aa --workloads scene:instance:10000,scene:churn:10000 --write-floors
+python devtools/bench/bench.py aa --workloads script:script,gdbench,editor_startup --rounds 5
 python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev \
     --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
 ```
@@ -227,6 +291,7 @@ deleting that folder, run `git worktree prune`.
 - [Copy benchmark retained-byte omission](/mistakes/copy-benchmark-retained-bytes.md),
   [benchmark snapshot dependencies](/mistakes/benchmark-snapshot-dependencies.md),
   [a benchmark ran with the feature it measures inactive](/mistakes/bench-without-the-feature-active.md)
+- [A relative benchmark-file path went to the project folder](/mistakes/relative-path-after-project-chdir.md)
 - [A test scene that could not quit](/mistakes/test-scene-without-hard-quit.md),
   [single-flag benchmark runs measured the defaults](/mistakes/powershell-single-arg-splat.md)
 - Successes: [control build for layout effects](/successes/control-build-for-layout-effects.md),

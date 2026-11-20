@@ -127,6 +127,7 @@ def run_pinned(args, cwd, mask, timeout):
         "child_mask": child.value,
         "peak_ws_bytes": counters.PeakWorkingSetSize,
         "cpu_s": (times[2].value + times[3].value) / 1e7,
+        "wall_s": (times[1].value - times[0].value) / 1e7,  # process creation to exit
     }
 
 

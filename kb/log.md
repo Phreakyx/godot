@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-11-21 (GDScript, godot-benchmarks and editor startup workloads)
+
+* **Added**: the runner's workloads `script:<nodes|script|instance>` (the
+  `core_workload.gd` modes, 120 frames instead of a time), `gdbench` (a
+  godot-benchmarks subset fetched at `ff8e67af1e`, MIT, never vendored,
+  plus the fork's Dictionary benchmark; one item per case
+  `gdbench/<file stem>.<method>`) and `editor_startup` (headless editor on
+  a per-binary copy of `misc/large_world_test_project`, editor only,
+  `n/a (editor only)` on `template_release`), `bench.py fetch`, and the
+  workload table in the [benchmark protocol](/tooling/benchmark-protocol.md).
+* **Mistake**: [a relative benchmark-file path went to the project folder](/mistakes/relative-path-after-project-chdir.md).
+* **Measured** (smoke only, i9-14900K, MSVC 14.51, n=5, `--max-load 50`,
+  bench CPUs 26-43% busy with everyday apps open, so none of these is a
+  floor): allocation counts identical between A/A twins on all three
+  `script` modes and all 135 `gdbench` cases on both build types.
+  `editor_startup` 1.84 s wall, 690 MB peak, 32 editor workers, floor
+  6.2% (wall) and 0.7% (memory). `gdbench` single-call case times are
+  noisy at this load: median A/A floor 23% over 270 case rows (16% for
+  cases over 20 ms); `script:instance` on `template_release` read +17.7%
+  for the twin in 5 of 5 rounds. 02-10 re-measures both at the default
+  load before any floor is stored.
+
 ## 2026-11-21 (allocation counter for benchmark builds)
 
 * **Added**: [allocation counts in release builds](/project/allocation-counter.md):
