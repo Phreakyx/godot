@@ -137,6 +137,28 @@ work also rewrote.
 The range `135dff3887..49a825dc52` stays partly pending: the next NVIDIA
 intake starts from the same diff, minus N1 and N2.
 
+Fork fixes on top of N1 and N2 (code review of phase 1, 2026-11-20), each
+marked `// Fork:` in the code. Re-apply them on the next NVIDIA port
+(`git apply --3way` keeps them when NVIDIA's lines around them are
+unchanged; check them when not):
+
+* `platform/windows/crash_handler_windows_seh.cpp`: the reporter thread is
+  started by `CrashHandler::initialize()` and parked, not created in the
+  exception filter (a new thread can't start under the loader lock); the
+  report, exception record and context are static copies; the reporter
+  reuses the shared DbgHelp session under its lock and stops walking if the
+  crashing thread gave up waiting.
+* `core/error/error_backtrace.cpp` and `.h`: one process-wide DbgHelp
+  session and lock (`backtrace_sym_try_lock_for()`,
+  `backtrace_sym_unlock()`, `backtrace_sym_ensure_initialized()`) in every
+  Windows debug build, shared with the crash handler. Before, the crash
+  handler's own `SymInitialize()` failed once an error backtrace had
+  started a session, and it called DbgHelp without the lock.
+* `drivers/windows/dir_access_windows.cpp` and `.h`: entries that are
+  reparse points (symlinks, junctions) report the followed time from
+  `FileAccess`, as `FileAccessWindows` does, not the link's own time from
+  the find data, so the filesystem scan and the importer agree.
+
 Checks: both groups applied with 0 conflicted files and now equal
 NVIDIA's files where `dev` had no other change. No third-party code came
 in. `rendering_shader_container.h` is not touched, so `CONTAINER_VERSION`

@@ -944,7 +944,8 @@ if env["lto"] != "none":
 # This needs to come after `configure`, otherwise we don't have env.msvc.
 if not env.msvc:
     # Specifying GNU extensions support explicitly, which are supported by
-    # both GCC and Clang. Both currently default to gnu17 and gnu++20.
+    # both GCC and Clang. Their defaults differ (C++: gnu++17; C: gnu17, or gnu23
+    # from GCC 15), so both standards are set here; we require gnu++20.
     env.Prepend(CFLAGS=["-std=gnu17"])
     env.Prepend(CXXFLAGS=["-std=gnu++20"])
 else:

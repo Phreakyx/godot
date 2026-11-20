@@ -30,7 +30,9 @@ function Get-SconsPython {
 		$leading = @($candidate | Select-Object -Skip 1)
 		$ErrorActionPreference = "Continue"
 		& $candidate[0] @leading -m SCons --version *> $null
-		if ($LASTEXITCODE -eq 0) { return $candidate }
+		# The unary comma keeps a one-element @("python") an array; a bare return
+		# unrolls it to the string "python" (see kb/mistakes/powershell-one-element-array-return.md).
+		if ($LASTEXITCODE -eq 0) { return , $candidate }
 	}
 	throw "No Python with SCons found; see kb/mistakes/python-build-interpreter.md"
 }

@@ -34,6 +34,52 @@
 
 #include <cstring>
 
+// Fork: DbgHelp is linked only where the crash handler or error backtraces use it.
+#if defined(WINDOWS_ENABLED) && (defined(DEBUG_ENABLED) || defined(ERROR_BACKTRACE_ENABLED))
+
+#include "core/os/mutex.h"
+
+#include <windows.h>
+
+// Some versions of imagehlp.dll lack the proper packing directives themselves
+// so we need to do it.
+#pragma pack(push, before_imagehlp, 8)
+#include <imagehlp.h>
+#pragma pack(pop, before_imagehlp)
+
+// Fork: one DbgHelp session and one lock for the whole process, shared with the
+// crash handler (platform/windows/crash_handler_windows_seh.cpp) in every debug build,
+// not only with error_backtrace=yes. A second SymInitialize() on the same process
+// fails, so the crash handler lost its backtrace once an error had printed one.
+// DbgHelp is single-threaded; every Sym* and MiniDump* call must hold this lock.
+static Mutex sym_mutex;
+static bool sym_initialized = false;
+
+bool backtrace_sym_try_lock_for(uint32_t p_timeout_msec) {
+	const ULONGLONG deadline = GetTickCount64() + p_timeout_msec;
+	while (!sym_mutex.try_lock()) {
+		if (GetTickCount64() >= deadline) {
+			return false;
+		}
+		Sleep(1);
+	}
+	return true;
+}
+
+void backtrace_sym_unlock() {
+	sym_mutex.unlock();
+}
+
+bool backtrace_sym_ensure_initialized() {
+	if (!sym_initialized && SymInitialize(GetCurrentProcess(), nullptr, TRUE)) {
+		SymSetOptions(SymGetOptions() | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+		sym_initialized = true;
+	}
+	return sym_initialized;
+}
+
+#endif // WINDOWS_ENABLED && (DEBUG_ENABLED || ERROR_BACKTRACE_ENABLED)
+
 #if defined(ERROR_BACKTRACE_ENABLED)
 
 #include <cstdio>
@@ -55,31 +101,6 @@ static String _backtrace_header(uint32_t p_frame_count) {
 static constexpr const char *BACKTRACE_FOOTER = "   -- end native C++ backtrace --\n";
 
 #ifdef WINDOWS_ENABLED
-
-#include "core/os/mutex.h"
-
-#include <windows.h>
-
-// Some versions of imagehlp.dll lack the proper packing directives themselves
-// so we need to do it.
-#pragma pack(push, before_imagehlp, 8)
-#include <imagehlp.h>
-#pragma pack(pop, before_imagehlp)
-
-// DbgHelp is single-threaded; every Sym* call must hold this lock.
-static Mutex sym_mutex;
-static bool sym_initialized = false;
-
-static void _ensure_sym_initialized() {
-	if (sym_initialized) {
-		return;
-	}
-	HANDLE process = GetCurrentProcess();
-	if (SymInitialize(process, nullptr, TRUE)) {
-		SymSetOptions(SymGetOptions() | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-		sym_initialized = true;
-	}
-}
 
 static String _backtrace_symbol_text(HANDLE p_process, void *p_frame) {
 	const DWORD64 address = reinterpret_cast<DWORD64>(p_frame);
@@ -109,7 +130,7 @@ static String _backtrace_symbol_text(HANDLE p_process, void *p_frame) {
 
 static String _backtrace_format_native(void *const *p_frames, uint32_t p_frame_count) {
 	MutexLock lock(sym_mutex);
-	_ensure_sym_initialized();
+	backtrace_sym_ensure_initialized();
 
 	HANDLE process = GetCurrentProcess();
 	String out = _backtrace_header(p_frame_count);

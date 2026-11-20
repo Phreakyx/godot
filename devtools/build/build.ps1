@@ -32,6 +32,7 @@ param(
 	[switch]$Dev
 )
 . "$PSScriptRoot\..\common.ps1"
+if ($Defines -and -not $Variant) { throw "-Defines needs -Variant <name>, so the candidate gets its own objects and binary and the control stays untouched." }
 Set-Location $RepoRoot
 # Git Bash sets these; platform/windows/detect.py then skips the D3D12 build_deps folder.
 Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue

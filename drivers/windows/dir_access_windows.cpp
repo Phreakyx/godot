@@ -91,6 +91,7 @@ String DirAccessWindows::fix_path(const String &p_path) const {
 Error DirAccessWindows::list_dir_begin() {
 	_cisdir = false;
 	_cishidden = false;
+	_creparse = false;
 
 	list_dir_end();
 
@@ -116,6 +117,8 @@ String DirAccessWindows::_get_next_entry() {
 
 	_cisdir = (p->fu.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
 	_cishidden = (p->fu.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN);
+	// Fork: dwReserved0 is the reparse tag; cloud placeholders and other reparse points keep the enumeration time.
+	_creparse = (p->fu.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && (p->fu.dwReserved0 == IO_REPARSE_TAG_SYMLINK || p->fu.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT);
 
 	{
 		// Same conversion as FileAccessWindows::_get_modified_time, so values are interchangeable.
@@ -147,6 +150,12 @@ bool DirAccessWindows::current_is_hidden() const {
 }
 
 uint64_t DirAccessWindows::current_modified_time() const {
+	// Fork: the find data of a symlink or junction has the link's own time, while
+	// FileAccessWindows follows the link to the target. Ask it for those entries,
+	// so the editor's filesystem scan and the importer agree.
+	if (_creparse) {
+		return DirAccess::current_modified_time();
+	}
 	return _cmodtime;
 }
 

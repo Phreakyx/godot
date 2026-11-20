@@ -11,7 +11,8 @@
 #      DISABLED). origin stays as cloned.
 #   3. Builds the PhysX (CPU), Blast and Flow SDKs once, in a physx-sdk folder
 #      next to this repository. PhysX GPU dynamics are Windows-only.
-#   4. Writes custom.py (not tracked) with the SDK paths, so a build is just:
+#   4. Writes custom.py (not tracked) with the SDK paths, keeping any other
+#      lines already in it, so a build is just:
 #        scons platform=linuxbsd target=editor production=yes
 #   5. With --build, builds the GCC and Clang editors, their unit-test builds,
 #      and a GCC dev_build test build (the only one with DEV_ASSERT).
@@ -65,10 +66,11 @@ case "$fs" in
 esac
 
 packages=(git python scons pkgconf gcc clang lld llvm cmake ninja make
-	libxcursor libxinerama libxi libxrandr wayland-utils mesa glu libglvnd alsa-lib pulseaudio)
+	libxcursor libxinerama libxi libxrandr wayland-utils mesa glu libglvnd alsa-lib libpulse)
 missing=()
 for p in "${packages[@]}"; do
-	pacman -Q "$p" > /dev/null 2>&1 || missing+=("$p")
+	# -T also counts a package another one provides (pacman -Q does not).
+	pacman -T "$p" > /dev/null 2>&1 || missing+=("$p")
 done
 if [ ${#missing[@]} -gt 0 ]; then
 	if [ "$install_deps" -eq 1 ]; then
@@ -140,6 +142,13 @@ physx_sdk = r\"$physx_sdk\"
 physx_gpu = \"no\"
 blast_sdk = r\"$blast_sdk\"
 flow_sdk = r\"$flow_sdk\""
+# Keep the lines this script doesn't write (other options, comments), so a rerun
+# never drops them.
+if [ -f custom.py ]; then
+	extra="$(grep -vE '^(physx_sdk|physx_gpu|blast_sdk|flow_sdk)[[:space:]]*=|^# (Build options of this PC|SCons reads this file)' custom.py || true)"
+	[ -z "$extra" ] || custom="$custom
+$extra"
+fi
 if [ -f custom.py ] && [ "$(cat custom.py)" = "$custom" ]; then
 	ok "custom.py is up to date"
 else

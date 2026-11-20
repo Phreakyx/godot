@@ -31,6 +31,7 @@
 #include "crash_handler_windows.h"
 
 #include "core/config/project_settings.h"
+#include "core/error/error_backtrace.h"
 #include "core/object/script_language.h"
 #include "core/os/main_loop.h"
 #include "core/os/os.h"
@@ -69,6 +70,10 @@ static constexpr DWORD EXCEPTION_CODE_HEAP_CORRUPTION = 0xC0000374;
 // Stack the main thread keeps in reserve so the handler can run after a stack overflow.
 static constexpr ULONG CRASH_STACK_GUARANTEE = 64 * 1024;
 static constexpr DWORD CRASH_REPORT_TIMEOUT_MSEC = 60 * 1000;
+// Fork: how long the reporter waits for an error backtrace on another thread to release DbgHelp.
+// If the crashing thread itself holds the lock, it is blocked waiting for the report, so going on
+// without the lock is safe.
+static constexpr uint32_t CRASH_SYM_LOCK_TIMEOUT_MSEC = 5 * 1000;
 
 static const char *_exception_name(DWORD p_code) {
 	switch (p_code) {
@@ -164,6 +169,9 @@ struct CrashReport {
 	DWORD thread_id = 0;
 };
 
+// Fork: set when the crashing thread stops waiting; its stack is no longer the crash's from then on.
+static std::atomic<bool> crash_report_abandoned = false;
+
 static String _minidump_path() {
 	const String user_dir = OS::get_singleton()->get_user_data_dir();
 	const String dir = user_dir.is_empty() ? OS::get_singleton()->get_executable_path().get_base_dir() : user_dir.path_join("logs");
@@ -197,10 +205,12 @@ static void _print_native_backtrace(const CrashReport &p_report) {
 	DWORD cbNeeded;
 	std::vector<HMODULE> module_handles(1);
 
-	// Load the symbols:
-	if (!SymInitialize(process, nullptr, false)) {
+	// Fork: reuse the process-wide DbgHelp session from core/error/error_backtrace.cpp; a second
+	// SymInitialize() fails once an error backtrace has started one. Never SymCleanup() it.
+	if (!backtrace_sym_ensure_initialized()) {
 		return;
 	}
+	SymRefreshModuleList(process);
 
 	SymSetOptions(SymGetOptions() | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_EXACT_SYMBOLS);
 	EnumProcessModules(process, &module_handles[0], module_handles.size() * sizeof(HMODULE), &cbNeeded);
@@ -286,33 +296,58 @@ static void _print_native_backtrace(const CrashReport &p_report) {
 		if (!StackWalk64(image_type, process, p_report.thread, &frame, context, nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr)) {
 			break;
 		}
-	} while (frame.AddrReturn.Offset != 0 && n < 256);
-
-	SymCleanup(process);
+	} while (frame.AddrReturn.Offset != 0 && n < 256 && !crash_report_abandoned.load());
 }
 
-// Runs on a fresh thread: the crashing thread's stack may be exhausted, and MiniDumpWriteDump cannot reliably dump its own thread.
-static DWORD WINAPI _crash_report_thread(LPVOID p_report) {
-	const CrashReport &report = *static_cast<const CrashReport *>(p_report);
-	_write_minidump(report);
-	_print_native_backtrace(report);
+// Fork: the reporter thread is started by CrashHandler::initialize() and parked, not created in
+// the exception filter: a new thread can't start while the crashing thread holds the loader lock.
+// The report and copies of the exception record and context live in static storage, so the
+// reporter never reads the crashing thread's frames after a timeout.
+static CrashReport crash_report;
+static EXCEPTION_RECORD crash_record;
+static CONTEXT crash_context;
+static EXCEPTION_POINTERS crash_pointers;
+static HANDLE crash_report_start = nullptr;
+static HANDLE crash_report_done = nullptr;
+
+static void _write_crash_report() {
+	const bool locked = backtrace_sym_try_lock_for(CRASH_SYM_LOCK_TIMEOUT_MSEC);
+	_write_minidump(crash_report);
+	_print_native_backtrace(crash_report);
+	if (locked) {
+		backtrace_sym_unlock();
+	}
+}
+
+// Runs on its own thread: the crashing thread's stack may be exhausted, and MiniDumpWriteDump cannot reliably dump its own thread.
+static DWORD WINAPI _crash_report_thread(LPVOID) {
+	WaitForSingleObject(crash_report_start, INFINITE);
+	_write_crash_report();
+	SetEvent(crash_report_done);
 	return 0;
 }
 
 static void _run_crash_report(EXCEPTION_POINTERS *ep) {
-	CrashReport report;
-	report.exception = ep;
-	report.thread_id = GetCurrentThreadId();
-	DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &report.thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
+	crash_record = *ep->ExceptionRecord;
+	crash_record.ExceptionRecord = nullptr; // A chained record would point into the crashing stack.
+	crash_context = *ep->ContextRecord;
+	crash_pointers = { &crash_record, &crash_context };
+	crash_report.exception = &crash_pointers;
+	crash_report.thread_id = GetCurrentThreadId();
+	DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &crash_report.thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
 
-	HANDLE reporter = CreateThread(nullptr, 0, _crash_report_thread, &report, 0, nullptr);
-	if (reporter) {
-		WaitForSingleObject(reporter, CRASH_REPORT_TIMEOUT_MSEC);
-		CloseHandle(reporter);
+	if (crash_report_start == nullptr) {
+		print_error("No crash report thread; writing the report on the crashing thread.");
+		_write_crash_report();
 	} else {
-		print_error("Could not start the crash report thread.");
+		SetEvent(crash_report_start);
+		if (WaitForSingleObject(crash_report_done, CRASH_REPORT_TIMEOUT_MSEC) != WAIT_OBJECT_0) {
+			crash_report_abandoned = true;
+			print_error("The crash report did not finish in time.");
+			return; // The reporter may still use crash_report.thread.
+		}
 	}
-	CloseHandle(report.thread);
+	CloseHandle(crash_report.thread);
 }
 
 DWORD CrashHandlerException(EXCEPTION_POINTERS *ep) {
@@ -434,6 +469,17 @@ void CrashHandler::disable() {
 
 void CrashHandler::initialize() {
 #ifdef CRASH_HANDLER_EXCEPTION
+	if (crash_report_start == nullptr) {
+		crash_report_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		crash_report_start = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		HANDLE reporter = (crash_report_start && crash_report_done) ? CreateThread(nullptr, 0, _crash_report_thread, nullptr, 0, nullptr) : nullptr;
+		if (reporter) {
+			CloseHandle(reporter);
+		} else if (crash_report_start) {
+			CloseHandle(crash_report_start); // _run_crash_report() then reports on the crashing thread.
+			crash_report_start = nullptr;
+		}
+	}
 	SetUnhandledExceptionFilter(_unhandled_exception_filter);
 	ULONG stack_guarantee = CRASH_STACK_GUARANTEE;
 	SetThreadStackGuarantee(&stack_guarantee);

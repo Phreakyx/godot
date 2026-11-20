@@ -34,6 +34,7 @@ What worked is in [successes](/successes/).
 * [Quoting broke generated scripts](/mistakes/generated-code-quoting.md) - put code in files, make edits all-or-nothing
 * [A test setting lived in the animation callback](/mistakes/test-setting-in-animation-callback.md) - still tests ran with the wrong sun; check one final image of a new scene
 * [Single-flag benchmark runs measured the defaults](/mistakes/powershell-single-arg-splat.md) - cast splatted arguments to [string[]], call array-taking scripts in-process, check each flag took effect
+* [A one-element array return ran the command "p"](/mistakes/powershell-one-element-array-return.md) - return arrays with the unary comma (`return , $a`); test one- and two-element results
 * [A restored shader source didn't rebuild its generated header](/mistakes/stale-generated-shader-header.md) - touch restored files; check the .gen.h when a shader change doesn't show
 * [Recorded a long run of a scene that couldn't show the problem](/mistakes/long-run-of-an-unfit-scene.md) - check one frame shows the effect before a long run
 * [A per-frame readback callback outlived the renderer](/mistakes/readback-callback-after-renderer-teardown.md) - guard static async callbacks with a lifetime flag; resolve quit crashes with the event log and a map file

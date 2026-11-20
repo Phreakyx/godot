@@ -64,7 +64,7 @@ static const char *SL_PRODUCT_URL = "https://developer.nvidia.com/rtx/streamline
 static const char *SL_LICENSE_URL = "https://github.com/NVIDIA-RTX/Streamline/blob/v2.10.0/license.txt";
 static const char *SL_THIRD_PARTY_URL = "https://github.com/NVIDIA-RTX/Streamline/blob/v2.10.0/3rd-party-licenses.md";
 static const char *DLSS_LICENSE_URL = "https://github.com/NVIDIA/DLSS/blob/main/LICENSE.txt";
-static const char *FORK_README_URL = "https://github.com/Phreakyx/godot#5-optional-add-the-nvidia-streamline-dlls-only-for-dlss";
+static const char *FORK_README_URL = "https://github.com/Phreakyx/godot/tree/dev#5-optional-add-the-nvidia-streamline-dlls-only-for-dlss";
 
 // Folder inside the SDK zip with the signed release DLLs. bin/x64/development
 // holds unsigned debug builds and is never installed.

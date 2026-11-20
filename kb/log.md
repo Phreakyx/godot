@@ -1,5 +1,15 @@
 # Update log
 
+## 2026-11-20 (phase 1 review fixes)
+
+* **Added**: mistake [a one-element array return ran the command "p"](/mistakes/powershell-one-element-array-return.md)
+  (`Get-SconsPython` in `devtools/common.ps1` now returns with the unary comma).
+* **Changed**: [the 2026-11 sync](/project/fork-sync-2026-11.md) lists the
+  fork fixes on top of the NVIDIA crash handler, `error_backtrace` and the
+  Windows filesystem scan, to re-apply on the next NVIDIA port.
+* **Changed**: `CUSTOM_BUILD.md` "Diverged core files": `error_backtrace.cpp`
+  and `.h` are now owned by NVIDIA and the fork.
+
 ## 2026-11-20 (CowData, Variant containers and C# layouts)
 
 * **Changed**: [container contracts](/project/container-contracts.md) pin

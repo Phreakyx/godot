@@ -58,6 +58,7 @@ class DirAccessWindows : public DirAccess {
 	bool _cisdir = false;
 	bool _cishidden = false;
 	uint64_t _cmodtime = 0;
+	bool _creparse = false; // Fork: the entry is a symlink or junction; see current_modified_time().
 
 protected:
 	virtual String fix_path(const String &p_path) const override;

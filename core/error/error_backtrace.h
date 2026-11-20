@@ -41,3 +41,13 @@ uint32_t backtrace_capture(void **r_frames, uint32_t p_max_frames, uint32_t p_sk
 
 // Formats frames recorded by backtrace_capture() the same way backtrace_dump() does. Resolves symbols, which is slow.
 String backtrace_format(void *const *p_frames, uint32_t p_frame_count);
+
+#if defined(WINDOWS_ENABLED) && (defined(DEBUG_ENABLED) || defined(ERROR_BACKTRACE_ENABLED))
+// Fork: the process-wide DbgHelp session, shared with the crash handler. Hold the lock around
+// backtrace_sym_ensure_initialized() and every Sym* and MiniDump* call. try_lock_for() gives up
+// after p_timeout_msec and returns false (then don't unlock).
+bool backtrace_sym_try_lock_for(uint32_t p_timeout_msec);
+void backtrace_sym_unlock();
+// Starts the session once (SymInitialize with every loaded module); false if DbgHelp failed.
+bool backtrace_sym_ensure_initialized();
+#endif

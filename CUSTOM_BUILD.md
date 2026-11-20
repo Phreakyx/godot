@@ -369,8 +369,8 @@ fork's change when upstream lands the same).
 | --- | --- | --- | --- |
 | `core/config/engine.cpp` | NVIDIA | `is_raytracing_validation_enabled()`, `is_gpu_markers_enabled()` | Keep |
 | `core/config/engine.h` | NVIDIA | `use_raytracing_validation`, `use_gpu_markers` and their getters | Keep |
-| `core/error/error_backtrace.cpp` | NVIDIA | New file: native backtrace dump on errors (`ERROR_BACKTRACE_ENABLED`); `backtrace_capture()`/`backtrace_format()` and the DbgHelp lock from `49a825dc52` | Keep; take NVIDIA's updates by the NVIDIA rule |
-| `core/error/error_backtrace.h` | NVIDIA | New file: `backtrace_dump()`, `backtrace_capture()`, `backtrace_format()` | Keep; take NVIDIA's updates by the NVIDIA rule |
+| `core/error/error_backtrace.cpp` | NVIDIA and fork | New file: native backtrace dump on errors (`ERROR_BACKTRACE_ENABLED`); `backtrace_capture()`/`backtrace_format()` and the DbgHelp lock from `49a825dc52` (NVIDIA); one DbgHelp session and lock shared with the Windows crash handler in every debug build (fork) | Keep; take NVIDIA's updates by the NVIDIA rule and keep the fork fix (see [kb/project/fork-sync-2026-11.md](kb/project/fork-sync-2026-11.md)) |
+| `core/error/error_backtrace.h` | NVIDIA and fork | New file: `backtrace_dump()`, `backtrace_capture()`, `backtrace_format()` (NVIDIA); `backtrace_sym_try_lock_for()`, `backtrace_sym_unlock()`, `backtrace_sym_ensure_initialized()` (fork) | Keep; take NVIDIA's updates by the NVIDIA rule and keep the fork fix |
 | `core/error/error_macros.cpp` | NVIDIA | Prints a backtrace to stderr for errors and shader errors | Keep; take upstream's if it lands error backtraces |
 | `core/input/input.cpp` | NVIDIA | F13 emits the Streamline PC-latency ping marker | Keep |
 | `core/io/dir_access.cpp` | NVIDIA | Non-virtual `get_next()` records the entry; `current_modified_time()` (faster editor filesystem scan, `49a825dc52`) | Keep; port upstream `DirAccess` changes, every subclass implements `_get_next_entry()` |
