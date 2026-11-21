@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Container family shares and build-or-skip decisions (i9-14900K, MSVC, GCC, Clang)
-description: Each container family's share of every suite workload on editor and template_release with MSVC, GCC and Clang, its best plausible speedup, max gain against the target workload's A/A floor and the final decision; build allocation (34.0% of scene:instance on GCC), hash tables (15.7% of scene:reparent on GCC) and CowData (23.2% of script:script on Clang); skip Variant containers, formatting and trees/lists. No decision changed from the MSVC-only one.
+description: Each container family's share of every suite workload on editor and template_release with MSVC, GCC and Clang, its best plausible speedup, max gain against the target workload's A/A floor and the final decision; build allocation (34.0% of scene:instance on GCC), hash tables (15.7% of scene:reparent on GCC) and CowData (23.2% of script:script on Clang); Variant containers kept on the table (build) by the maintainer against the rule's skip, on two Linux workloads that clear their floors; skip formatting and trees/lists.
 tags: [benchmark, profiling, containers, allocation, hashing, msvc, gcc, clang, linux, i9-14900K, phase-2]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-21T22:00:00Z }
@@ -166,13 +166,15 @@ was not looked into; the decisions below do not depend on it.
 | --- | --- | --- | --- | --- | --- | --- |
 | allocation | `scene:instance:10000` template_release, GCC | 34.0% | 2x (assumed; see below) | 17.0% | 1.33% | **build** |
 | hash tables | `scene:reparent:10000` editor, GCC | 15.7% | 3.61x (GCC micro) | 11.4% | 2.38% | **build** |
-| Variant containers | `scene:churn:10000` template_release, Clang | 10.5% | 6.93x (Clang micro, upper bound) | 9.0% | 53.45% | **skip** |
+| Variant containers | `scene:churn:10000` template_release, Clang | 10.5% | 6.93x (Clang micro, upper bound) | 9.0% | 53.45% | rule: skip; **build** (kept on the table, see below) |
 | CowData | `script:script` template_release, Clang | 23.2% | 2x (assumed; see below) | 11.6% | 2.20% | **build** |
 | formatting | `script:script` template_release, GCC | 1.9% | any (3x shown) | 1.3% | 3.00% | **skip** |
 | trees/lists | `scene:instance:10000` template_release, Clang | 1.3% | 1.47x (micro) | 0.4% | 8.31% | **skip** |
 
-**Against the MSVC-only decisions (02-10): no decision changed.** Every
-family's largest share is now a Linux one, so the targets moved:
+**Against the MSVC-only decisions (02-10).** The rule changes no
+decision; the maintainer overrode one, keeping Variant containers on the
+table on the Linux results (below). Every family's largest share is now a
+Linux one, so the targets moved:
 allocation from MSVC `script:script` template_release (25.9%) to GCC
 `scene:instance:10000` template_release (34.0%; glibc's allocator is a
 larger share than the Windows heap on instancing), hash tables from
@@ -180,7 +182,7 @@ MSVC 14.9% to GCC 15.7% on the same workload, CowData from MSVC gdbench
 (8.7%) to Clang `script:script` (23.2%), Variant containers from MSVC
 `script:script` (3.8%) to Clang `scene:churn` (10.5%), formatting from
 1.4% to 1.9%, trees/lists from 0.9% to 1.3%. The three builds got
-stronger; the three skips stay skips.
+stronger; formatting and trees/lists stay skips.
 
 ## Allocation
 
@@ -236,18 +238,20 @@ fastest int-key control (`ctl_boost_flat_i64_hit_4096`):
 **6.93x** on Clang (14.1 against 2.0 ns), 8.28x on GCC, 7.22x on MSVC.
 That is an upper bound: a Dictionary must still hash and compare Variants
 (`HashMap<Variant, Variant>` hits take about as long). Max gain 9.0%
-against the 53.45% floor of a 0.12 ms frame: **skip**.
+against the 53.45% floor of a 0.12 ms frame: by the rule, **skip**.
 
-This is the closest call, and it hangs on the target the rule picks. On
-two other workloads the upper-bound gain is above the floor: GCC
-`scene:churn:10000` editor (7.6% share, 6.7% max gain at 8.28x, 1.32%
-floor) and Clang `script:script` template_release (3.8%, 3.3% at
-6.93x, 2.20%). 02-10 said the skip flips if the Linux release floor of
-`script:script` is near the editor's 1.04%; it is 3.00% (GCC) and
-2.20% (Clang), so by that test it stays a skip. A Variant-container
-candidate would need a heavier `scene:churn` variant (its floors are
-single rounds on 0.12-0.15 ms frames) before the rule can judge it
-there.
+Decision: **build, kept on the table by the maintainer (2026-11-21)**
+against the rule's skip. The rule hangs on the target it picks, and that
+target's floor is one round on a 0.12 ms frame. On two other workloads
+the upper-bound gain is above the floor: GCC `scene:churn:10000` editor
+(7.6% share, 6.7% max gain at 8.28x, 1.32% floor) and Clang
+`script:script` template_release (3.8%, 3.3% at 6.93x, 2.20%). (02-10's
+own test, a Linux `script:script` release floor near the editor's
+1.04%, did not pass: it is 3.00% on GCC and 2.20% on Clang.) A candidate
+is judged on those two workloads, or on a heavier `scene:churn` variant
+whose floor is not set by single rounds, and it must still be faster than
+its control under the acceptance rule; the speedup is an upper bound, so
+it can fail there.
 
 ## CowData
 

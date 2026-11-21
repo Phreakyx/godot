@@ -8,9 +8,10 @@
   the medians and the Linux micro floors in
   [the noise floors](/project/benchmark-noise-floors.md); Linux shares
   and the final decisions in [the family shares](/project/family-shares.md):
-  build allocation, hash tables and CowData, skip Variant containers,
-  formatting and trees/lists; none changed from the MSVC-only ones, the
-  targets moved to Linux workloads.
+  build allocation, hash tables and CowData, skip formatting and
+  trees/lists; Variant containers kept on the table (build) against the
+  rule's skip, as two Linux workloads clear their floors; the targets
+  moved to Linux workloads.
 * **Fixed**: the Linux runner read the runner's own 603 MiB peak for
   every smaller workload (it hashed the level pack in one read; Linux
   starts a child's `ru_maxrss` there): hashes in chunks now, refuses a

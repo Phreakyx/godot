@@ -103,7 +103,7 @@ What sets the large ones:
   above 10%, mostly small N (timed regions of 0.1-1 ms), where one slow
   process sets the floor. Micro cases never decide acceptance
   (Pitfall 2), so the timed regions stay as they are; a Variant-container
-  candidate (skipped for now, [family shares](/project/family-shares.md))
+  candidate (kept on the table, [family shares](/project/family-shares.md))
   would lengthen them first.
 
 # Floors per workload (GCC and Clang)
