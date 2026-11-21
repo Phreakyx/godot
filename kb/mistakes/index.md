@@ -60,4 +60,5 @@ What worked is in [successes](/successes/).
 * [A level driver quit right after freeing the level's audio](/mistakes/quit-right-after-freeing-audio.md) - free the scene, keep the tree running a fixed wall time, then quit; run a new driver several times alone first
 * [A source pin named the tag object, not its commit](/mistakes/tag-object-as-commit-pin.md) - pin the `^{}` commit of an annotated tag; keep the rev-parse check; check an archive's sha256 against a second source
 * [Benchmark build variants filled the disk](/mistakes/bench-variants-filled-the-disk.md) - check `disk_free_gb` before building variants (about 4 GB each); delete objects of linked variants
+* [A profile ran a different command than its workload](/mistakes/profile-command-differs-from-workload.md) - profile with the measured command; check a summary's top directories are the workload's work
 * [A version name change didn't reach the exe after an incremental build](/mistakes/version-name-incremental-build.md) - after changing version info in methods.py, delete the objects that use core/version.h (editor and tests builds); check the name in the output

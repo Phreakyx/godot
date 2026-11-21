@@ -330,21 +330,26 @@ void bench_container(const char *p_container, const Keys<K> &p_keys) {
 	}
 }
 
-Keys<StringName> sname_keys() {
-	return make_keys<StringName>("sname", [](uint64_t p_index) { return StringName(str_key(p_index)); });
-}
-
 // Vector2 keys: the generic Variant hash and comparison (x up to 2^20 is exact in a float).
 Keys<Variant> vector2_keys() {
 	return make_keys<Variant>("variant", [](uint64_t p_index) { return Variant(Vector2(real_t(p_index >> 1), real_t((p_index & 1) ? 1.5 : 0.5))); });
 }
 
-TEST_CASE("[Bench] hashmap_sname" * doctest::skip()) {
-	bench_container<HashMap<StringName, int>>("hashmap", sname_keys());
-}
-
-TEST_CASE("[Bench] ahashmap_sname" * doctest::skip()) {
-	bench_container<AHashMap<StringName, int>>("ahashmap", sname_keys());
+// One key set for every StringName-keyed container: interning 2M new names takes about 2 s,
+// which a case per container repeated three times per process (D-03 budget).
+TEST_CASE("[Bench] sname_keys" * doctest::skip()) {
+	const Keys<StringName> keys = make_keys<StringName>("sname", [](uint64_t p_index) { return StringName(str_key(p_index)); });
+	bench_container<HashMap<StringName, int>>("hashmap", keys);
+	bench_container<AHashMap<StringName, int>>("ahashmap", keys);
+	Keys<Variant> variants;
+	variants.name = keys.name;
+	variants.hit.reserve(MAX_N);
+	variants.miss.reserve(MAX_N);
+	for (int i = 0; i < MAX_N; i++) {
+		variants.hit.push_back(Variant(keys.hit[i]));
+		variants.miss.push_back(Variant(keys.miss[i]));
+	}
+	bench_container<Dictionary>("dict", variants);
 }
 
 TEST_CASE("[Bench] hashmap_variant" * doctest::skip()) {
@@ -353,10 +358,6 @@ TEST_CASE("[Bench] hashmap_variant" * doctest::skip()) {
 
 TEST_CASE("[Bench] dict_str" * doctest::skip()) {
 	bench_container<Dictionary>("dict", make_keys<Variant>("str", [](uint64_t p_index) { return Variant(str_key(p_index)); }));
-}
-
-TEST_CASE("[Bench] dict_sname" * doctest::skip()) {
-	bench_container<Dictionary>("dict", make_keys<Variant>("sname", [](uint64_t p_index) { return Variant(StringName(str_key(p_index))); }));
 }
 
 TEST_CASE("[Bench] dict_i64" * doctest::skip()) {
@@ -402,23 +403,16 @@ struct Names {
 	}
 };
 
-TEST_CASE("[Bench] sname_from_string" * doctest::skip()) {
+// One set of names for the three StringName operations (as sname_keys, for the budget).
+TEST_CASE("[Bench] sname_ops" * doctest::skip()) {
 	const Names names;
 	bench_sname("from_string", [&](int p_a, int) { return StringName(names.strings[p_a]) == names.names[p_a]; }, false);
-}
-
-TEST_CASE("[Bench] sname_from_cstr" * doctest::skip()) {
-	const Names names;
 	LocalVector<CharString> cstrs;
 	cstrs.reserve(MAX_N);
 	for (const String &string : names.strings) {
 		cstrs.push_back(string.ascii());
 	}
 	bench_sname("from_cstr", [&](int p_a, int) { return StringName(cstrs[p_a].get_data()) == names.names[p_a]; }, false);
-}
-
-TEST_CASE("[Bench] sname_compare" * doctest::skip()) {
-	const Names names;
 	bench_sname("compare", [&](int p_a, int p_b) { return names.names[p_a] == names.names[p_b]; }, true);
 }
 

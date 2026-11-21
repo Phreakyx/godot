@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-11-21 (MSVC noise floors and family shares)
+
+* **Added**: [A/A noise floors](/project/benchmark-noise-floors.md) for
+  every suite workload, metric and build type and every micro case on the
+  i9-14900K with MSVC (`devtools/bench/floors.json`, 1959 entries), with
+  the conditions and the A/A allocation counts; and
+  [family shares](/project/family-shares.md): allocation, hash tables and
+  CowData build, Variant containers, formatting and trees/lists skip, all
+  provisional until GCC and Clang (02-12). Editor startup no longer spends
+  most of its hash time on Theme lookups.
+* **Added**: `bench.py` `SUITE` (`--workloads all`); a full compare plans
+  at 27.0 min on MSVC (protocol, Budget). `micro_engine` shares one
+  StringName key set per group of cases (11.1 to 5.7 s per process, the
+  same 298 cases; 6 `[Bench]` test cases instead of 10).
+* **Fixed**: `profile` runs `editor_startup` with its measured command
+  (`--quit`); the mistake
+  [a profile ran a different command](/mistakes/profile-command-differs-from-workload.md).
+* **Updated**: the Ryzen numbers in
+  [core CPU profiles](/project/core-cpu-profiles.md) and
+  `docs/benchmarks/scene-runtime.md` are marked superseded (hypotheses
+  from other hardware); the unit-test baseline counts 9 skipped cases.
+
 ## 2026-11-21 (profile and container drivers deleted)
 
 * **Removed**: the profile driver (`devtools/profile/profile.ps1`,

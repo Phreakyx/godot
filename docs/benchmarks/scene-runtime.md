@@ -17,6 +17,13 @@ builds do not count allocations). The benchmark project sets
 draw, the main loop otherwise sleeps 6.9 ms per frame.
 
 Machine: Ryzen 5 3600 (6 cores, 12 threads), Windows 11, MSVC.
+
+> **Superseded measurements.** Every number on this page comes from the
+> former maintainer's Ryzen 5 3600. They are hypotheses from other
+> hardware, not this fork's baseline: the measurement machine is an Intel
+> i9-14900K, and its A/A noise floors and family shares are in
+> [benchmark-noise-floors.md](../../kb/project/benchmark-noise-floors.md)
+> and [family-shares.md](../../kb/project/family-shares.md) (MSVC, 2026-11-21).
 Builds: editor `production=yes tests=yes debug_symbols=yes`; release
 `target=template_release production=yes debug_symbols=yes
 disable_path_overrides=no`.

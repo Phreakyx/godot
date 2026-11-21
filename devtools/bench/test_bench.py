@@ -119,6 +119,9 @@ class BudgetPlan(unittest.TestCase):
         # Two workloads (2 s x 11 rounds, 6 s x 5 rounds), three binaries, two build types.
         self.assertAlmostEqual(bench.budget_minutes([(2.0, 11), (6.0, 5)], 3, 2), (22 + 30) * 6 / 60)
 
+    def test_suite_names_known_workloads(self):
+        self.assertEqual({bench.parse_workload(spec)[0] for spec in bench.SUITE}, set(bench.WORKLOADS))
+
 
 def _result(line, returncode=0):
     return {"output": line + "\n", "timed_out": False, "returncode": returncode, "peak_ws_bytes": 1 << 20,

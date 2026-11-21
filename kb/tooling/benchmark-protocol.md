@@ -414,7 +414,7 @@ need the engine), so those cases are doctest cases in
 `tests/fork/test_fork_bench_variant_keys.cpp`, run by `aa` and `compare`
 as the workload `micro_engine`.
 
-- **Skipped everywhere else.** Each of the 10 cases is `TEST_CASE("[Bench]
+- **Skipped everywhere else.** Each of the 6 cases is `TEST_CASE("[Bench]
   <name>" * doctest::skip())`, and no name contains "Fork": `--test` and
   the `*Fork*` contract runs count them as skipped and run none of them
   ([unit-test baseline](/project/unit-test-baseline.md)).
@@ -427,8 +427,12 @@ as the workload `micro_engine`.
   `--test --test-case=*Bench* --no-skip`, pinned like every workload, one
   discarded cold round, then n = 11 rounds (fixed, whatever the cold round
   takes; `--rounds` overrides), alternating order. No worker-count check
-  (no game runs). One process takes about 12 s, of which about 2.5 s are
-  timed; the rest builds the 2^20 keys of each case.
+  (no game runs). One process takes about 5.7 s, of which about 2.3 s are
+  timed; the rest builds keys and untimed containers. One key set serves
+  every StringName-keyed container (`sname_keys`: HashMap, AHashMap,
+  Dictionary) and one name set the three StringName operations
+  (`sname_ops`): interning 2M new names takes about 2 s, and a test case
+  per container did it three times per process (11.1 s; 02-10).
 - **Items.** Each case prints `BENCH: workload=micro_engine case=<name>
   ns_per_op=... operations=... allocs=... checksum=...` and is the item
   `micro_engine/<name>`: `ns_per_op` is judged (`FLOOR` in `aa`,
@@ -438,7 +442,7 @@ as the workload `micro_engine`.
   every process of the series, every binary and round (`engine_parity`);
   otherwise the series stops. A failed `CHECK` fails the process (exit
   code), and with it every case of that sample.
-- **Matrix.** Names follow the standalone harness,
+- **Matrix.** Case names follow the standalone harness,
   `<container>_<key>_<op>_<N>`: `hashmap_sname`, `ahashmap_sname`
   (`HashMap`/`AHashMap<StringName, int>`), `hashmap_variant`
   (`HashMap<Variant, Variant>` with Vector2 keys), `dict_str`,
@@ -477,7 +481,10 @@ as the workload `micro_engine`.
   over all processes and sizes; one such case in one round sets the
   floor. 02-10 measures the floors at n = 11 and decides whether the
   cases need longer timed regions (now about 2^17 operations, 0.1 to
-  14 ms).
+  14 ms). **Outcome (02-10, PC idle):** median case floor 6.7-7.4%, p90
+  24-26%; the timed regions stay as they are, since micro cases never
+  decide acceptance; a Variant-container candidate would lengthen them
+  first ([floors](/project/benchmark-noise-floors.md)).
 
 # Shares (BENCH-07, BENCH-10)
 
@@ -501,7 +508,10 @@ Both feed `analyze.py families`, one rule set for every OS:
 The max gain of a family is then `share x (1 - 1/speedup)` (Skip rule
 above, D-07), with the largest share across build types and compilers.
 A profile taken with `--max-load` above the default is not a recorded
-share.
+share. Every workload is profiled with its measured command (02-10:
+`editor_startup` is `--quit`, startup only; a first profile with
+`--quit-after 3000` measured mostly the frame delay after startup). The
+MSVC shares and decisions: [family shares](/project/family-shares.md).
 
 # Budget (D-03)
 
@@ -513,6 +523,31 @@ under 3 s get n = 11 (k = 9), the others n = 5 (k = 5). It prints the plan
 total before round 1, and refuses a plan above `--budget` (default 30).
 `--rounds` sets n for every workload (5 or more). A/A runs have two
 binaries, comparisons three.
+
+**The suite.** `--workloads all` is `SUITE` in `bench.py`:
+`scene:instance:10000`, `scene:churn:10000`, `scene:reparent:10000`,
+`scene:script:10000`, `script:nodes`, `script:script`, `script:instance`,
+`gdbench`, `editor_startup`, `level`, `micro_engine`; the standalone
+container harness is the micro tier (`micro --aa`, `micro --prev`).
+Planned full compare on MSVC (i9-14900K, three binaries, editor and
+`template_release`, default n), from the cold rounds of `suite-10a`
+(02-10, n = 5, 912 `FLOOR` lines, no failed sample):
+
+| Item | s/process (cold) | n | Minutes |
+| --- | --- | --- | --- |
+| 7 scene and script workloads | 0.15 to 1.52, 4.29 together | 11 | 4.7 |
+| `gdbench` | 9.5 | 5 | 4.8 |
+| `editor_startup` (editor only) | 2.2 | 5 | 0.6 |
+| `level` | 7.7 | 5 | 3.9 |
+| `micro_engine` | 5.8 | 11 | 6.4 |
+| micro tier (one build, warm-up pair included) | 11.3 | 11 | 6.8 |
+| **Total** (unrounded rows) | | | **27.0** |
+
+The warm processes are shorter (25.2 min). Before 02-10, `micro_engine`
+took 11.2 s per process (12.3 min, 33.0 min in total), almost all of it
+interning the same 2M StringNames in three test cases; sharing one key
+set brought it to 5.7 s with every case kept, so nothing else was cut
+(gdbench `ITERATIONS`, level frames and the 1M-cell cases stay).
 
 # What every run records (BENCH-11)
 

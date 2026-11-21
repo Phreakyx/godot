@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped.
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10).
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -107,6 +107,11 @@ reports 1564 test cases, 1564 passed, 0 failed, 13 skipped (594947
 assertions, the same as before), and `--test --test-case="*Fork*"` still runs the 67
 `[Fork]` cases (no `[Bench]` name contains "Fork"). `--test
 --test-case="*Bench*"` alone reports 0 passed, 0 failed, 1577 skipped.
+Plan 02-10 merged them into 6 cases (one StringName key set for HashMap,
+AHashMap and Dictionary, one name set for the three StringName
+operations; the same 298 `BENCH` lines): `--test --test-case="*Bench*"`
+now reports 1573 skipped, and with `--no-skip` 6 passed, so the full
+`--test` skips 9 instead of 13.
 
 # Smoke on the same tree
 

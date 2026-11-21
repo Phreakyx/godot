@@ -11,6 +11,15 @@ sources:
     title: User-mode sampling profiler and analysis scripts
 ---
 
+> **Superseded.** These shares were measured on a Ryzen 5 3600 (the former
+> maintainer's machine) and are hypotheses from other hardware. The
+> i9-14900K numbers that decisions use are in
+> [family-shares](/project/family-shares.md) and
+> [benchmark noise floors](/project/benchmark-noise-floors.md) (MSVC,
+> 2026-11-21; GCC and Clang with plan 02-12). There, hash tables are 1-15%
+> of the suite's busiest threads, allocation 1-26%, and editor startup no
+> longer spends most of its hash time on Theme lookups.
+
 # Conditions
 
 Windows 11, Ryzen 5 3600, MSVC production editor build with

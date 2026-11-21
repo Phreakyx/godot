@@ -538,11 +538,6 @@ def editor_command(exe, params, ctx):
     return [str(exe), "--headless", "--editor", "--quit", "--path", str(project), "--benchmark-file", str(json_path)]
 
 
-def editor_profile_command(exe, params, ctx):
-    project = ctx["out"] / "editor_project" / ctx["label"]
-    return [str(exe), "--headless", "--editor", "--quit-after", "3000", "--path", str(project)]
-
-
 def editor_fields(ctx):
     """Main::Start and First Scan from the editor's --benchmark-file JSON (seconds), in ms."""
     try:
@@ -561,8 +556,8 @@ SCENE_COUNTS = ("allocs", "reallocs")  # bench builds only (fork/alloc_count); j
 # workers whatever the project says (D-12 exception), so the count is recorded, not checked; workers: False for a
 # process with no game (no worker check); tests_build: runs the bench tests build (bench[.<variant>].tests);
 # parity: case fields every process must repeat; profile: how `profile` samples it, "frames" (runs PROFILE_FRAMES
-# frames, sampled after --warmup for --seconds, then ended) or "launch" (sampled from launch until it exits),
-# with profile_command in place of command when given.
+# frames, sampled after --warmup for --seconds, then ended) or "launch" (sampled from launch until it exits,
+# with the measured command: editor_startup is profiled with --quit, startup only).
 WORKLOADS = {
     "scene": {"command": scene_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS, "profile": "frames"},
     "script": {"command": script_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS, "profile": "frames"},
@@ -570,8 +565,7 @@ WORKLOADS = {
                 "case_metrics": ("time_ms",), "case_counts": SCENE_COUNTS, "costly": True, "profile": "launch"},
     "editor_startup": {"command": editor_command, "metrics": ("wall_ms", "peak_ws_mb"), "counts": (),
                        "info": ("main_start_ms", "first_scan_ms"), "read": editor_fields, "bench_line": False,
-                       "builds": ("editor",), "costly": True, "editor_mode": True, "profile": "launch",
-                       "profile_command": editor_profile_command},
+                       "builds": ("editor",), "costly": True, "editor_mode": True, "profile": "launch"},
     # BENCH-04 keys the standalone harness can't link (StringName, Variant, Dictionary), in the engine (02-07).
     "micro_engine": {"command": micro_engine_command, "metrics": ("peak_ws_mb",), "counts": (), "cases": True,
                      "case_metrics": ("ns_per_op",), "case_counts": ("allocs",), "rounds": 11, "workers": False,
@@ -583,6 +577,11 @@ WORKLOADS = {
               "info": ("first_frame_ms", "main_ms_p95", "render_cpu_ms_p95", "gpu_ms_p50", "wall_ms"),
               "costly": True, "profile": "frames"},
 }
+
+
+# The fixed suite `--workloads all` runs; the standalone container harness is `micro --aa` (D-03).
+SUITE = ("scene:instance:10000", "scene:churn:10000", "scene:reparent:10000", "scene:script:10000",
+         "script:nodes", "script:script", "script:instance", "gdbench", "editor_startup", "level", "micro_engine")
 
 
 def parse_workload(spec):
@@ -1419,7 +1418,7 @@ def run_profile(args, _sides):
     form = w["profile"]
     if form == "frames":
         ctx["frames"] = PROFILE_FRAMES
-    command = w.get("profile_command", w["command"])(exe, params, ctx)
+    command = w["command"](exe, params, ctx)
     stem = out / profile_stem(args.workload, args.build)
     tsv = stem.with_name(stem.name + ".tsv")
     print(f"PROFILE {args.workload} {exe.name} ({form})", flush=True)
@@ -1506,7 +1505,7 @@ def main():
         parsed.add_argument("--max-load", type=float, default=MAX_LOAD_PCT,
                             help="refuse above this mean %% busy of the bench CPUs; floors and shares use the default")
     for series in (aa, compare):
-        series.add_argument("--workloads", required=True, help="comma list, e.g. scene:instance:10000")
+        series.add_argument("--workloads", required=True, help="comma list, e.g. scene:instance:10000, or all (SUITE)")
         series.add_argument("--builds", default="editor,template_release")
         series.add_argument("--rounds", type=int, default=None, help="n for every workload (default: planned)")
         series.add_argument("--budget", type=float, default=30.0, help="minutes of measurement allowed (D-03)")
@@ -1539,6 +1538,8 @@ def main():
         return locked(args, run_profile, None)
     if args.rounds is not None and args.rounds < MIN_ROUNDS:
         parser.error(f"Use at least {MIN_ROUNDS} rounds: the sign test cannot pass below that")
+    if args.workloads == "all":
+        args.workloads = ",".join(SUITE)
     specs = args.workloads.split(",")
     for spec in specs:
         try:
