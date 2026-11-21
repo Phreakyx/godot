@@ -358,6 +358,17 @@ diagnostics are stubbed, and any diagnostic fails the run.
   4096, 32768, 1048576. Plus `string_copy_detach_16`/`_128` and
   `hash_bytes_8` to `_65536` from the old harness. StringName and Variant
   keys need the engine: see the next section (`micro_engine`).
+- **Tiny maps (D-05).** `hashmap_tiny_ptr_{build,hit}_<N>` and
+  `hashset_tiny_ptr_{build,hit}_<N>`, N = 1, 2, 3, 8: 10,000 live
+  `HashMap<const uint64_t *, uint32_t>` (or `HashSet<const uint64_t *>`)
+  maps of N distinct `ptr` keys each, the `DependencyTracker` pattern of
+  `servers/rendering/storage/utilities.h`. `build` creates, fills and
+  destroys the 10,000 maps (ns per inserted key, repeated to about 2^17
+  keys); `hit` looks every key up in the live maps. Both rows print the
+  `live_bytes` and `allocs` of all 10,000 maps alive, from an untimed build
+  pass (not the timed region's counts), so a `COUNTS` line compares what
+  tiny maps cost per candidate. `live_bytes` is requested bytes: per-block
+  allocator overhead is not in it, and the map objects are not Godot memory.
 - **Work per case.** About 2^17 element operations: lookups, iterations
   and erases repeat over small containers; at large N, lookups and erases
   touch 2^17 keys of the container (in query order) and churn swaps 2^15

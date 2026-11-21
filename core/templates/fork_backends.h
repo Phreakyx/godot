@@ -58,3 +58,15 @@
 #if !(FORK_BACKEND_ALLOCATOR == 0 || FORK_BACKEND_ALLOCATOR == 1)
 #error "FORK_BACKEND_ALLOCATOR must be 0 or 1."
 #endif
+
+// HashMap node storage (HASH-01).
+// 0: one Allocator::new_allocation per element (upstream).
+// 1: a per-map node pool inside HashMap (core/templates/hash_map.h): geometric pages that
+//    never move, an intrusive free list, released by clear() and the destructor. Only maps
+//    with the default Allocator use it; a map with its own Allocator keeps that path.
+#ifndef FORK_BACKEND_HASHMAP_POOL
+#define FORK_BACKEND_HASHMAP_POOL 0
+#endif
+#if !(FORK_BACKEND_HASHMAP_POOL == 0 || FORK_BACKEND_HASHMAP_POOL == 1)
+#error "FORK_BACKEND_HASHMAP_POOL must be 0 or 1."
+#endif

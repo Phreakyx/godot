@@ -32,11 +32,15 @@
 
 #include "core/os/memory.h"
 #include "core/string/print_string.h" // IWYU pragma: keep. `WARN_VERBOSE` macro.
+#include "core/templates/fork_backends.h"
 #include "core/templates/hashfuncs.h"
 #include "core/templates/pair.h"
 #include "core/templates/sort_list.h"
 
 #include <initializer_list>
+#if FORK_BACKEND_HASHMAP_POOL
+#include <bit>
+#endif
 
 template <typename TKey, typename TValue>
 struct HashMapElement {
@@ -76,6 +80,190 @@ private:
 
 	uint32_t _capacity_idx = 0;
 	uint32_t _size = 0;
+
+	// Fork: node storage (FORK_BACKEND_HASHMAP_POOL, see fork_backends.h and
+	// kb/project/hashmap-node-pool.md). With 0, every node is one Allocator allocation (upstream).
+#if FORK_BACKEND_HASHMAP_POOL
+	// With 1 and the default Allocator, a per-map pool. Page p holds (1 << _pool_first_shift) << p
+	// nodes until a page reaches about 64 KiB of nodes; every later page has that size. Pages never
+	// move, so element pointers stay valid. Node i is the i-th node the bump pointer handed out
+	// (its stable index, decoded by _pool_locate()). A freed node is destroyed and its first word
+	// (the `next` field) links the free list, which is taken first. A move takes the pool with the
+	// arrays; clear() and the destructor release every page.
+	using _PoolNode = HashMapElement<TKey, TValue>;
+	static constexpr bool _USE_POOL = std::is_same_v<Allocator, DefaultTypedAllocator<_PoolNode>>;
+
+	// Pages 0 and 1 are kept in the map, so a map of up to three nodes (with a one-node page 0)
+	// allocates no page table. From page 2 on, _pool_store is the table of every page.
+	void *_pool_store = nullptr; // Page 0 while there are at most two pages, else the page table.
+	_PoolNode *_pool_page1 = nullptr; // Page 1 while there are two pages.
+	_PoolNode *_pool_free = nullptr;
+	uint32_t _pool_next = 0; // Nodes handed out by the bump pointer.
+	uint8_t _pool_first_shift = 0; // Page 0 holds 1 << _pool_first_shift nodes.
+
+	// A function, not a constant, so TValue may still be incomplete where the map is declared.
+	static constexpr uint32_t _pool_cap_shift() {
+		constexpr size_t nodes = size_t(65536) / sizeof(_PoolNode);
+		return nodes > 1 ? uint32_t(std::bit_width(nodes)) - 1 : 0;
+	}
+
+	// Page p holds 1 << _pool_page_shift(p) nodes.
+	_FORCE_INLINE_ uint32_t _pool_page_shift(uint32_t p_page) const {
+		const uint32_t first = _pool_first_shift;
+		const uint32_t cap = MAX(_pool_cap_shift(), first);
+		return p_page < cap - first ? first + p_page : cap;
+	}
+
+	// Page and offset of node p_index: one bit scan in the growing pages, shifts past the cap.
+	_FORCE_INLINE_ void _pool_locate(uint32_t p_index, uint32_t &r_page, uint32_t &r_offset) const {
+		const uint32_t first = _pool_first_shift;
+		const uint32_t cap = MAX(_pool_cap_shift(), first);
+		const uint32_t growing_pages = cap - first;
+		const uint32_t growing_nodes = ((1u << growing_pages) - 1) << first;
+		if (likely(p_index < growing_nodes)) {
+			r_page = uint32_t(std::bit_width((p_index >> first) + 1)) - 1;
+			r_offset = p_index - (((1u << r_page) - 1) << first);
+		} else {
+			const uint32_t rest = p_index - growing_nodes;
+			r_page = growing_pages + (rest >> cap);
+			r_offset = rest & ((1u << cap) - 1);
+		}
+	}
+
+	// True while the pool has at most two pages (no page table).
+	_FORCE_INLINE_ bool _pool_inline() const {
+		return _pool_next <= (uint64_t(1) << _pool_page_shift(0)) + (uint64_t(1) << _pool_page_shift(1));
+	}
+
+	_FORCE_INLINE_ _PoolNode *_pool_page(uint32_t p_page) const {
+		if (_pool_inline()) {
+			return p_page == 0 ? static_cast<_PoolNode *>(_pool_store) : _pool_page1;
+		}
+		return static_cast<_PoolNode **>(_pool_store)[p_page];
+	}
+
+	// The node with stable index p_index (for an index-based table, HASH-02).
+	_FORCE_INLINE_ _PoolNode *_pool_node(uint32_t p_index) const {
+		DEV_ASSERT(p_index < _pool_next);
+		uint32_t page = 0;
+		uint32_t offset = 0;
+		_pool_locate(p_index, page, offset);
+		return _pool_page(page) + offset;
+	}
+
+	_PoolNode *_pool_add_page(uint32_t p_page) {
+		_PoolNode *page = static_cast<_PoolNode *>(Memory::alloc_static(sizeof(_PoolNode) << _pool_page_shift(p_page)));
+		if (p_page == 0) {
+			_pool_store = page;
+		} else if (p_page == 1) {
+			_pool_page1 = page;
+		} else {
+			_PoolNode **table = static_cast<_PoolNode **>(_pool_store);
+			if (p_page == 2) {
+				table = static_cast<_PoolNode **>(Memory::alloc_static(sizeof(_PoolNode *) * 4));
+				table[0] = static_cast<_PoolNode *>(_pool_store);
+				table[1] = _pool_page1;
+				_pool_page1 = nullptr;
+			} else if ((p_page & (p_page - 1)) == 0) {
+				table = static_cast<_PoolNode **>(Memory::realloc_static(table, sizeof(_PoolNode *) * p_page * 2));
+			}
+			table[p_page] = page;
+			_pool_store = table;
+		}
+		return page;
+	}
+
+	_FORCE_INLINE_ _PoolNode *_pool_alloc() {
+		_PoolNode *node = _pool_free;
+		if (node != nullptr) {
+			_pool_free = *reinterpret_cast<_PoolNode **>(node);
+			return node;
+		}
+		uint32_t page = 0;
+		uint32_t offset = 0;
+		_pool_locate(_pool_next, page, offset);
+		_pool_next++;
+		node = offset == 0 ? _pool_add_page(page) : _pool_page(page) + offset;
+		DEV_ASSERT(_pool_node(_pool_next - 1) == node);
+		return node;
+	}
+
+	// Releases every page; the nodes must be destroyed already.
+	void _pool_reset() {
+		if (_pool_next == 0) {
+			return;
+		}
+		uint32_t last = 0;
+		uint32_t offset = 0;
+		_pool_locate(_pool_next - 1, last, offset);
+		if (last < 2) {
+			Memory::free_static(_pool_store);
+			if (last == 1) {
+				Memory::free_static(_pool_page1);
+			}
+		} else {
+			_PoolNode **table = static_cast<_PoolNode **>(_pool_store);
+			for (uint32_t i = 0; i <= last; i++) {
+				Memory::free_static(table[i]);
+			}
+			Memory::free_static(table);
+		}
+		_pool_store = nullptr;
+		_pool_page1 = nullptr;
+		_pool_free = nullptr;
+		_pool_next = 0;
+	}
+
+	void _pool_take(HashMap &p_other) {
+		_pool_store = p_other._pool_store;
+		_pool_page1 = p_other._pool_page1;
+		_pool_free = p_other._pool_free;
+		_pool_next = p_other._pool_next;
+		_pool_first_shift = p_other._pool_first_shift;
+		p_other._pool_store = nullptr;
+		p_other._pool_page1 = nullptr;
+		p_other._pool_free = nullptr;
+		p_other._pool_next = 0;
+		p_other._pool_first_shift = 0;
+	}
+
+	// Sizes page 0 for p_count nodes (the next power of two), while the pool is empty.
+	void _pool_first_page(uint32_t p_count) {
+		if (_pool_next == 0) {
+			_pool_first_shift = p_count > 1 ? uint8_t(MIN(uint32_t(std::bit_width(p_count - 1)), 31u)) : 0;
+		}
+	}
+
+	_FORCE_INLINE_ _PoolNode *_element_new(const TKey &p_key, const TValue &p_value) {
+		if constexpr (_USE_POOL) {
+			return memnew_placement(_pool_alloc(), _PoolNode(p_key, p_value));
+		} else {
+			return Allocator::new_allocation(_PoolNode(p_key, p_value));
+		}
+	}
+
+	_FORCE_INLINE_ void _element_delete(_PoolNode *p_element) {
+		if constexpr (_USE_POOL) {
+			p_element->~_PoolNode();
+			DEV_ASSERT(p_element != _pool_free);
+			*reinterpret_cast<_PoolNode **>(p_element) = _pool_free;
+			_pool_free = p_element;
+		} else {
+			Allocator::delete_allocation(p_element);
+		}
+	}
+#else
+	static constexpr bool _USE_POOL = false;
+	_FORCE_INLINE_ void _pool_reset() {}
+	_FORCE_INLINE_ void _pool_take(HashMap &) {}
+	_FORCE_INLINE_ void _pool_first_page(uint32_t) {}
+	_FORCE_INLINE_ HashMapElement<TKey, TValue> *_element_new(const TKey &p_key, const TValue &p_value) {
+		return Allocator::new_allocation(HashMapElement<TKey, TValue>(p_key, p_value));
+	}
+	_FORCE_INLINE_ void _element_delete(HashMapElement<TKey, TValue> *p_element) {
+		Allocator::delete_allocation(p_element);
+	}
+#endif
 
 	_FORCE_INLINE_ static uint32_t _hash(const TKey &p_key) {
 		uint32_t hash = hash_table_key<Hasher>(p_key);
@@ -227,7 +415,7 @@ private:
 			_resize_and_rehash(_capacity_idx + 1);
 		}
 
-		HashMapElement<TKey, TValue> *elem = Allocator::new_allocation(HashMapElement<TKey, TValue>(p_key, p_value));
+		HashMapElement<TKey, TValue> *elem = _element_new(p_key, p_value);
 
 		if (_tail_element == nullptr) {
 			_head_element = elem;
@@ -247,11 +435,24 @@ private:
 	}
 
 	void _clear_data() {
-		HashMapElement<TKey, TValue> *current = _tail_element;
-		while (current != nullptr) {
-			HashMapElement<TKey, TValue> *prev = current->prev;
-			Allocator::delete_allocation(current);
-			current = prev;
+		if constexpr (_USE_POOL) {
+			// Fork: destroy the nodes, then release the pages at once (no free list).
+			if constexpr (!std::is_trivially_destructible_v<HashMapElement<TKey, TValue>>) {
+				HashMapElement<TKey, TValue> *current = _tail_element;
+				while (current != nullptr) {
+					HashMapElement<TKey, TValue> *prev = current->prev;
+					current->~HashMapElement<TKey, TValue>();
+					current = prev;
+				}
+			}
+			_pool_reset();
+		} else {
+			HashMapElement<TKey, TValue> *current = _tail_element;
+			while (current != nullptr) {
+				HashMapElement<TKey, TValue> *prev = current->prev;
+				Allocator::delete_allocation(current);
+				current = prev;
+			}
 		}
 	}
 
@@ -267,6 +468,7 @@ public:
 
 	void clear() {
 		if (_elements == nullptr || _size == 0) {
+			_pool_reset(); // Fork: the nodes of erased elements.
 			return;
 		}
 
@@ -370,7 +572,7 @@ public:
 			_elements[idx]->next->prev = _elements[idx]->prev;
 		}
 
-		Allocator::delete_allocation(_elements[idx]);
+		_element_delete(_elements[idx]);
 
 		_size--;
 		return true;
@@ -417,6 +619,7 @@ public:
 	// Reserves space for a number of elements, useful to avoid many resizes and rehashes.
 	// If adding a known (possibly large) number of elements at once, must be larger than old capacity.
 	void reserve(uint32_t p_new_capacity) {
+		_pool_first_page(p_new_capacity);
 		uint32_t new_idx = _capacity_idx;
 
 		while (hash_table_size_primes[new_idx] < p_new_capacity) {
@@ -598,6 +801,7 @@ public:
 
 	explicit HashMap(const HashMap &p_other) {
 		reserve(hash_table_size_primes[p_other._capacity_idx]);
+		_pool_first_page(p_other._size);
 
 		if (p_other._size == 0) {
 			return;
@@ -622,6 +826,7 @@ public:
 		p_other._tail_element = nullptr;
 		p_other._capacity_idx = MIN_CAPACITY_INDEX;
 		p_other._size = 0;
+		_pool_take(p_other);
 	}
 
 	void operator=(const HashMap &p_other) {
@@ -631,8 +836,10 @@ public:
 		if (_size != 0) {
 			clear();
 		}
+		_pool_reset();
 
 		reserve(hash_table_size_primes[p_other._capacity_idx]);
+		_pool_first_page(p_other._size);
 
 		if (p_other._elements == nullptr) {
 			return; // Nothing to copy.
@@ -651,6 +858,7 @@ public:
 		if (_size != 0) {
 			clear();
 		}
+		_pool_reset();
 		if (_elements != nullptr) {
 			Memory::free_static(_elements);
 			Memory::free_static(_hashes);
@@ -669,6 +877,7 @@ public:
 		p_other._tail_element = nullptr;
 		p_other._capacity_idx = MIN_CAPACITY_INDEX;
 		p_other._size = 0;
+		_pool_take(p_other);
 
 		return *this;
 	}

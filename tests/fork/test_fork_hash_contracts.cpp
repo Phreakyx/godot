@@ -229,6 +229,167 @@ TEST_CASE("[Fork][HashMap] Single element") {
 	CHECK(map.begin() == map.end());
 }
 
+// The pins below guard a backend that owns node storage per map (FORK_BACKEND_HASHMAP_POOL).
+
+TEST_CASE("[Fork][HashMap] Element pointers survive a move after the source is destroyed") {
+	using IntMap = HashMap<int, int>;
+	IntMap *source = memnew(IntMap);
+	Vector<int *> values;
+	for (int i = 0; i < 100; i++) {
+		source->insert(i, i * 10);
+		values.push_back(source->getptr(i));
+	}
+	IntMap moved(std::move(*source));
+	memdelete(source);
+	for (int i = 0; i < 100; i++) {
+		CHECK(*values[i] == i * 10);
+		CHECK(moved.getptr(i) == values[i]);
+	}
+
+	// Move assignment into a map that holds elements of its own.
+	source = memnew(IntMap);
+	source->insert(7, 70);
+	int *seven = source->getptr(7);
+	moved = std::move(*source);
+	memdelete(source);
+	CHECK(moved.size() == 1);
+	CHECK(moved.getptr(7) == seven);
+	CHECK(*seven == 70);
+	moved.insert(8, 80);
+	CHECK(map_keys(moved) == Vector<int>{ 7, 8 });
+}
+
+TEST_CASE("[Fork][HashMap] clear() then insert") {
+	HashMap<int, int> map;
+	for (int i = 0; i < 100; i++) {
+		map.insert(i, i);
+	}
+	map.clear();
+	CHECK(map.is_empty());
+	CHECK(map.begin() == map.end());
+	for (int i = 0; i < 10; i++) {
+		map.insert(100 - i, i);
+	}
+	CHECK(map.size() == 10);
+	CHECK(map_keys(map) == Vector<int>{ 100, 99, 98, 97, 96, 95, 94, 93, 92, 91 });
+	CHECK(map[95] == 5);
+	map.clear();
+	map.clear();
+	CHECK(map.is_empty());
+}
+
+TEST_CASE("[Fork][HashMap] A copy is independent of its source") {
+	HashMap<int, int> source;
+	for (int i = 1; i <= 5; i++) {
+		source.insert(i, i * 10);
+	}
+	HashMap<int, int> copy(source);
+	copy.insert(6, 60);
+	copy.erase(2);
+	copy[1] = 11;
+	CHECK(map_keys(source) == Vector<int>{ 1, 2, 3, 4, 5 });
+	CHECK(source[1] == 10);
+	CHECK(source[2] == 20);
+	CHECK(map_keys(copy) == Vector<int>{ 1, 3, 4, 5, 6 });
+
+	HashMap<int, int> assigned;
+	assigned.insert(9, 90);
+	assigned = source;
+	assigned.erase(5);
+	CHECK(map_keys(assigned) == Vector<int>{ 1, 2, 3, 4 });
+	CHECK(map_keys(source) == Vector<int>{ 1, 2, 3, 4, 5 });
+}
+
+TEST_CASE("[Fork][HashMap] reserve() before the first insert keeps pointers stable") {
+	HashMap<int, int> map;
+	map.reserve(64);
+	Vector<int *> values;
+	for (int i = 0; i < 64; i++) {
+		map.insert(i, i + 1);
+		values.push_back(map.getptr(i));
+	}
+	for (int i = 0; i < 64; i++) {
+		CHECK(map.getptr(i) == values[i]);
+		CHECK(*values[i] == i + 1);
+	}
+	map.insert(64, 65); // past the reserved count
+	CHECK(map.getptr(0) == values[0]);
+	CHECK(map.size() == 65);
+}
+
+TEST_CASE("[Fork][HashMap] Pointers stay valid across node page boundaries") {
+	HashMap<int, int> map;
+	Vector<int *> values;
+	bool stable = true;
+	for (int i = 0; i < 40; i++) {
+		map.insert(i, i);
+		values.push_back(map.getptr(i));
+		for (int j = 0; j <= i; j++) {
+			stable = stable && map.getptr(j) == values[j] && *values[j] == j;
+		}
+	}
+	CHECK(stable);
+
+	// Erase, then insert new keys into the freed nodes: the survivors stay put, the order follows insertion.
+	for (int i = 0; i < 40; i += 3) {
+		map.erase(i);
+	}
+	for (int i = 100; i < 110; i++) {
+		map.insert(i, i);
+	}
+	for (int i = 0; i < 40; i++) {
+		if (i % 3) {
+			CHECK(map.getptr(i) == values[i]);
+		}
+	}
+	CHECK(map.size() == 26 + 10);
+	CHECK(map.last()->key == 109);
+}
+
+TEST_CASE("[Fork][HashMap] Re-inserting an existing key at each page size keeps size and address") {
+	for (int n : { 1, 2, 3, 4, 7, 8, 15, 16 }) {
+		HashMap<int, int> map;
+		for (int i = 0; i < n; i++) {
+			map.insert(i, i);
+		}
+		int *last = map.getptr(n - 1);
+		map.insert(n - 1, -1);
+		map[0] = -2;
+		CHECK(map.size() == uint32_t(n));
+		CHECK(map.getptr(n - 1) == last);
+		CHECK(map.last()->key == n - 1);
+		CHECK(map[0] == -2);
+	}
+}
+
+#ifdef DEBUG_ENABLED
+TEST_CASE("[Fork][HashMap] Node memory of empty, single-element and cleared maps") {
+	using E = HashMapElement<int, int>;
+	const uint64_t before = Memory::get_mem_usage();
+	using IntMap = HashMap<int, int>;
+	IntMap *map = memnew(IntMap);
+	const uint64_t empty = Memory::get_mem_usage();
+	CHECK(empty - before == sizeof(IntMap)); // nothing allocated before the first insert
+
+	map->insert(1, 1);
+	const uint64_t one = Memory::get_mem_usage();
+	map->clear();
+	const uint64_t cleared = Memory::get_mem_usage();
+	CHECK(one - cleared == sizeof(E)); // one element owns one node's bytes
+	CHECK(cleared > empty); // the index stays allocated, as upstream keeps it
+
+	for (int i = 0; i < 3; i++) {
+		map->insert(i, i);
+	}
+	CHECK(Memory::get_mem_usage() - cleared == 3 * sizeof(E));
+	map->clear();
+	CHECK(Memory::get_mem_usage() == cleared); // clear() returns every node byte
+
+	memdelete(map);
+	CHECK(Memory::get_mem_usage() == before);
+}
+#endif
+
 TEST_CASE("[Fork][AHashMap] Iteration follows insertion order") {
 	AHashMap<int, int> map;
 	map.insert(5, 0);

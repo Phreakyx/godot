@@ -1,5 +1,27 @@
 # Update log
 
+## 2026-11-22 (HashMap node pool candidate)
+
+* **Added**: [per-map HashMap node pool](/project/hashmap-node-pool.md)
+  (HASH-01 candidate, draft) behind `FORK_BACKEND_HASHMAP_POOL` (default 0):
+  geometric pages from one node, two page pointers in the map and a table
+  from the third page, an intrusive free list, the pool moved with the map
+  and released by `clear()` and the destructor. Seven new `[Fork][HashMap]`
+  pins (move after the source is destroyed, clear then insert, copy
+  independence, reserve, page boundaries, re-insert address, node memory)
+  pass on the control and the pool in production and dev tests builds.
+  Map object 40 to 72 bytes (MSVC x64).
+* **Added**: the tiny-maps micro case (D-05, `hashmap_tiny_ptr_*`,
+  `hashset_tiny_ptr_*`, 10,000 maps of 1, 2, 3 and 8 keys) in the
+  [micro tier](/tooling/benchmark-protocol.md); its untimed `live_bytes` and
+  `allocs` are in the pool entry: same bytes at 1 and 3 elements (3: 20%
+  fewer allocations), +9.4% bytes at 2 and +48% at 8 (30% fewer
+  allocations). Across the matrix the pool cuts allocations by orders of
+  magnitude but holds up to 2N-1 nodes at power-of-two sizes and keeps
+  erased nodes until `clear()`.
+* **Updated**: [unit-test baseline](/project/unit-test-baseline.md) (1576
+  cases, 9 skipped).
+
 ## 2026-11-22 (allocator mismatch audit)
 
 * **Added**: [allocator mismatch audit](/project/allocator-audit.md): every

@@ -127,6 +127,13 @@ tests build, first recorded here, reports 1545, 1545 passed, 0 failed, 9
 skipped (486685 assertions); it has no editor tests and no TOOLS_ENABLED
 case. The `MI_DEBUG=1` allocator candidate gives the same counts in all three.
 
+The HashMap node pool (plan 03-03, [node pool](/project/hashmap-node-pool.md))
+adds seven `[Fork][HashMap]` cases (one of them only
+with `DEBUG_ENABLED`): MSVC `--test` now reports 1576 cases, 1576 passed, 0
+failed, 9 skipped (595396 assertions) on the production control, the
+production `FORK_BACKEND_HASHMAP_POOL=1` build and the dev pool build;
+`--test-case="*Fork*"` runs 79 cases (778 assertions).
+
 The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
 the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
 builds, at `7b81582fab` plus the `-> uint64_t` fix in

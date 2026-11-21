@@ -148,6 +148,7 @@ struct Sample {
 	uint64_t operations;
 	uint64_t checksum = 0;
 	uint64_t live_bytes = 0;
+	uint64_t allocs = UINT64_MAX; // set: a count taken untimed, printed instead of the timed region's
 	uint64_t allocs_start;
 	Clock::time_point start;
 	Sample(std::string p_name, uint64_t p_operations) :
@@ -155,11 +156,12 @@ struct Sample {
 	void finish() {
 		std::atomic_signal_fence(std::memory_order_seq_cst);
 		const double ns = std::chrono::duration<double, std::nano>(Clock::now() - start).count();
-		const uint64_t allocs = fork_alloc_counters_allocs() - allocs_start;
+		const uint64_t timed_allocs = fork_alloc_counters_allocs() - allocs_start;
 		check(ns > 0.0 && operations > 0);
 		sink = checksum;
 		std::printf("%s,%.6f,%llu,%llu,%llu,%llu\n", name.c_str(), ns / operations, static_cast<unsigned long long>(operations),
-				static_cast<unsigned long long>(live_bytes), static_cast<unsigned long long>(allocs), static_cast<unsigned long long>(checksum));
+				static_cast<unsigned long long>(live_bytes), static_cast<unsigned long long>(allocs == UINT64_MAX ? timed_allocs : allocs),
+				static_cast<unsigned long long>(checksum));
 	}
 };
 
@@ -271,8 +273,8 @@ int64_t find(const C &p_c, const K &p_key) {
 	if constexpr (SET) {
 		return p_c.has(p_key);
 	} else if constexpr (requires { p_c.getptr(p_key); }) {
-		const int *value = p_c.getptr(p_key);
-		return value ? *value : -1;
+		const auto *value = p_c.getptr(p_key);
+		return value ? int64_t(*value) : -1;
 	} else if constexpr (requires { p_c.find(p_key)->value(); }) {
 		const auto *element = p_c.find(p_key);
 		return element ? element->value() : -1;
@@ -482,6 +484,85 @@ void bench_map(const char *p_container, const Keys &p_keys, const int (&p_sizes)
 	}
 }
 
+// Tiny maps (D-05, the DependencyTracker pattern: HashMap<DependencyTracker *, uint32_t> and
+// HashSet<Dependency *> in servers/rendering/storage/utilities.h): TINY_MAPS maps of N pointer keys.
+// build creates, fills and destroys them (ns per inserted key); hit looks keys up in the live maps.
+// Both rows report live_bytes and allocs of all TINY_MAPS maps alive, from an untimed build pass
+// (requested bytes: per-block allocator overhead is not in live_bytes). The map objects themselves
+// are not Godot memory.
+constexpr int TINY_MAPS = 10000;
+constexpr int TINY_SIZES[] = { 1, 2, 3, 8 };
+
+template <typename C, bool SET>
+void bench_tiny_n(const char *p_container, const PtrKeys &p_keys, int p_n) {
+	const uint64_t base = mem();
+	const uint64_t keys = uint64_t(TINY_MAPS) * p_n;
+	auto fill = [&](C *p_maps) {
+		for (int m = 0; m < TINY_MAPS; m++) {
+			for (int i = 0; i < p_n; i++) {
+				put<SET>(p_maps[m], p_keys.hit[m * p_n + i], i);
+			}
+		}
+	};
+	uint64_t live_bytes = 0;
+	uint64_t allocs = 0;
+	{
+		const uint64_t start = fork_alloc_counters_allocs();
+		C *maps = new C[TINY_MAPS];
+		fill(maps);
+		allocs = fork_alloc_counters_allocs() - start;
+		live_bytes = mem() - base;
+		delete[] maps;
+	}
+	{
+		const uint64_t repeats = std::max<uint64_t>(1, TARGET / keys);
+		Sample sample(case_name(p_container, "ptr", "build", p_n), repeats * keys);
+		for (uint64_t r = 0; r < repeats; r++) {
+			C *maps = new C[TINY_MAPS];
+			fill(maps);
+			for (int m = 0; m < TINY_MAPS; m++) {
+				sample.checksum += maps[m].size();
+			}
+			delete[] maps;
+		}
+		sample.live_bytes = live_bytes;
+		sample.allocs = allocs;
+		sample.finish();
+		check(sample.checksum == repeats * keys);
+	}
+	{
+		C *maps = new C[TINY_MAPS];
+		fill(maps);
+		const uint64_t count = std::max<uint64_t>(1, TARGET / keys);
+		uint64_t expected = 0;
+		for (int i = 0; i < p_n; i++) {
+			expected += SET ? 1 : uint64_t(i);
+		}
+		Sample sample(case_name(p_container, "ptr", "hit", p_n), count * keys);
+		for (uint64_t pass = 0; pass < count; pass++) {
+			std::atomic_signal_fence(std::memory_order_seq_cst);
+			for (int m = 0; m < TINY_MAPS; m++) {
+				for (int i = 0; i < p_n; i++) {
+					sample.checksum += uint64_t(find<SET>(maps[m], p_keys.hit[m * p_n + i]));
+				}
+			}
+		}
+		sample.live_bytes = live_bytes;
+		sample.allocs = allocs;
+		sample.finish();
+		check(sample.checksum == count * TINY_MAPS * expected);
+		delete[] maps;
+	}
+	check(mem() == base);
+}
+
+template <typename C, bool SET>
+void bench_tiny(const char *p_container, const PtrKeys &p_keys) {
+	for (int n : TINY_SIZES) {
+		bench_tiny_n<C, SET>(p_container, p_keys, n);
+	}
+}
+
 // List, Vector and LocalVector: push, iterate, copy (Vector: copy and detach) and, for List, erase by element.
 template <typename C, typename Keys>
 void bench_sequence_n(const char *p_container, const Keys &p_keys, int p_n) {
@@ -664,6 +745,8 @@ int main() {
 	bench_map<RBSet<int64_t>, true>("rbset", i64, SIZES);
 	bench_map<RBSet<const uint64_t *>, true>("rbset", ptr, SIZES);
 	bench_map<RBSet<String>, true>("rbset", str, SIZES, OPS_ALL, RB_STR_MAX_N);
+	bench_tiny<HashMap<const uint64_t *, uint32_t>, false>("hashmap_tiny", ptr);
+	bench_tiny<HashSet<const uint64_t *>, true>("hashset_tiny", ptr);
 
 	bench_sequence<List<int64_t>>("list", i64);
 	bench_sequence<Vector<int64_t>>("vector", i64);
