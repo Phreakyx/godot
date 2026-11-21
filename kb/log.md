@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-11-21 (mimalloc allocator candidate)
+
+* **Added**: mimalloc 3.7.0 (`1ed67b5156a7`, MIT) vendored in
+  `thirdparty/mimalloc/` as the ALLOC-01 candidate behind
+  `FORK_BACKEND_ALLOCATOR` (default 0). `core/os/fork_mimalloc.c` compiles
+  it only when the macro is 1, so the control links no mimalloc code;
+  `memory.cpp` calls it directly, nothing overrides `malloc` or
+  `operator new`. The micro harness compiles the wrapper as C on Windows
+  and Linux and hashes it in `meta.json`
+  ([benchmark protocol](/tooling/benchmark-protocol.md)). No measurement
+  yet: the runner and micro runs of this change were smoke runs.
+* **Updated**: [new translation-unit assumptions](/mistakes/new-translation-unit-assumptions.md):
+  two mimalloc headers missed by an include grep, and cl refusing
+  `/std:c++20` with `/std:c17` in one call.
+
 ## 2026-11-21 (runner review fixes)
 
 * **Fixed**: from the Phase 2 code review of the runner: `micro --target

@@ -402,7 +402,8 @@ fork's change when upstream lands the same).
 | `core/object/ref_counted.h` | Fork | C++20: cross-type `Ref<T>` == / != (#100749) | Take upstream's when #100749 lands |
 | `core/os/fork_alloc_counters.cpp` | Fork | New file: per-thread allocation and reallocation counter slots and their totals, compiled only with `FORK_ALLOC_COUNTERS=1` | Keep |
 | `core/os/fork_alloc_counters.h` | Fork | New file: `FORK_ALLOC_COUNTERS` (default 0, `static_assert` 0 or 1) and the counter functions | Keep |
-| `core/os/memory.cpp` | Fork | Allocation and reallocation counts for benchmark builds behind `FORK_ALLOC_COUNTERS` (default 0): one call in `alloc_static`, `alloc_aligned_static` and `realloc_static` | Keep; upstream changes to these functions keep the calls |
+| `core/os/fork_mimalloc.c` | Fork | New file: compiles vendored mimalloc (`thirdparty/mimalloc/src/static.c`) as one C translation unit when `FORK_BACKEND_ALLOCATOR` is 1, empty otherwise; refuses `MI_MALLOC_OVERRIDE`, pins mimalloc's debug, secure, stats, profile and guarded switches off | Keep |
+| `core/os/memory.cpp` | Fork | Allocation and reallocation counts for benchmark builds behind `FORK_ALLOC_COUNTERS` (default 0): one call in `alloc_static`, `alloc_aligned_static` and `realloc_static`; the underlying `malloc`, `calloc`, `realloc` and `free` calls go through `_fork_sys_*` helpers that call mimalloc when `FORK_BACKEND_ALLOCATOR` is 1 (a 0-byte realloc frees and returns nullptr, as the C runtime does) | Keep; upstream changes to these functions keep the calls and both allocator branches |
 | `core/os/spin_lock.h` | Fork | C++20: no pre-C++20 `ATOMIC_VAR_INIT` branch (#100749) | Take upstream's when #100749 lands |
 | `core/typedefs.h` | Fork | C++20: `static_assert(__cplusplus >= 202002L)` (#100749) | Take upstream's when #100749 lands |
 | `core/variant/array.cpp` | Fork | `static_assert`s on the `ArrayPrivate` fields C# reads (`InteropStructs.cs`) | Keep; same rule as `cowdata.h` |
@@ -411,7 +412,7 @@ fork's change when upstream lands the same).
 | `core/math/dynamic_bvh.h` | Fork | SSE `Volume` layout and kernels on x86-64 single precision (`DYNAMIC_BVH_SSE`, D014) | Port upstream `Volume` changes into both the SSE and the scalar code |
 | `core/templates/a_hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
 | `core/templates/cowdata.h` | Fork | `static_assert`s pinning the header offsets to the C# formula (`runtime_interop.cpp`) | Keep; when upstream changes the header, update C#, the formula and the asserts together |
-| `core/templates/fork_backends.h` | Fork | New file: compile-time container backend switch (`FORK_BACKEND_*`, 0 = upstream) | Keep |
+| `core/templates/fork_backends.h` | Fork | New file: compile-time container backend switch (`FORK_BACKEND_*`, 0 = upstream), C-includable (`#if`/`#error` range checks, no `static_assert`); `FORK_BACKEND_ALLOCATOR` | Keep |
 | `core/templates/hash_map.h` | Fork | String keys hashed with `hash_table_key()` (byte hash) | Port |
 | `core/templates/hash_set.h` | Fork | One allocation per table (`_allocate_block()`, `_free_block()`, D013); byte hash for String keys | Port upstream allocation, resize and copy changes to the block layout |
 | `core/templates/hashfuncs.cpp` | Fork | `hash_buffer()` byte hash (wyhash/XXH3) for String and CharString keys | Port; `HashMapHasherDefault` and `String::hash()` outputs never change |

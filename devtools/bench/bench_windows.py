@@ -346,6 +346,9 @@ MICRO_FLAGS = [
 ]
 MICRO_LINK = ["/link", "/OPT:REF", "/OPT:ICF", "/INCREMENTAL:NO"]
 MICRO_EXE = "bench.exe"
+# cl refuses /std:c++20 and /std:c17 in one call: C inputs (core/os/fork_mimalloc.c) get their own cl /c
+# call with these flags and the same /D defines, and the object goes into the main call.
+MICRO_C_FLAGS = ["/O2", "/MT", "/Gy", "/Gw", "/std:c17", *(f for f in MICRO_FLAGS if f.startswith("/D"))]
 
 
 def msvc_env():
@@ -356,16 +359,30 @@ def msvc_env():
     return vcvars
 
 
+def micro_c_args(obj, source, include_dirs, defines):
+    return ["cl", "/c", *MICRO_C_FLAGS, *(f"/D{d}" for d in defines), *(f"/I{p}" for p in include_dirs),
+            f"/Fo{obj}", str(source)]
+
+
 def compile_micro(out_dir, inputs, include_dirs, defines):
     """cl inputs into out_dir/bench.exe through a build.cmd; returns the cl version from its banner."""
     out_dir.mkdir(parents=True, exist_ok=True)
     exe = out_dir / MICRO_EXE
     exe.unlink(missing_ok=True)
+    lines = []
+    objects = []
+    for source in (Path(i) for i in inputs if Path(i).suffix == ".c"):
+        obj = out_dir / (source.stem + ".obj")
+        lines.append(subprocess.list2cmdline(micro_c_args(obj, source, include_dirs, defines)))
+        lines.append("@if errorlevel 1 exit /b %errorlevel%")
+        objects.append(obj)
+    cxx_inputs = [i for i in inputs if Path(i).suffix != ".c"] + objects
     args = ["cl", *MICRO_FLAGS, *(f"/D{d}" for d in defines), *(f"/I{p}" for p in include_dirs),
-            f"/Fo{out_dir}\\", f"/Fe{exe}", *map(str, inputs), *MICRO_LINK]
+            f"/Fo{out_dir}\\", f"/Fe{exe}", *map(str, cxx_inputs), *MICRO_LINK]
+    lines.append(subprocess.list2cmdline(args))
     command = out_dir / "build.cmd"
     command.write_text(f'@call "{msvc_env()}" >nul\n@if errorlevel 1 exit /b %errorlevel%\n'
-                       + subprocess.list2cmdline(args) + "\n@exit /b %errorlevel%\n", encoding="utf-8")
+                       + "\n".join(lines) + "\n@exit /b %errorlevel%\n", encoding="utf-8")
     result = subprocess.run(["cmd", "/d", "/c", str(command)], cwd=ROOT, capture_output=True, text=True,
                             errors="replace")
     log = result.stdout + result.stderr

@@ -37,11 +37,24 @@
 // which passes SCons cppdefines and extra_suffix. A family gets its macro together with
 // its first candidate; a losing candidate is deleted, an accepted one becomes the default
 // with upstream's code kept under the 0 branch.
+// The header is also included from C (core/os/fork_mimalloc.c): preprocessor checks only.
 
 // Seam self-test: proves a define reaches every translation unit and the suffixed binary.
 // No container reads it.
 #ifndef FORK_BACKEND_SELFTEST
 #define FORK_BACKEND_SELFTEST 0
 #endif
-static_assert(FORK_BACKEND_SELFTEST == 0 || FORK_BACKEND_SELFTEST == 1,
-		"FORK_BACKEND_SELFTEST must be 0 or 1.");
+#if !(FORK_BACKEND_SELFTEST == 0 || FORK_BACKEND_SELFTEST == 1)
+#error "FORK_BACKEND_SELFTEST must be 0 or 1."
+#endif
+
+// General allocator under Memory::alloc_static and friends (ALLOC-01).
+// 0: the C runtime malloc, calloc, realloc and free (upstream).
+// 1: mimalloc (thirdparty/mimalloc), called directly from core/os/memory.cpp. It is
+//    compiled by core/os/fork_mimalloc.c, which is empty with 0. Nothing is overridden.
+#ifndef FORK_BACKEND_ALLOCATOR
+#define FORK_BACKEND_ALLOCATOR 0
+#endif
+#if !(FORK_BACKEND_ALLOCATOR == 0 || FORK_BACKEND_ALLOCATOR == 1)
+#error "FORK_BACKEND_ALLOCATOR must be 0 or 1."
+#endif

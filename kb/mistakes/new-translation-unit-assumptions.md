@@ -33,8 +33,16 @@ from each variant, records source fingerprints and compiles those verbatim.
 It does not substitute a different String implementation or stub measured work.
 The real container headers, `memory.cpp` and `hashfuncs.cpp` remain in use.
 
+Vendoring mimalloc (03-01) picked its headers by grepping for
+`#include "mimalloc-`; `types.h` includes `"../mimalloc-stats.h"` and
+`"../mimalloc-profile.h"`, so the first candidate compile failed (C1083).
+The micro harness then put `/std:c17` next to `/std:c++20` in one cl call,
+which cl refuses (D8016); C inputs now get their own `cl /c` call.
+
 # Rule
 
 Check declarations and exact helper signatures in this fork before introducing
 a new translation unit. Include directly used types, preserve established
 container/API conventions, and compile the narrow new path early.
+When vendoring, take a library's whole include tree, or follow every
+relative include, before the first build.

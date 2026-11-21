@@ -1214,7 +1214,9 @@ STRING_METHODS = (
     "bool String::operator<(const char32_t *p_str) const",
     "bool String::operator<(const String &p_str) const",
 )
-MICRO_TREE_INPUTS = ("core/os/memory.cpp", "core/os/fork_alloc_counters.cpp", "core/profiling/profiling.gen.h")
+# core/os/fork_mimalloc.c is C and empty unless the side's defines set FORK_BACKEND_ALLOCATOR=1.
+MICRO_TREE_INPUTS = ("core/os/memory.cpp", "core/os/fork_alloc_counters.cpp", "core/os/fork_mimalloc.c",
+                     "core/profiling/profiling.gen.h")
 MICRO_FIELDS = ("ns_per_op", "operations", "live_bytes", "allocs", "checksum")
 MICRO_PARITY = ("operations", "checksum", "live_bytes", "allocs")
 MICRO_BUILD = "standalone"  # the build field of a micro floor key
@@ -1363,8 +1365,9 @@ def build_micro(side, build_dir, controls):
     extract_string_methods(src / "core/string/ustring.cpp", string_methods)
     modern = int("uint64_t hash_buffer64(" in (src / "core/templates/hashfuncs.h").read_text(encoding="utf-8"))
     inputs = [MICRO_SOURCE, ROOT / "core/os/memory.cpp", ROOT / "core/os/fork_alloc_counters.cpp", string_methods,
-              src / "core/templates/hashfuncs.cpp"]
-    includes = ([src] if src != ROOT else []) + [ROOT, ROOT / "platform" / PLATFORM] + controls
+              src / "core/templates/hashfuncs.cpp", ROOT / "core/os/fork_mimalloc.c"]
+    includes = ([src] if src != ROOT else []) + [ROOT, ROOT / "platform" / PLATFORM,
+                                                 ROOT / "thirdparty/mimalloc/include"] + controls
     defines = [f"BENCH_MODERN_HASH={modern}"] + (["BENCH_CONTROLS"] if controls else []) + side["defines"]
     version = osb.compile_micro(build_dir, inputs, includes, defines)
     sources = {rel(ROOT / name): sha_file(ROOT / name) for name in (rel(MICRO_SOURCE), *MICRO_TREE_INPUTS)}
@@ -1373,6 +1376,7 @@ def build_micro(side, build_dir, controls):
         sources[name] = sha_file(path) + ("" if path.is_relative_to(build_dir) or not side["prev"] else " (tree)")
     return {"label": side["label"], "commit": side["commit"], "exe": rel(build_dir / osb.MICRO_EXE),
             "defines": defines, "flags": osb.MICRO_FLAGS + osb.MICRO_LINK,
+            "c_flags": osb.MICRO_C_FLAGS,
             "cl_version" if COMPILER == "msvc" else "compiler_version": version, "sources": sources}
 
 

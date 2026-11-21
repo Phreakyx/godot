@@ -402,6 +402,18 @@ diagnostics are stubbed, and any diagnostic fails the run.
   from the control binary's medians: RBMap and RBSet against `gtl_btree`
   and `std_map`, the hash containers against the hash controls (sets
   against maps). 02-10 uses it as the "best plausible speedup" of D-07.
+- **Allocator wrapper.** Every side also compiles
+  `core/os/fork_mimalloc.c` as C in its own compile (`cl /c /O2 /MT /Gy
+  /Gw /std:c17`, since cl refuses `/std:c++20` and `/std:c17` in one
+  call; on Linux `gcc` or `clang -O2 -std=gnu17`), with the same `/D`/`-D`
+  defines and `thirdparty/mimalloc/include` on the include path, and
+  links the object into the C++ command. `meta.json` records these flags
+  as `c_flags` and hashes the wrapper with the other tree sources. It is
+  empty unless the side's
+  defines set `FORK_BACKEND_ALLOCATOR=1` (the candidate of
+  `--defines "FORK_BACKEND_ALLOCATOR=1"`): then mimalloc is the side's
+  allocator under `memory.cpp`, and `live_bytes` still counts requested
+  bytes, not mimalloc's per-block overhead.
 - **Never decides alone.** A micro row never accepts or rejects a
   candidate; acceptance comes from the engine workloads. Micro rows feed
   the max-gain estimate and the layout sentinel.
@@ -683,7 +695,9 @@ it needs nothing beyond the standard library and `perf`
   the same flags on every side and for both compilers (`-O2
   -std=gnu++20 -fno-rtti -DDEBUG_ENABLED -DTOOLS_ENABLED
   -DLINUXBSD_ENABLED -DUNIX_ENABLED -DFORK_ALLOC_COUNTERS=1`, the include
-  paths of the Windows build with `platform/linuxbsd`).
+  paths of the Windows build with `platform/linuxbsd`); the C wrapper
+  `core/os/fork_mimalloc.c` gets its own `gcc` or `clang` compile
+  (`-O2 -std=gnu17`, the same `-D` defines) first.
 - **Level.** Each `level` series exports its `.pck` with the Linux
   control editor; a Windows `.pck` is never copied over. `override.cfg`
   sets `rendering_device/driver.linuxbsd="vulkan"`.

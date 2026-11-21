@@ -437,6 +437,8 @@ MICRO_FLAGS = [
 MICRO_LINK = []
 MICRO_EXE = "bench"
 MICRO_CXX = {"gcc": "g++", "clang": "clang++"}
+MICRO_CC = {"gcc": "gcc", "clang": "clang"}
+MICRO_C_FLAGS = ["-O2", "-std=gnu17", *(f for f in MICRO_FLAGS if f.startswith("-D"))]
 
 
 def micro_command(compiler, exe, inputs, include_dirs, defines):
@@ -444,14 +446,33 @@ def micro_command(compiler, exe, inputs, include_dirs, defines):
             "-o", str(exe), *map(str, inputs), *MICRO_LINK]
 
 
+def micro_c_command(compiler, obj, source, include_dirs, defines):
+    # g++ and clang++ would compile a .c input as C++: C inputs (core/os/fork_mimalloc.c) get their own
+    # C compile with the same -D defines, and the object goes into micro_command.
+    return [MICRO_CC[compiler], *MICRO_C_FLAGS, *(f"-D{d}" for d in defines), *(f"-I{p}" for p in include_dirs),
+            "-c", str(source), "-o", str(obj)]
+
+
 def compile_micro(out_dir, inputs, include_dirs, defines):
     """g++ or clang++ inputs into out_dir/bench; returns the compiler's version line."""
     out_dir.mkdir(parents=True, exist_ok=True)
     exe = out_dir / MICRO_EXE
     exe.unlink(missing_ok=True)
-    command = micro_command(COMPILER, exe, inputs, include_dirs, defines)
+    log = ""
+    objects = []
+    for source in (Path(i) for i in inputs if Path(i).suffix == ".c"):
+        obj = out_dir / (source.stem + ".o")
+        c_command = micro_c_command(COMPILER, obj, source, include_dirs, defines)
+        result = subprocess.run(c_command, cwd=ROOT, capture_output=True, text=True, errors="replace")
+        log += " ".join(c_command) + "\n" + result.stdout + result.stderr
+        if result.returncode:
+            (out_dir / "build.log").write_text(log, encoding="utf-8")
+            raise RuntimeError(f"Micro build failed; see {out_dir / 'build.log'}\n{log[-4000:]}")
+        objects.append(obj)
+    cxx_inputs = [i for i in inputs if Path(i).suffix != ".c"] + objects
+    command = micro_command(COMPILER, exe, cxx_inputs, include_dirs, defines)
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, errors="replace")
-    log = " ".join(command) + "\n" + result.stdout + result.stderr
+    log += " ".join(command) + "\n" + result.stdout + result.stderr
     (out_dir / "build.log").write_text(log, encoding="utf-8")
     if result.returncode or not exe.is_file():
         raise RuntimeError(f"Micro build failed; see {out_dir / 'build.log'}\n{log[-4000:]}")

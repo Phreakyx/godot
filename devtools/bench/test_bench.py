@@ -530,6 +530,18 @@ class LinuxPerf(unittest.TestCase):
                      "-DUNIX_ENABLED", "-DFORK_ALLOC_COUNTERS=1", "-DBENCH_CONTROLS"):
             self.assertIn(flag, gcc)
 
+    def test_micro_wrapper_compiles_as_c(self):
+        # g++ and clang++ treat .c as C++: the mimalloc wrapper gets a C compile with the side's defines.
+        args = (Path("out/fork_mimalloc.o"), Path("core/os/fork_mimalloc.c"), [Path(".")], ["FORK_BACKEND_ALLOCATOR=1"])
+        for compiler, cc in (("gcc", "gcc"), ("clang", "clang")):
+            command = bench_linux.micro_c_command(compiler, *args)
+            self.assertEqual(command[0], cc)
+            for flag in ("-std=gnu17", "-DFORK_ALLOC_COUNTERS=1", "-DFORK_BACKEND_ALLOCATOR=1", "-c"):
+                self.assertIn(flag, command)
+            self.assertNotIn("-std=gnu++20", command)
+            self.assertIn(str(Path("core/os/fork_mimalloc.c")), command)
+        self.assertIn("core/os/fork_mimalloc.c", bench.MICRO_TREE_INPUTS)
+
     def test_micro_target_names_one_case(self):
         # Review CR-01: micro items share the spec "micro"; --target micro/<case> must reach the accept rule.
         meta = {"msvc_toolset": "v", "compiler_version": "v", "bios": "b", "microcode": "m", "os_build": "1.1"}

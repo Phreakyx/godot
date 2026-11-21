@@ -765,6 +765,24 @@ Patches:
 - `0002-sharedptr-nil-safe-retain-release.patch` ([GH-123439](https://github.com/godotengine/godot/pull/123439))
 
 
+## mimalloc
+
+- Upstream: https://github.com/microsoft/mimalloc
+- Version: 3.7.0 (1ed67b5156a763441d2ec3c20221a7b3cd866129)
+- License: MIT
+
+Files extracted from upstream source:
+
+- `include/mimalloc.h`, `include/mimalloc-stats.h`, `include/mimalloc-profile.h`
+- `include/mimalloc/` (all headers, no readme)
+- `src/` (all files, no readme)
+- `LICENSE`
+
+Compiled only when `FORK_BACKEND_ALLOCATOR` is 1 (`core/templates/fork_backends.h`),
+as `src/static.c` included by `core/os/fork_mimalloc.c`; `core/os/memory.cpp` then
+calls it directly. Nothing overrides `malloc` or `operator new`.
+
+
 ## mingw-std-threads
 
 - Upstream: https://github.com/meganz/mingw-std-threads

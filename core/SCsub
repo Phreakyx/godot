@@ -208,6 +208,13 @@ if env["builtin_zstd"]:
 
     env_thirdparty.add_source_files(thirdparty_obj, thirdparty_zstd_sources)
 
+# mimalloc (fork): always compiled, but core/os/fork_mimalloc.c is empty unless
+# FORK_BACKEND_ALLOCATOR is 1 in core/templates/fork_backends.h, so the control links no
+# mimalloc code. core/os/SCsub takes only *.cpp files, hence the explicit entry here.
+env_mimalloc = env_thirdparty.Clone()
+env_mimalloc.Prepend(CPPPATH=["#thirdparty/mimalloc/include"])
+env_mimalloc.add_source_files(thirdparty_obj, "#core/os/fork_mimalloc.c")
+
 
 env.core_sources += thirdparty_obj
 
