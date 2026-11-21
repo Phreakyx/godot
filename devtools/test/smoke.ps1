@@ -4,6 +4,8 @@
 #   devtools\test\smoke.ps1           # standard editor
 #   devtools\test\smoke.ps1 -Mono     # .NET editor
 #   ... -PhysXExample D:\godot-physx-example
+#   ... -Variant cand -Tests        # a variant tests binary (devtools\build\build.ps1 names)
+#   ... -Variant cand -Tests -Dev   # the same variant's dev build
 #
 # PhysX tests use Wild Ox Studios' example project
 # (git clone https://github.com/uno1982/godot-physx-example next to this
@@ -11,13 +13,17 @@
 # misc\ddgi_test_project. Logs go to devtools\out\smoke.
 param(
 	[switch]$Mono,
+	[switch]$Tests,
+	[string]$Variant,
+	[switch]$Dev,
 	[string]$PhysXExample = ""
 )
 . "$PSScriptRoot\..\common.ps1"
-$editor = Get-Editor -Mono:$Mono
+$editor = Get-Editor -Mono:$Mono -Tests:$Tests -Variant $Variant -Dev:$Dev
 if (-not $PhysXExample) { $PhysXExample = Join-Path (Split-Path $RepoRoot -Parent) "godot-physx-example" }
 $project = Join-Path $RepoRoot "misc\ddgi_test_project"
-$logs = Join-Path $Out "smoke\$(if ($Mono) { 'mono' } else { 'standard' })"
+$logName = (@($(if ($Mono) { 'mono' } else { 'standard' }), $Variant, $(if ($Tests) { 'tests' }), $(if ($Dev) { 'dev' })) | Where-Object { $_ }) -join "_"
+$logs = Join-Path $Out "smoke\$logName"
 New-Item -ItemType Directory -Force $logs | Out-Null
 $failed = 0
 
@@ -37,7 +43,7 @@ function Run-Test([string]$Name, [string[]]$GodotArgs, [scriptblock]$Check) {
 	if (-not $pass) { $script:failed++ }
 }
 
-Write-Host "Editor: $(& $editor --version 2>$null)"
+Write-Host "Editor: $editor ($(& $editor --version 2>$null))"
 
 if (Test-Path (Join-Path $PhysXExample "project.godot")) {
 	$physxCheck = { param($l) $m = $l | Where-Object { $_ -match "PhysX 5.*initialized" } | Select-Object -First 1; if ($m) { $m.Trim() } else { "missing 'PhysX ... initialized'" } }

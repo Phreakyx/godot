@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-11-22 (allocator mismatch audit)
+
+* **Added**: [allocator mismatch audit](/project/allocator-audit.md): every
+  block crossing `Memory::` checked before the mimalloc candidate is
+  measured (590 allocation call sites, 178 `memfree`/`memrealloc` sites, 13
+  hook tables, GDExtension, C#, PhysX, Blast, Flow, Streamline, Aftermath and
+  D3D12); no mismatched pair. Full `--test` with `FORK_BACKEND_ALLOCATOR=1
+  MI_DEBUG=1` matches the controls in production (1569), template_release
+  (1545) and dev (1569) tests builds with no `mimalloc:` line; smoke passes
+  on the production candidate. [mimalloc candidate](/project/mimalloc-allocator.md)
+  entry (draft, results to come).
+* **Fixed**: two upstream bugs in `ScriptIterator` (text server): after a
+  script run with more than 32 emoji runs the freed emoji stack was used and
+  freed again (mimalloc's debug checks report it without the fix), and the
+  emoji and bracket stacks moved to the heap without their first entries,
+  which gave garbage script ranges and an out-of-bounds string read in
+  shaping (2 of 7 control `*Fork*` runs crashed).
+  Pinned by `[Fork][Memory]` cases in `tests/fork/test_fork_memory.cpp`,
+  which also pin realloc to 0, realloc and aligned round trips.
+* **Found**: the Windows dev-build smoke (new: `smoke.ps1 -Dev`) fails the
+  path tracer and DDGI checks on the control too (a dev-only raytracing-list
+  usage check, a loader message); left open.
+* **Updated**: [unit-test baseline](/project/unit-test-baseline.md),
+  [new translation-unit assumptions](/mistakes/new-translation-unit-assumptions.md).
+
 ## 2026-11-21 (mimalloc allocator candidate)
 
 * **Added**: mimalloc 3.7.0 (`1ed67b5156a7`, MIT) vendored in

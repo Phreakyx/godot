@@ -363,6 +363,13 @@ straight line otherwise.
     unchanged; only `devtools/build/build.ps1 -Bench` sets it. Upstream
     changes to these allocation functions keep the calls. See
     [kb/project/allocation-counter.md](kb/project/allocation-counter.md).
+  - Two fixes in `ScriptIterator::ScriptIterator()`
+    (`modules/text_server_adv/script_iterator.cpp`), found by the allocator
+    audit: the emoji and bracket stacks copy the stack array when they move
+    to the heap, and the emoji stack goes back to the stack array after it is
+    freed (a double free after more than 32 emoji runs). Take upstream's if
+    it lands the same fixes. See
+    [kb/project/allocator-audit.md](kb/project/allocator-audit.md).
 
 ## Diverged core files
 
@@ -613,7 +620,9 @@ DLSS, but the public editor and template downloads never contain it.
 
 `devtools\test\smoke.ps1` (and `-Mono` for the .NET editor) runs all of them
 with the console exe. A pass means exit code 0, no `ERROR:` lines, and the
-expected log line.
+expected log line. `-Variant {name}`, `-Tests` and `-Dev` run a variant
+binary instead (the names `devtools\build\build.ps1` gives it), for example
+`smoke.ps1 -Variant allocdbg -Tests`.
 
 | Check | Command | Expect |
 | --- | --- | --- |

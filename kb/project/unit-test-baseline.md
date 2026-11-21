@@ -119,6 +119,14 @@ operations; the same 298 `BENCH` lines): `--test --test-case="*Bench*"`
 now reports 1573 skipped, and with `--no-skip` 6 passed, so the full
 `--test` skips 9 instead of 13.
 
+The allocator audit (plan 03-02, [allocator audit](/project/allocator-audit.md))
+adds five `[Fork][Memory]` cases in `tests/fork/test_fork_memory.cpp`: MSVC
+`--test` now reports 1569 cases, 1569 passed, 0 failed, 9 skipped (594982
+assertions) on the production and dev tests builds. The `template_release`
+tests build, first recorded here, reports 1545, 1545 passed, 0 failed, 9
+skipped (486685 assertions); it has no editor tests and no TOOLS_ENABLED
+case. The `MI_DEBUG=1` allocator candidate gives the same counts in all three.
+
 The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
 the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
 builds, at `7b81582fab` plus the `-> uint64_t` fix in

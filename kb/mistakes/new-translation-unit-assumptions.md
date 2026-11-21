@@ -39,6 +39,12 @@ Vendoring mimalloc (03-01) picked its headers by grepping for
 The micro harness then put `/std:c17` next to `/std:c++20` in one cl call,
 which cl refuses (D8016); C inputs now get their own `cl /c` call.
 
+The allocator audit's text server test (03-02, `tests/fork/test_fork_memory.cpp`)
+copied `Array fonts = { font }` from `tests/servers/test_text_server.cpp` without
+its `core/variant/typed_array.h` include, so the `Array` did not convert to
+`shaped_text_add_string()`'s `TypedArray<RID>` (C2664) and the build round was
+lost. The test now builds a `TypedArray<RID>` with the include.
+
 # Rule
 
 Check declarations and exact helper signatures in this fork before introducing
