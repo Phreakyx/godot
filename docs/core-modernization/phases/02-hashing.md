@@ -22,6 +22,12 @@ per stale dependency) to one `LocalVector`.
 | `core_workload.gd --mode=instance` | 12.58 (12.50-12.73) | 11.69 (11.61-11.77) |
 | `core_workload.gd --mode=nodes` | 14.84 (14.80-14.98) | 14.59 (14.48-14.66) |
 
+The old workload script is deleted; the workload is now
+`devtools/bench/workloads/script.gd` (`script:<mode>`), measured with
+`devtools/bench/bench.py`. The old
+container driver named below is replaced by `bench.py micro`
+(`devtools/bench/micro/containers_bench.cpp`).
+
 Every round lower on both. Profile after: heap calls of
 `DependencyTracker::update_dependency` 2.97% to 1.48%, its destructor out
 of the top list, `update_end()` 1.31% to 0.91%. Microbench of large sets

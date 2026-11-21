@@ -7,11 +7,11 @@ status: stable
 generated: { by: opencode/gpt-6.1-sol, at: 2026-11-10T18:09:00Z }
 sources:
   - id: runner
-    resource: ../../devtools/test/core_templates_bench.py
-    title: Controlled actual-container A/B runner
+    resource: ../../devtools/bench/bench.py
+    title: The runner (bench.py micro replaced the old container A/B driver)
   - id: workload
-    resource: ../../devtools/test/core_templates_bench.cpp
-    title: Workloads and fail-fast correctness checks
+    resource: ../../devtools/bench/micro/containers_bench.cpp
+    title: Container case matrix, grown from the old driver's workloads
   - id: boundary
     resource: core-template-storage.md
     title: Migration compatibility boundary
@@ -57,7 +57,7 @@ the migration unpublished until its container indexing design is addressed.
 
 - Baseline: `172e099b95307708005dafcf719693d20b1e7088` (`HEAD` before migration).
 - Candidate: working-tree migration, same production files as the source manifest
-  in `devtools/out/core_templates_bench/manifest.json`. Benchmark workload SHA-256:
+  in the old container driver's `manifest.json` under `devtools/out/`. Benchmark workload SHA-256:
   `1cadd6779b076ccf17e0c446ff4211c71767a19090cacdb510eb587f56d952db`.
 - Windows x86-64, AMD Ryzen 5 3600 (6 cores/12 threads), MSVC toolset selected by
   the installed Visual Studio environment. C++17, `/O2 /MT /Gy /Gw /GR-`,
@@ -157,5 +157,7 @@ and detached buffers. Sizes repeated identically across all samples.
   contribution. Do not assign all regressions to robin-hood hashing itself.
 
 Raw samples, source manifest, build logs and JSON/CSV summaries remain in the
-ignored `devtools/out/core_templates_bench/` directory. Reproduce with the
-commands in [developer tools](../../devtools/README.md).[^boundary]
+ignored output directory of the old container driver under `devtools/out/`.
+That driver is replaced by `bench.py micro` (its numbers against the runner:
+[the migration record](/project/benchmark-driver-migration.md)); the commands are in
+[developer tools](../../devtools/README.md).[^boundary]

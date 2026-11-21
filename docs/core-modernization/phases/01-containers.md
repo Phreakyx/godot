@@ -50,6 +50,10 @@ Apple Silicon (godotengine/godot#114900, reverted, cause not found).
 | `core_workload.gd --mode=instance` (2k-node scene per frame) | 13.83 (13.40-15.51) | 12.37 (12.14-14.78) |
 | `core_workload.gd --mode=nodes` (200 nodes freed per frame) | 14.95 (14.62-15.60) | 14.91 (14.72-14.96) |
 
+The old workload script is deleted; the workload is now
+`devtools/bench/workloads/script.gd` (`script:<mode>`), measured with
+`devtools/bench/bench.py`.
+
 Every instancing round was lower (-0.73 to -1.89 ms); node churn is within
 its spread. The profile after: RID checks and locks 7.0% of the main thread
 (SRW lock acquire/release 6.8% to 1.7%). Tests: `[RID_Owner] owns`

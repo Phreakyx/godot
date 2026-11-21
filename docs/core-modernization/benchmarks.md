@@ -2,7 +2,9 @@
 
 ## Engine workloads (2026-11-16)
 
-`devtools/profile/core_workload.gd`, vsync off, editor binary
+The old time-based profile workload script (deleted; its modes are now
+`devtools/bench/workloads/script.gd`, `script:<mode>`, measured with
+`devtools/bench/bench.py`), vsync off, editor binary
 (`production=yes debug_symbols=yes`), Ryzen 5 3600, RTX 3060, Vulkan, 15 s
 per run, builds alternating, order reversed every other round. Profiles of
 where the time goes: [KB](../../kb/project/core-cpu-profiles.md).
@@ -21,7 +23,8 @@ The baselines of D013 are the D012 build. For D014 the baseline is a
 control build (`DYNAMIC_BVH_SSE` off, otherwise the same source): builds of
 the same code differ by about 1.5% from code layout alone (the control was
 +0.17 ms on `instance` against the D013 build). Large-set microbench for D013
-(`core_templates_bench.py --baseline HEAD`, 11 samples): HashSet insert /
+(the old container driver with `--baseline HEAD`, 11 samples; now
+`bench.py micro`): HashSet insert /
 hit / churn 51.47 / 15.34 / 41.50 to 52.64 / 15.80 / 40.30 ns, live bytes
 equal; unchanged code within 0.95-1.04x except String copy/detach (1.14x,
 the standalone harness effect recorded earlier).
@@ -48,7 +51,7 @@ affinity were not pinned. Compilers/SCons excluded during timing.
 Containers: 24 workloads, 11 separate-process alternating pairs, warmup pair
 excluded, checksum/allocation cleanup checks. Integer keys N=32,768; String
 keys N=4,096. Historical raw source manifest and all p50/p95/MAD values are in
-`devtools/out/core_templates_bench/`; fuller historical notes currently remain
+the old container driver's output directory under `devtools/out/`; fuller historical notes currently remain
 uncommitted in `kb/project/core-template-benchmarks.md`.
 
 Math: seven cases, N=16,384 float32 vectors, 128 repetitions, one warmup, 11
@@ -61,12 +64,16 @@ integer, NaN/Inf/signed-zero or ARM runtime coverage. Results and source hashes:
 ## Reproduce
 
 ```powershell
-python devtools/test/core_templates_bench.py --baseline 172e099b95307708005dafcf719693d20b1e7088 --build-only
+python devtools/bench/bench.py micro --aa
+# A candidate against control, with the container headers of a previous ref:
+python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
 # No other builds during measurement:
-python devtools/test/core_templates_bench.py --skip-build --samples 11
 python devtools/test/math_simd_bench.py
 ```
 
+The container numbers above came from the old container driver, which
+`bench.py micro` replaced; the comparison of the two is in
+[the migration record](../../kb/project/benchmark-driver-migration.md).
 These scripts compile actual headers and necessary source with MSVC for isolated
 experiments. Godot itself remains SCons-built. No thirdparty install is needed
 on the original baseline. Configure/build with SCons first to provide

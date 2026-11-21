@@ -16,8 +16,8 @@ versioning) are in [CUSTOM_BUILD.md](../CUSTOM_BUILD.md). Feature notes:
 | `test/` | `smoke.ps1` | The smoke tests every merge and release must pass |
 | `test/` | `smoke_linux.sh` | Linux smoke: the editor and a game start on Vulkan, PhysX (CPU) initializes |
 | `bench/` | `bench.py` | Benchmark runner: pinned A/A floors and candidate-vs-control comparisons of the scene (`scene:<scenario>:<count>`, 1k-100k nodes), script, gdbench, editor startup, real-level and container micro workloads, and profiles ([README](bench/README.md), [scene numbers](../docs/benchmarks/scene-runtime.md)) |
-| `profile/` | `profile.ps1`, `analyze.py` | CPU sampling profiles without elevation: a user-mode stack sampler with inlined frames, summaries by source directory, type and caller ([README](profile/README.md)) |
-| `test/` | `core_templates_bench.py` | Actual HEAD versus working-tree Vector/String/hash-container microbenchmarks; alternating samples, correctness checks and live allocation bytes |
+| `profile/` | `bench.py profile`, `analyze.py` | CPU sampling profiles without elevation: a user-mode stack sampler with inlined frames, summaries by source directory, type and caller ([README](profile/README.md)) |
+| `bench/` | `bench.py micro` | Container microbenchmarks: control against a second control (`--aa`) or a candidate with `--defines` and a previous ref (`--prev`); HashMap, AHashMap, HashSet, RBMap, RBSet, List, Vector, LocalVector and third-party control maps, with allocation counts ([README](bench/README.md)) |
 | `test/` | `large_world.ps1` | Real scene import, GPU culling/CLOD commands, native materials/shadows and lifetime regressions |
 | `test/` | `forest.ps1` | Dense lit forest: source versus GPU culling/CLOD/HZB pixel A/B with light and shadow controls |
 | `test/` | `gpu_intervals.ps1` | Whole-frame GPU time per timestamp interval, including work recorded before the viewport; `-FixedFps` for moving cameras, `-ExtraArgs --view-time=T` for one valley view |
@@ -109,32 +109,19 @@ repository (`git clone https://github.com/uno1982/godot-physx-example`) or
 pass `-PhysXExample <folder>`. Without it they are skipped. Logs and the
 screenshot are in `devtools\out\smoke`.
 
-Core container microbenchmarks (Windows, MSVC, Python 3.9+):
+Core container microbenchmarks (Windows, MSVC):
 
 ```powershell
-python devtools/test/core_templates_bench.py --build-only
-# Once all engine builds have stopped:
-python devtools/test/core_templates_bench.py --skip-build --samples 11
+python devtools/bench/bench.py micro --aa
+# A candidate against control, with the container headers of a previous ref:
+python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
 ```
 
-Baseline defaults to `HEAD`; `--baseline <commit>` selects another compatible
-revision. Files are read with `git show` into isolated output directories; no
-checkout or reset occurs. Both variants compile actual container headers,
-`memory.cpp`, `hashfuncs.cpp` and the two required String method definitions
-extracted verbatim from their own `ustring.cpp`. Only diagnostic handlers are
-stubbed, and any diagnostic fails the run. This is **not** an engine/frame-time
-benchmark. Insertion timings include destruction; lookup setup is untimed.
-Allocation figures are live requested Godot bytes, excluding CRT heap overhead
-and input fixtures; they are not RSS or peak usage. Each vector/String detach
-case includes its original and detached buffers.
-
-The runner rejects measurement while a compiler/linker or SCons is active.
-One warmup pair is excluded; 11 pairs alternate baseline/candidate order.
-Checksums and allocation cleanup must pass, with matching container results
-across variants. Output: `devtools/out/core_templates_bench/` contains source
-fingerprints, build logs, raw samples, p50/p95, median absolute deviation and
-allocation sizes. A ratio above 1 means the migration is slower. Byte-hash
-checksums intentionally differ because the algorithms differ.
+Both sides compile `devtools/bench/micro/containers_bench.cpp` against the
+engine's container headers; the case matrix, the third-party controls and the
+output are described in [bench/README.md](bench/README.md). This is **not** an
+engine/frame-time benchmark. The runner rejects measurement while a
+compiler/linker or SCons is active.
 
 Native indirect foundation checks (requires real GPU rendering, not headless):
 

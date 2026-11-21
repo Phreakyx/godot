@@ -69,7 +69,7 @@ third-party, PhysX SDK or Streamline patch was needed.
 
 Outside the build, three fork benchmark scripts compiled engine headers
 with `/std:c++17` and would now stop at the `typedefs.h` assert; they use
-`/std:c++20`: `devtools/test/core_templates_bench.py`,
+`/std:c++20`: the old container driver (since replaced by `bench.py micro`),
 `devtools/test/math_simd_bench.py`, `devtools/test/unique_array_bench.py`.
 
 # Warnings
@@ -127,7 +127,7 @@ editor (`PhysX 5.10.0 initialized.`, CPU only), path tracer on Vulkan
 * `thirdparty/basis_universal/encoder/basisu_math.h`,
   `thirdparty/basis_universal/patches/0007-enum-to-int32.patch`,
   `thirdparty/README.md`
-* `devtools/test/core_templates_bench.py`, `devtools/test/math_simd_bench.py`,
+* the old container driver (deleted since), `devtools/test/math_simd_bench.py`,
   `devtools/test/unique_array_bench.py`
 
 [^pr100749]: godotengine/godot#100749, head `6619728124`, 2026-10-26.

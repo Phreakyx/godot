@@ -1,5 +1,21 @@
 # Update log
 
+## 2026-11-21 (profile and container drivers deleted)
+
+* **Removed**: the profile driver (`devtools/profile/profile.ps1`,
+  `core_workload.gd`) and the container driver
+  (`devtools/test/core_templates_bench.py`, `core_templates_bench.cpp`),
+  against the numbers in [the migration record](/project/benchmark-driver-migration.md);
+  `bench.py` is the only benchmark driver now.
+* **Updated**: `math_simd_bench.py`, `unique_array_bench.py` and
+  `local_vector_copy_candidate.py` compute `ROOT` themselves and take
+  `ensure_idle` from `devtools/bench/bench_windows.py`;
+  `devtools/README.md`, `devtools/profile/README.md`, the core
+  modernization docs (a note under each historical table), the template
+  benchmark, storage and C++20 entries, the container A/B success, the
+  layout-control success and the benchmark protocol point at
+  `bench.py micro`, `bench.py profile` and `devtools/bench/workloads/script.gd`.
+
 ## 2026-11-21 (old benchmark drivers reproduced; scene driver deleted)
 
 * **Added**: [the migration record](/project/benchmark-driver-migration.md):

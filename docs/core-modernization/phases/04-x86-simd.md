@@ -27,6 +27,10 @@ the scalar code.
 | `core_workload.gd --mode=nodes` | 14.69 | 14.49 | 14.87 |
 | `core_workload.gd --mode=instance` | 11.87 | 12.18 | 12.04 |
 
+The old workload script is deleted; the workload is now
+`devtools/bench/workloads/script.gd` (`script:<mode>`), measured with
+`devtools/bench/bench.py`.
+
 The scalar control is the same source with `DYNAMIC_BVH_SSE` off: SSE
 against it is -0.38 ms (-2.6%) on node churn, lower in every round, and
 -0.01 ms (median of per-round differences, both signs) on instancing,

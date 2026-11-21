@@ -33,7 +33,9 @@ source with the change compiled out, keep both binaries, alternate all
 three in one A/B. A control build of a header-only change can be quick
 (1-2 minutes when the header is included by few files). Profiling a
 renamed binary needs its PDB under the original name in a separate symbol
-directory (`devtools/profile/profile.ps1 -SymbolPath`).
+directory (the sampler's optional symbol path argument,
+`devtools/profile/sampler.cpp`; `bench.py profile` needs none, because bench
+builds keep their PDB next to the exe under their own name).
 
 # Renderer-bound runs (scene runtime M4, 2026-11-16)
 

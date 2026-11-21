@@ -8,8 +8,10 @@ import os
 from pathlib import Path
 import statistics
 import subprocess
+import sys
 
-from core_templates_bench import ensure_idle
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
+from bench_windows import ensure_idle
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "devtools/out/math_simd_bench"

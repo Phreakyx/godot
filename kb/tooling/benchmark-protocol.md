@@ -195,7 +195,7 @@ Cheap workloads (a process under 3 s) get n = 11; costly ones n = 5.
 | Workload id | What it runs | Judged | Counts | Class | Builds |
 | --- | --- | --- | --- | --- | --- |
 | `scene:<scenario>:<count>` | `devtools/bench/workloads/scene.gd`: node scenarios (instancing, churn, transforms), 120 frames after 30 warm-up | `frame_ms_p50`, `peak_ws_mb` | `allocs`, `reallocs` | by the cold round | both |
-| `script:<nodes\|script\|instance>` | `devtools/bench/workloads/script.gd`: the three `core_workload.gd` modes (10,000 nodes with 200 freed and re-added per frame and a group call; 2,000 agents with Dictionary stats, `%` formatting and String joins; a 2,000-node scene instanced and freed per frame), 120 frames after 30 warm-up | `frame_ms_p50`, `peak_ws_mb` | `allocs`, `reallocs` | by the cold round | both |
+| `script:<nodes\|script\|instance>` | `devtools/bench/workloads/script.gd`: the three modes of the old profile workload script (10,000 nodes with 200 freed and re-added per frame and a group call; 2,000 agents with Dictionary stats, `%` formatting and String joins; a 2,000-node scene instanced and freed per frame), 120 frames after 30 warm-up | `frame_ms_p50`, `peak_ws_mb` | `allocs`, `reallocs` | by the cold round | both |
 | `gdbench` | `devtools/bench/workloads/gdbench.gd`: a godot-benchmarks subset and the fork's Dictionary benchmark, one process, every case once to warm up and once timed | `time_ms` per case, `peak_ws_mb` per process | `allocs`, `reallocs` per case | costly | both |
 | `editor_startup` | headless `--editor --quit` on a copy of `misc/large_world_test_project`, with `--benchmark-file` | `wall_ms` (process creation to exit), `peak_ws_mb` | none | costly | editor only |
 | `level` | `devtools/bench/workloads/real_level.gd` on the Godot TPS demo `.pck`: load, instancing, 32 extra robots, 600 frames of a camera path after 120 warm-up, windowed on Vulkan | `load_ms`, `instance_ms`, `main_ms_p50`, `render_cpu_ms_p50`, `peak_ws_mb` | `load_allocs`, `fly_allocs`, `fly_reallocs` | costly | both |
@@ -404,7 +404,8 @@ diagnostics are stubbed, and any diagnostic fails the run.
 - **One runner at a time.** `micro` takes the same lock as `aa` and
   `compare`; `summary.csv` is written last, so an interrupted series has
   none and is never read as a result.
-- The old driver `devtools/test/core_templates_bench.py` stays until 02-13.
+- It replaced the old container driver (deleted in 02-13; the comparison
+  is in [the migration record](/project/benchmark-driver-migration.md)).
 
 # Micro tier in the engine: StringName and Variant keys (`micro_engine`)
 

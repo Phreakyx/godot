@@ -1,6 +1,6 @@
 extends SceneTree
 ## GDScript workloads of devtools/bench/bench.py (workload ids script:<mode>): the three modes of
-## devtools/profile/core_workload.gd, run for a fixed number of frames instead of a time, so the
+## the old time-based profile workload script, run for a fixed number of frames instead of a time, so the
 ## operation and allocation counts are the same for fast and slow builds.
 ##   godot --headless --path misc/scene_bench_project --fixed-fps 60 --script <this file> -- --mode=<nodes|script|instance> [--frames=F] [--warmup=W]
 ## nodes: 10,000 nodes, 200 freed and re-added per frame, a group call. script: 2,000 Agent objects

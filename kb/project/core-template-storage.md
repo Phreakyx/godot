@@ -104,7 +104,8 @@ upstream wyhash/XXH3 at threshold and alignment edges.[^tests]
 
 ## Reproducible microbenchmark
 
-`devtools/test/core_templates_bench.py` reads original headers from `HEAD`
+The old container driver (replaced by `bench.py micro`, see
+[the migration record](/project/benchmark-driver-migration.md)) read original headers from `HEAD`
 without changing the checkout. Both standalone binaries compile real Godot
 allocation/hash implementations and verbatim required String methods. It
 compares 24 vector/String/map/set/hash workloads with fixed inputs, matching

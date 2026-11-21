@@ -86,11 +86,11 @@ output is checked when the Linux profiles are taken.
 
 ## Notes
 
-`profile.ps1` (the old driver, which found the engine process under the
-console wrapper) is replaced by `bench.py profile` and goes away with the
-other old drivers. `core_workload.gd` (a `SceneTree` script, vsync off,
-time-based) has three modes: `nodes`, `script` and `instance`; the runner's
-`script:<mode>` workload is its frame-based successor.
+Profiles are taken with `bench.py profile --workload <id>` (it replaced
+the old profile driver; the comparison is in
+[the migration record](../../kb/project/benchmark-driver-migration.md)).
+The GDScript workloads are `script:<mode>` with three modes, `nodes`,
+`script` and `instance` (`devtools/bench/workloads/script.gd`, frame-based).
 
 Limits: about 0.5-1 kHz per thread; stack walks slow the sampling when a
 process has many threads (the editor: about 100 Hz). Waits are recognized by

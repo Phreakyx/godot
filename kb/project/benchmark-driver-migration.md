@@ -200,3 +200,9 @@ so the allocation counter in `core/os`, is the same in both).
   (`profile.ps1`, `core_workload.gd`) and the container driver
   (`core_templates_bench.py`, `core_templates_bench.cpp` and the scripts
   that import from it) against the tables above, and adds its line here.
+- Done: the commit `chore(bench): replace the profile and container
+  drivers with devtools/bench` deleted `profile.ps1`, `core_workload.gd`,
+  `core_templates_bench.py` and `core_templates_bench.cpp`; the three
+  scripts that imported from the container driver (`math_simd_bench.py`,
+  `unique_array_bench.py`, `local_vector_copy_candidate.py`) stay and now
+  take `ensure_idle` from `devtools/bench/bench_windows.py`.

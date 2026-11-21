@@ -9,7 +9,8 @@ generated: { by: opencode/gpt-6.1-sol, at: 2026-11-10T18:09:00Z }
 
 # What worked
 
-`devtools/test/core_templates_bench.py` snapshots only the relevant HEAD headers
+The old container driver (replaced by `bench.py micro`, see
+[the migration record](/project/benchmark-driver-migration.md)) snapshotted only the relevant HEAD headers
 and source files with `git show`, then compiles baseline and candidate with the
 same MSVC flags. Actual Godot allocation/hash implementations remain in use;
 the two required String method definitions are extracted verbatim to avoid

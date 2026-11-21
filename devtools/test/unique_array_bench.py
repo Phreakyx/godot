@@ -12,7 +12,10 @@ import subprocess
 import sys
 import tarfile
 
-from core_templates_bench import ROOT, ensure_idle
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
+from bench_windows import ensure_idle
+
+ROOT = Path(__file__).resolve().parents[2]
 
 BASELINE = "172e099b95307708005dafcf719693d20b1e7088"
 OUT = ROOT / "devtools/out/unique_array_bench"
