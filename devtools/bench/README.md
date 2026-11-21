@@ -1,6 +1,7 @@
 # Benchmark runner
 
-`bench.py` builds same-source benchmark binaries through `devtools/build/build.ps1 -Bench`,
+`bench.py` builds same-source benchmark binaries through `devtools/build/build.ps1 -Bench`
+(on Linux `scons`, see below),
 checks the machine (power plan, core parking, idle compilers, bench-CPU load, one runner at a
 time), runs every workload pinned to P-cores 1-7 with one discarded cold round and alternating
 reversed rounds, and judges a candidate against its same-source control with the A/A floor and a
@@ -61,7 +62,23 @@ python devtools/bench/test_bench.py
 - `--skip-build` reuses the binaries in `bin/` (and the previous build's worktree in
   `devtools/out/bench/wt/<sha7>/`); `--rounds` fixes n; `--budget` is the minutes of measurement
   allowed (default 30); `--floors` is the floors file (default `devtools/bench/floors.json`).
-- Windows only for now; the Linux adapter comes with the Linux session.
+- Linux (CachyOS, `bench_linux.py`): the same commands with `python3`, `--compiler gcc|clang`
+  (default `gcc`; part of every floor key), builds with `scons` as in CUSTOM_BUILD.md "Build
+  (Linux)" plus the bench options (Clang adds `use_llvm=yes linker=lld`; binaries
+  `bin/godot.linuxbsd.<target>.x86_64[.llvm].bench[.<variant>][.tests]`). `check` also reads the
+  governor, EPP, boost, sched_ext, the compiler hold and `perf_event_paranoid`, and prints the
+  fix command for each wrong one (it never runs sudo). `aa` and `compare` take `--counters`: one
+  `perf stat` pass per binary and workload after the timed rounds, printed and written to
+  `summary.csv` next to the medians, never judged. `profile` records with `perf record` and
+  converts with `devtools/profile/perf_to_tsv.py`. Needs `perf` (`sudo pacman -S --needed perf`).
+
+  ```
+  python3 devtools/bench/bench.py check --compiler gcc
+  python3 devtools/bench/bench.py aa --workloads all --compiler gcc --write-floors --counters
+  python3 devtools/bench/bench.py aa --workloads all --compiler clang --write-floors --counters
+  python3 devtools/bench/bench.py micro --aa --compiler clang --write-floors
+  python3 devtools/bench/bench.py profile --workload scene:instance:10000 --compiler gcc
+  ```
 - `profile` samples one workload on the existing bench control exe (never builds) and writes its
   TSV, `analyze.py` summary and family shares to `devtools/out/bench/profile/<series>/`; see
   [profiling](../profile/README.md).

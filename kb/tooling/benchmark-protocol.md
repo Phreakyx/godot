@@ -12,6 +12,9 @@ sources:
   - id: bench-windows
     resource: ../../devtools/bench/bench_windows.py
     title: Windows adapter (P-core mask, pinned launch, OS counters, machine checks, build)
+  - id: bench-linux
+    resource: ../../devtools/bench/bench_linux.py
+    title: Linux adapter (P-cores by PMU, wait4, sysfs checks, scons builds, perf counters and profiles)
   - id: bench-readme
     resource: ../../devtools/bench/README.md
     title: How to run the runner
@@ -183,7 +186,8 @@ is from another machine state or n).
 - **Windows first, then one Linux session (D-15):** the Windows/MSVC
   floors and shares come first; one CachyOS session then measures the GCC
   and Clang floors and shares (compilers held with `IgnorePkg`). No
-  candidate is accepted without the Linux numbers.
+  candidate is accepted without the Linux numbers. The Linux checks and
+  their fixes are in "Linux" below.
 
 # Workloads
 
@@ -490,8 +494,9 @@ as the workload `micro_engine`.
 
 A family's share is measured from a sampling profile of each target
 workload, per build type (editor and `template_release`) and per
-compiler: `bench.py profile` on Windows, `perf record` and
-`perf_to_tsv.py` on Linux ([profiling](../../devtools/profile/README.md)).
+compiler: `bench.py profile`, with `sampler.exe` on Windows and `perf
+record` plus `perf_to_tsv.py` on Linux ([profiling](../../devtools/profile/README.md),
+"Linux" below).
 Both feed `analyze.py families`, one rule set for every OS:
 
 - each busy sample (waits excluded) goes to one family by its innermost
@@ -571,10 +576,113 @@ started in the same second as another gets a `-2` suffix):
   or written as 0. Counter paths are stripped before writing (they carry
   the host name).
 
+On Linux `meta.json` has `compiler_version` (the first line of `gcc
+--version` or `clang --version`) and `distribution` instead of the MSVC
+and Visual Studio versions, `os_build` is the kernel release (a floor
+stays valid across kernel patch releases, not across 6.17 to 6.18),
+`build_command` replaces the `build.ps1` arguments, the D-13 values
+(`governor`, `epp`, `no_turbo`, `sched_ext`, `sched_ext_ops`,
+`compiler_hold`, `perf_event_paranoid`) replace the power plan, and
+`temperature_c` holds the mean package temperature per round.
+
 Floors live in `devtools/bench/floors.json` (`aa --write-floors`), one
 entry per workload, case, metric, build type and compiler with its n,
 date and machine state; the human-readable copy goes in `kb/` in the same
 commit.
+
+# Linux (CachyOS, D-15)
+
+CachyOS runs on the same PC (dual-boot), with the repository cloned on
+the Linux file system. `devtools/bench/bench_linux.py` gives `bench.py`
+the functions of the Windows adapter, so the statistics, verdicts,
+floors and outputs are the same code on both. Run it with `python3`;
+it needs nothing beyond the standard library and `perf`
+(`sudo pacman -S --needed perf`).
+
+- **Compiler (`--compiler gcc|clang`, default `gcc`).** It picks the
+  build and is part of every floor key, so GCC, Clang and MSVC each get
+  their own A/A floors and shares. The three binaries differ by more than
+  the compiler (Pitfall 8): production builds use **full LTO with GCC,
+  ThinLTO with Clang and no LTO with MSVC** (`platform/linuxbsd/detect.py`,
+  `platform/windows/detect.py`). Numbers are compared within one
+  compiler, never across. Builds are the setup script's `scons` call
+  with the bench options (`debug_symbols=yes disable_path_overrides=no
+  extra_suffix=bench[.<variant>][.tests] cppdefines="FORK_ALLOC_COUNTERS=1
+  ..."`; Clang adds `use_llvm=yes linker=lld`, tests builds `tests=yes
+  object_prefix=t_`). Clang binaries put `.llvm` before the suffix:
+  `bin/godot.linuxbsd.editor.x86_64.llvm.bench.aa`. The A/A floors alone
+  need eight bench builds (editor and `template_release`, control and
+  twin, two compilers) plus the tests builds for `micro_engine`; the
+  GCC full-LTO links are long.
+- **Pinning (D-12).** The bench CPUs are the `cpu_core` PMU's CPUs
+  (`/sys/bus/event_source/devices/cpu_core/cpus`) grouped into cores by
+  `topology/thread_siblings_list`, minus the core that holds the lowest
+  CPU; never CPU numbers from Windows. The runner moves itself to the
+  other CPUs (`os.sched_setaffinity`) and reads each child's set back.
+- **Memory and CPU time (BENCH-05).** The runner reaps each child with
+  `os.wait4`: peak memory is `ru_maxrss` (the peak resident set, KiB),
+  CPU time `ru_utime + ru_stime`. Peak RSS and the Windows peak working
+  set are each compared within their OS only.
+- **Checks that refuse (D-13, D-17).** Read only; each refusal prints
+  the command that fixes it, for the user to run (the runner never runs
+  sudo or writes a system file). A file that does not exist here is
+  recorded as unavailable, not refused.
+
+  | Check | Wants | Fix printed |
+  | --- | --- | --- |
+  | `cpufreq/scaling_governor` of the bench CPUs | `performance` | `sudo cpupower -c <cpus> frequency-set -g performance` |
+  | `cpufreq/energy_performance_preference` | `performance` | `echo performance \| sudo tee` the bench CPUs' files (the performance governor sets it) |
+  | `intel_pstate/no_turbo` (boost, D-14) | `0` | `echo 0 \| sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo` |
+  | `/sys/kernel/sched_ext/state` (Pitfall 9; `root/ops` recorded) | `disabled` | stop the scx scheduler for the series (`sudo systemctl stop scx_loader.service`, or `scx.service`) |
+  | `IgnorePkg` in `/etc/pacman.conf` | `gcc gcc-libs clang llvm llvm-libs lld` held | add `IgnorePkg = gcc gcc-libs clang llvm llvm-libs lld` under `[options]` |
+  | `/proc/sys/kernel/perf_event_paranoid` (with `--counters`, `profile`, `check`) | 2 or less | `sudo sysctl kernel.perf_event_paranoid=2` |
+
+  Plus, as on Windows: no `cc1plus`, `cc1`, `lto1`, `collect2`, `ld`,
+  `lld`, `clang` or SCons process (`/proc/*/comm`; never killed), the
+  bench CPUs under 10% busy (`/proc/stat` over 3 s) and one runner
+  (`fcntl.flock` on `devtools/out/bench/.lock`).
+- **Clock and temperature (D-14).** A thread on the home CPUs samples
+  `scaling_cur_freq` of the bench CPUs every 0.25 s; the round's mean is
+  its clock (flagged as on Windows), and the hwmon `coretemp`
+  "Package id 0" temperature is averaged per round.
+- **Counters (BENCH-08).** `aa` and `compare` take `--counters`: after
+  the timed rounds, one extra process per binary, build type and
+  workload runs under `perf stat -x, -o <file> -e
+  cpu_core/instructions/u,cpu_core/cycles/u,cpu_core/cache-misses/u,cpu_core/cache-references/u
+  -- <command>` (the P-core PMU only, Pitfall 10). `perf` as the parent
+  of a timed run would own its `wait4` numbers, so counter passes are
+  never timed or memory samples. The runner prints instructions, cycles,
+  IPC, cache misses and the miss rate after the medians and writes the
+  `instructions`, `cycles`, `cache_misses` and `cache_references`
+  columns of `summary.csv` as `label=value` per binary (`n/a`: perf
+  printed `<not counted>` or `<not supported>`). Counts are reported,
+  never judged, and their run-to-run spread has no floor (one pass).
+- **Profiles (BENCH-07).** `bench.py profile` runs `perf record -e
+  cpu_core/cycles/u -F 997 -g -o <stem>.perf.data` with the workload
+  pinned by `taskset` (perf itself stays on the home CPUs); frame
+  workloads start recording after `--warmup` (`-D`) and end after
+  `--seconds` (SIGINT to perf, which ends its workload). Then `perf
+  script -F tid,comm,ip,sym,dso,srcline --inline --full-source-path`
+  goes through `devtools/profile/perf_to_tsv.py` into the same TSV, and
+  `analyze.py families` applies the Windows rules. `perf script` with
+  source lines on a `debug_symbols=yes` build can take minutes.
+- **Micro tier.** `micro` compiles the harness with `g++` or `clang++`,
+  the same flags on every side and for both compilers (`-O2
+  -std=gnu++20 -fno-rtti -DDEBUG_ENABLED -DTOOLS_ENABLED
+  -DLINUXBSD_ENABLED -DUNIX_ENABLED -DFORK_ALLOC_COUNTERS=1`, the include
+  paths of the Windows build with `platform/linuxbsd`).
+- **Level.** Each `level` series exports its `.pck` with the Linux
+  control editor; a Windows `.pck` is never copied over. `override.cfg`
+  sets `rendering_device/driver.linuxbsd="vulkan"`.
+- **What to copy back.** The GCC and Clang entries of
+  `devtools/bench/floors.json` (merged, committed with their `kb/` notes),
+  and from each series directory `summary.csv`, `counts.csv`,
+  `meta.json`, `raw.csv` and `counters/`, and from each profile the
+  `.families.json` and `.summary.txt`, for
+  [the floors](/project/benchmark-noise-floors.md) and
+  [the shares](/project/family-shares.md). Binaries, `.perf.data` and
+  `.pck` files stay on Linux. Tracked notes use repository-relative paths
+  only (the output keeps absolute paths in `runner_args`).
 
 # Commands
 
@@ -589,9 +697,11 @@ python devtools/bench/bench.py micro --aa --write-floors
 python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
 python devtools/bench/bench.py aa --workloads micro_engine --write-floors
 python devtools/bench/bench.py profile --workload scene:instance:10000 --build template_release
+python3 devtools/bench/bench.py aa --workloads all --compiler clang --write-floors --counters   # Linux
 ```
 
-`micro` takes `--aa` or `--prev`, and `--name`, `--defines`, `--target`
+Every command but `fetch` takes `--compiler` (Windows `msvc`; Linux
+`gcc` or `clang`). `micro` takes `--aa` or `--prev`, and `--name`, `--defines`, `--target`
 (`micro/<case>` items), `--samples`, `--floors`, `--write-floors`,
 `--max-load`, `--out`; it always builds its sides (seconds each).
 
@@ -601,7 +711,8 @@ python devtools/bench/bench.py profile --workload scene:instance:10000 --build t
 
 Options of `aa` and `compare`: `--workloads`, `--builds` (default
 `editor,template_release`), `--rounds`, `--budget`, `--floors`,
-`--max-load`, `--skip-build` (reuse the binaries), `--out`. `compare` adds
+`--max-load`, `--skip-build` (reuse the binaries), `--out`, and on Linux
+`--counters`. `compare` adds
 `--name` (the candidate's `build.ps1 -Variant`, binary `bench.<name>`),
 `--defines`, `--prev` (required) and `--target` (the workloads judged by
 the accept rule; the others get the regression rule). Later plans add

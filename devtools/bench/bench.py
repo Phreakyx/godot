@@ -15,6 +15,8 @@ same-source control; the verdict compares the candidate with the control only. E
 discarded cold round, plans its rounds within --budget, then alternates the order every other round.
 `profile` samples one workload on the existing bench control exe with devtools/profile/sampler.exe and
 writes its TSV, analyze.py summary and family shares under devtools/out/bench/profile/.
+On Linux (bench_linux.py) the same commands build with scons (--compiler gcc|clang), `--counters` adds one
+perf stat pass per binary and workload after the timed rounds, and `profile` records with perf.
 The protocol is kb/tooling/benchmark-protocol.md. Outputs go to devtools/out/bench/ (gitignored).
 """
 
@@ -38,12 +40,15 @@ from pathlib import Path
 if os.name == "nt":
     import bench_windows as osb
 else:
-    osb = None  # the Linux adapter comes with the Linux plan
+    import bench_linux as osb
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "devtools/out/bench"
 DEFAULT_FLOORS = ROOT / "devtools/bench/floors.json"
-COMPILER = "msvc"  # the only compiler of the Windows adapter
+PLATFORM = "windows" if os.name == "nt" else "linuxbsd"
+COMPILERS = ("msvc",) if os.name == "nt" else ("gcc", "clang")
+COMPILER = COMPILERS[0]  # --compiler; part of every floor key and of meta.json
+COUNTER_COLUMNS = ("instructions", "cycles", "cache_misses", "cache_references")  # --counters (Linux), never judged
 MIN_ROUNDS = 5
 TIMEOUT_S = 600
 CHEAP_S = 3.0  # processes under this get n = 11 rounds, the others n = 5 (D-03)
@@ -144,7 +149,9 @@ def floor_key(workload, case, metric, build, compiler):
 
 
 def _major_os(build):
-    return str(build).split(".")[0]  # "26100.9711": the build, without the monthly update revision
+    """Windows "26100.9711": the build without the monthly update revision; a Linux kernel "6.17.8-2-cachyos": 6.17."""
+    parts = str(build).split(".")
+    return ".".join(parts[:2]) if len(parts) > 2 else parts[0]
 
 
 def lookup_floor(floors, key, meta, n):
@@ -206,25 +213,32 @@ def git(*args, root=ROOT):
 
 
 def machine_meta(mask):
-    return {
+    meta = {
         "commit": probe(lambda: git("rev-parse", "HEAD").decode().strip()),
         "dirty": probe(lambda: bool(git("status", "--porcelain").strip())),
         "diff_sha256": probe(lambda: hashlib.sha256(git("diff", "HEAD")).hexdigest()),
         "compiler": COMPILER,
-        "msvc_toolset": probe(osb.msvc_toolset),
-        "vs_version": probe(osb.vs_version),
+    }
+    if os.name == "nt":
+        meta.update(msvc_toolset=probe(osb.msvc_toolset), vs_version=probe(osb.vs_version))
+    else:
+        meta.update(compiler_version=probe(osb.compiler_version), distribution=probe(osb.distribution))
+    return {
+        **meta,
         "cpu": probe(osb.cpu_name),
         "bios": probe(osb.bios),
         "microcode": probe(osb.microcode),
-        "os_build": probe(osb.os_build),
-        "temperature": UNAVAILABLE,  # no package temperature on Windows without a kernel driver (D-14)
+        "os_build": probe(osb.os_build),  # Linux: the kernel release
+        # Windows has no package temperature without a kernel driver (D-14); Linux reads hwmon coretemp.
+        "temperature": UNAVAILABLE if os.name == "nt" else probe(osb.package_temp),
         "affinity_mask": hex(mask),
         "python": platform.python_version(),
     }
 
 
 def floor_meta(meta):
-    return {"compiler_version": meta["msvc_toolset"], **{f: meta[f] for f in ("bios", "microcode", "os_build")}}
+    version = meta["msvc_toolset"] if COMPILER == "msvc" else meta["compiler_version"]
+    return {"compiler_version": version, **{f: meta[f] for f in ("bios", "microcode", "os_build")}}
 
 
 def load_floors(path):
@@ -402,10 +416,10 @@ def prepare_editor_projects(out, labels):
 LEVEL_SCRIPT = ROOT / "devtools/bench/workloads/real_level.gd"
 LEVEL_ROBOTS = 32  # extra robots on top of the level's 4 (real_level.gd --robots)
 LEVEL_FRAMES = 600
-LEVEL_PRESET = """[preset.0]
+LEVEL_PRESET = f"""[preset.0]
 
 name="bench"
-platform="Windows Desktop"
+platform="{'Windows Desktop' if PLATFORM == 'windows' else 'Linux'}"
 runnable=true
 export_filter="all_resources"
 include_filter=""
@@ -438,7 +452,7 @@ window/hdr/request_hdr_output=false
 
 [rendering]
 
-rendering_device/driver.windows="vulkan"
+rendering_device/driver.{PLATFORM}="vulkan"
 
 [threading]
 
@@ -676,8 +690,8 @@ def is_tests(name):
 # --- machine checks (D-13: read, refuse with the fix, never change) ---
 
 
-def run_checks(mask, max_load):
-    """Every pre-series check; returns (values read, problems). Reads only."""
+def run_checks(mask, max_load, perf=False):
+    """Every pre-series check; returns (values read, problems). Reads only. perf: counters or a profile follow."""
     values, problems = {"bench_mask": hex(mask)}, []
 
     def power():
@@ -694,15 +708,22 @@ def run_checks(mask, max_load):
         if values["bench_cpu_load_pct"] > max_load:
             raise RuntimeError(
                 f"The bench CPUs ({hex(mask)}) are {values['bench_cpu_load_pct']}% busy, above {max_load:g}%:"
-                " close what is running there (Task Manager, Details, sort by CPU) and run again."
+                " close what is running there ("
+                + ("Task Manager, Details, sort by CPU" if os.name == "nt" else "top, then 1 for each CPU")
+                + ") and run again."
             )
 
-    for check in (power, compilers, load):
+    if os.name != "nt":  # governor, EPP, boost, sched_ext, compiler hold, perf_event_paranoid (D-13, D-17)
+        state = osb.read_state(mask)
+        values.update(state)
+        problems += osb.state_problems(state, osb.mask_cpus(mask), perf)
+    for check in (power, compilers, load) if os.name == "nt" else (compilers, load):
         try:
             check()
         except (RuntimeError, OSError) as error:
             problems.append(str(error))
-    values["game_mode"] = probe(osb.game_mode)
+    if os.name == "nt":
+        values["game_mode"] = probe(osb.game_mode)
     values["disk_free_gb"] = round(shutil.disk_usage(ROOT).free / 1e9, 1)
     return values, problems
 
@@ -755,7 +776,7 @@ def run_series(args, sides):
     builds = args.builds.split(",")
     labels = [side["label"] for side in sides]
     mask = osb.p_core_mask()
-    checks, problems = run_checks(mask, args.max_load)
+    checks, problems = run_checks(mask, args.max_load, args.counters)
     if problems:
         raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
     if mode == "compare":
@@ -796,8 +817,9 @@ def run_series(args, sides):
         "binaries": [  # round-1 order
             {
                 "build": build, "label": s["label"], "exe": exes[build, s["label"], tests].name, "commit": s["commit"],
-                "build_ps1_args": osb.build_args(build, s["variant"], s["defines"],
-                                                 "<worktree>" if s["root"] != ROOT else None, tests),
+                "build_ps1_args" if os.name == "nt" else "build_command":
+                    osb.build_args(build, s["variant"], s["defines"], "<worktree>" if s["root"] != ROOT else None,
+                                   tests),
                 "scons_args": osb.scons_args(build, s["variant"], s["defines"], tests),
                 "cppdefines": osb.bench_defines(s["defines"]),
             }
@@ -810,7 +832,7 @@ def run_series(args, sides):
     if "level" in names:
         meta["level"] = level_info
 
-    raw, values, clocks, cold_s = [], {}, {}, {}  # values: (item, metric, build, label) -> {round: value}
+    raw, values, clocks, temps, cold_s = [], {}, {}, {}, {}  # values: (item, metric, build, label) -> {round: value}
     counts = {}  # (item, count, build, label) -> {round: count}; a binary without the counter has none
     # item label -> (spec, name, params, item_def): every workload's process item, plus the cases found.
     items = {spec: (spec, name, params, item_def(spec, name, params, spec)) for spec, name, params in workloads}
@@ -890,6 +912,7 @@ def run_series(args, sides):
                     for line in failed_cases[:3]:
                         print(f"  FAILED {line}", flush=True)
         clocks[rnd] = UNAVAILABLE if sampler == UNAVAILABLE else probe(sampler.stop)
+        temps[rnd] = probe(lambda: sampler.temperature_c)  # Linux hwmon; the Windows sampler has none
         shown = clocks[rnd] if clocks[rnd] == UNAVAILABLE else f"{clocks[rnd]:.0f} MHz"
         print(f"[{'cold' if rnd == 0 else f'r{rnd}'}] effective clock of the bench CPUs: {shown}", flush=True)
 
@@ -954,6 +977,7 @@ def run_series(args, sides):
     for rnd in range(1, max(n_of.values()) + 1):
         order = labels if rnd % 2 else labels[::-1]  # odd rounds in round-1 order, even rounds reversed
         run_round(rnd, order, [w for w in workloads if n_of[w[0]] >= rnd])
+    found_counters = counter_pass(workloads, builds, labels, exes, ctx, mask, out) if args.counters else None
 
     flags = clock_flags(clocks)
     for entry in raw:
@@ -965,15 +989,71 @@ def run_series(args, sides):
         print(f"CLOCK rounds {flagged} are more than {CLOCK_TOLERANCE:.0%} off the median clock (flagged in raw.csv)")
     write_csv(out / "raw.csv", raw)
     meta["clock_mhz"] = {str(r): (m if m == UNAVAILABLE else round(m)) for r, m in clocks.items()}
+    if any(t != UNAVAILABLE for t in temps.values()):
+        meta["temperature_c"] = {str(r): (t if t == UNAVAILABLE else round(t, 1)) for r, t in temps.items()}
+    if found_counters is not None:
+        meta["counter_events"] = osb.COUNTER_EVENTS
     (out / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
     ordered = sorted_items(items)
     summary = summarize_aa(args, ordered, builds, values, n_of, meta) if mode == "aa" else \
         summarize_compare(args, ordered, builds, values, n_of, meta)
+    if found_counters is not None:
+        add_counter_columns(summary, found_counters, labels)
     write_csv(out / "summary.csv", summary)
     count_rows = summarize_counts(mode, ordered, builds, counts)
     if count_rows:
         write_csv(out / "counts.csv", count_rows)
     print(f"\nraw.csv, summary.csv and meta.json in {out}")
+
+
+def counter_pass(workloads, builds, labels, exes, ctx, mask, out):
+    """BENCH-08: one perf stat pass per binary and workload after the timed rounds, never part of a timed or
+    memory sample. Returns (spec, build, label) -> counter values (None: not counted)."""
+    found = {}
+    for build in builds:
+        for spec, name, params in workloads:
+            if not runs_on(name, build):
+                continue
+            for label in labels:
+                call = {**ctx, "label": label, "round": "counters"}
+                command = WORKLOADS[name]["command"](exes[build, label, is_tests(name)], params, call)
+                path = out / "counters" / f"{profile_stem(spec, build)}.{label}.txt"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                result = osb.run_pinned(osb.counter_command(path, command), ROOT, mask, TIMEOUT_S)
+                values = dict.fromkeys(COUNTER_COLUMNS)
+                if result["returncode"] == 0 and not result["timed_out"] and path.is_file():
+                    values = osb.parse_perf_stat(path.read_text(encoding="utf-8"))
+                else:
+                    tail = "; ".join(result["output"].splitlines()[-3:])
+                    print(f"COUNTERS {spec} {build} {label}: FAILED (exit {result['returncode']}): {tail}", flush=True)
+                found[spec, build, label] = values
+    return found
+
+
+def counter_text(values):
+    """instructions, cycles, IPC, cache-misses and miss rate of one binary; n/a for a missing count."""
+    def ratio(a, b):
+        return f"{values[a] / values[b]:.3f}" if values[a] is not None and values[b] else "n/a"
+
+    shown = {k: "n/a" if v is None else v for k, v in values.items()}
+    return (f"instructions={shown['instructions']} cycles={shown['cycles']} IPC={ratio('instructions', 'cycles')}"
+            f" cache-misses={shown['cache_misses']} miss-rate={ratio('cache_misses', 'cache_references')}")
+
+
+def add_counter_columns(summary, found, labels):
+    """Counter columns (label=value per binary) on each workload's rows of summary.csv, and COUNTERS lines after
+    the medians. Reported only: the verdicts are made before and never read them."""
+    printed = set()
+    for row in summary:
+        per_label = {label: found.get((row["workload"], row["build"], label)) for label in labels}
+        for column in COUNTER_COLUMNS:
+            row[column] = " ".join(f"{label}={'n/a' if v[column] is None else v[column]}"
+                                   for label, v in per_label.items() if v)
+        if any(per_label.values()) and (row["workload"], row["build"]) not in printed:
+            printed.add((row["workload"], row["build"]))
+            for label, v in per_label.items():
+                if v:
+                    print(f"COUNTERS {row['workload']} {row['build']} {label}: {counter_text(v)} (not judged)")
 
 
 def sorted_items(items):
@@ -1277,16 +1357,16 @@ def build_micro(side, build_dir, controls):
     modern = int("uint64_t hash_buffer64(" in (src / "core/templates/hashfuncs.h").read_text(encoding="utf-8"))
     inputs = [MICRO_SOURCE, ROOT / "core/os/memory.cpp", ROOT / "core/os/fork_alloc_counters.cpp", string_methods,
               src / "core/templates/hashfuncs.cpp"]
-    includes = ([src] if src != ROOT else []) + [ROOT, ROOT / "platform/windows"] + controls
+    includes = ([src] if src != ROOT else []) + [ROOT, ROOT / "platform" / PLATFORM] + controls
     defines = [f"BENCH_MODERN_HASH={modern}"] + (["BENCH_CONTROLS"] if controls else []) + side["defines"]
-    cl_version = osb.compile_micro(build_dir, inputs, includes, defines)
+    version = osb.compile_micro(build_dir, inputs, includes, defines)
     sources = {rel(ROOT / name): sha_file(ROOT / name) for name in (rel(MICRO_SOURCE), *MICRO_TREE_INPUTS)}
     for name in MICRO_HEADERS:
         path = src / name if (src / name).is_file() else ROOT / name
         sources[name] = sha_file(path) + ("" if path.is_relative_to(build_dir) or not side["prev"] else " (tree)")
-    return {"label": side["label"], "commit": side["commit"], "exe": rel(build_dir / "bench.exe"),
-            "defines": defines, "flags": osb.MICRO_FLAGS + osb.MICRO_LINK, "cl_version": cl_version,
-            "sources": sources}
+    return {"label": side["label"], "commit": side["commit"], "exe": rel(build_dir / osb.MICRO_EXE),
+            "defines": defines, "flags": osb.MICRO_FLAGS + osb.MICRO_LINK,
+            "cl_version" if COMPILER == "msvc" else "compiler_version": version, "sources": sources}
 
 
 def run_micro(args, sides):
@@ -1398,10 +1478,11 @@ def run_profile(args, _sides):
         raise RuntimeError(f"{name} runs only on {', '.join(w['builds'])}")
     exe = osb.engine_exe(args.build, "bench.tests" if is_tests(name) else "bench")
     if not exe.is_file():
-        raise RuntimeError(f"Missing {exe.relative_to(ROOT)}: build it with devtools\\build\\build.ps1 -Bench"
-                           f"{' -Tests' if is_tests(name) else ''} -Target {args.build} (profile never builds)")
+        how = (f"devtools\\build\\build.ps1 -Bench{' -Tests' if is_tests(name) else ''} -Target {args.build}"
+               if os.name == "nt" else " ".join(osb.build_args(args.build, None, None, None, is_tests(name))))
+        raise RuntimeError(f"Missing {exe.relative_to(ROOT)}: build it with {how} (profile never builds)")
     mask = osb.p_core_mask()
-    checks, problems = run_checks(mask, args.max_load)
+    checks, problems = run_checks(mask, args.max_load, perf=True)
     if problems:
         raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
     sampler = osb.sampler_exe()
@@ -1423,21 +1504,26 @@ def run_profile(args, _sides):
     tsv = stem.with_name(stem.name + ".tsv")
     print(f"PROFILE {args.workload} {exe.name} ({form})", flush=True)
     with open(stem.with_name(stem.name + ".log"), "w", encoding="utf-8") as log:
-        proc = osb.start_pinned(command, ROOT, mask, stdout=log)
-        try:
-            if form == "frames":
-                time.sleep(args.warmup)
-                if proc.poll() is not None:
-                    raise RuntimeError(f"{exe.name} ended during the warm-up (exit {proc.returncode}); see {log.name}")
-            seconds = args.seconds if form == "frames" else TIMEOUT_S  # launch: the sampler stops when it exits
-            sampled = subprocess.run([str(sampler), str(proc.pid), str(seconds), str(args.interval_us), str(tsv),
-                                      str(exe.parent)], capture_output=True, text=True)
-        finally:
-            if proc.poll() is None:
-                proc.kill()  # the runner's own child only
-            proc.wait()
+        if os.name != "nt":  # perf record, then perf script into the same TSV (bench_linux.perf_profile)
+            proc, sampled = osb.perf_profile(sampler, command, mask, form, args.warmup, args.seconds, stem, log,
+                                             TIMEOUT_S)
+        else:
+            proc = osb.start_pinned(command, ROOT, mask, stdout=log)
+            try:
+                if form == "frames":
+                    time.sleep(args.warmup)
+                    if proc.poll() is not None:
+                        raise RuntimeError(f"{exe.name} ended during the warm-up (exit {proc.returncode});"
+                                           f" see {log.name}")
+                seconds = args.seconds if form == "frames" else TIMEOUT_S  # launch: the sampler stops when it exits
+                sampled = subprocess.run([str(sampler), str(proc.pid), str(seconds), str(args.interval_us), str(tsv),
+                                          str(exe.parent)], capture_output=True, text=True)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()  # the runner's own child only
+                proc.wait()
     if sampled.returncode != 0 or not tsv.is_file():
-        raise RuntimeError(f"sampler.exe failed (exit {sampled.returncode}): {sampled.stderr.strip()}")
+        raise RuntimeError(f"{Path(sampler).name} failed (exit {sampled.returncode}): {sampled.stderr.strip()}")
     meta_path = out / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {"profiles": {}}
     meta.update({**machine_meta(mask), **checks})
@@ -1461,15 +1547,16 @@ def run_profile(args, _sides):
 
 def run_check(args):
     mask = osb.p_core_mask()
-    values, problems = run_checks(mask, args.max_load)
+    values, problems = run_checks(mask, args.max_load, perf=True)  # check covers counters and profiles too
     try:
         osb.acquire_lock(OUT / ".lock").close()
         values["runner_lock"] = "free"
     except RuntimeError as error:
         problems.append(str(error))
     meta = machine_meta(mask)
-    for key, value in {**values, **{k: meta[k] for k in ("cpu", "bios", "microcode", "os_build", "msvc_toolset",
-                                                          "vs_version", "python")}}.items():
+    shown = ("msvc_toolset", "vs_version") if os.name == "nt" else ("compiler_version", "distribution", "temperature")
+    for key, value in {**values, **{k: meta[k] for k in ("cpu", "bios", "microcode", "os_build", *shown,
+                                                          "python")}}.items():
         print(f"{key}: {value}")
     for problem in problems:
         print(f"REFUSE: {problem}")
@@ -1504,6 +1591,8 @@ def main():
     for parsed in (check, aa, compare, micro, prof):
         parsed.add_argument("--max-load", type=float, default=MAX_LOAD_PCT,
                             help="refuse above this mean %% busy of the bench CPUs; floors and shares use the default")
+        parsed.add_argument("--compiler", default=COMPILERS[0], choices=("msvc", "gcc", "clang"),
+                            help=f"the build and floor key (default {COMPILERS[0]}; this OS: {', '.join(COMPILERS)})")
     for series in (aa, compare):
         series.add_argument("--workloads", required=True, help="comma list, e.g. scene:instance:10000, or all (SUITE)")
         series.add_argument("--builds", default="editor,template_release")
@@ -1512,14 +1601,19 @@ def main():
         series.add_argument("--floors", default=str(DEFAULT_FLOORS))
         series.add_argument("--skip-build", action="store_true")
         series.add_argument("--out", default=None)
+        series.add_argument("--counters", action="store_true",
+                            help="Linux: one perf stat pass per binary and workload after the rounds (not judged)")
     aa.add_argument("--write-floors", action="store_true", help="merge the measured floors into --floors")
     compare.add_argument("--name", default="cand", help="candidate label: build.ps1 -Variant, binary bench.<name>")
     compare.add_argument("--defines", default="", help="space-separated macros for the candidate (cppdefines)")
     compare.add_argument("--prev", required=True, help="git ref of the previous build, e.g. origin/dev")
     compare.add_argument("--target", required=True, help="comma list of workloads judged by the accept rule")
     args = parser.parse_args()
-    if osb is None:
-        parser.error("No OS adapter for this platform yet")
+    if getattr(args, "compiler", COMPILER) not in COMPILERS:
+        parser.error(f"--compiler {args.compiler} does not build on this OS (use {' or '.join(COMPILERS)})")
+    if getattr(args, "counters", False) and os.name == "nt":
+        parser.error("--counters reads perf stat (Linux only)")
+    set_compiler(getattr(args, "compiler", COMPILER))
     if args.command == "check":
         raise SystemExit(run_check(args))
     if args.command == "fetch":
@@ -1562,6 +1656,11 @@ def main():
                      "defines": args.defines or None}
         sides = [{**control, "label": "previous", "commit": prev}, candidate, control]
     locked(args, run_series, sides)
+
+
+def set_compiler(name):
+    global COMPILER
+    COMPILER = osb.COMPILER = name  # bench_linux picks gcc or clang builds and binaries by it
 
 
 def locked(args, run, sides):

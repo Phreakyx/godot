@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-11-21 (Linux adapter of the benchmark runner)
+
+* **Added**: `devtools/bench/bench_linux.py`, the Linux half of
+  `bench.py` ([benchmark protocol](/tooling/benchmark-protocol.md),
+  "Linux"): P-cores from the `cpu_core` PMU, `wait4` peak RSS and CPU
+  time, read-only checks that print their fix (governor, EPP, boost,
+  sched_ext, the `IgnorePkg` compiler hold, `perf_event_paranoid`),
+  `scons` bench builds with `--compiler gcc|clang`, `--counters`
+  (`perf stat` on `cpu_core` after the timed rounds, never judged) and
+  `profile` through `perf record` and `perf_to_tsv.py`. Written and
+  tested on fixtures on Windows; the CachyOS session (02-12) only
+  measures.
+
 ## 2026-11-21 (MSVC noise floors and family shares)
 
 * **Added**: [A/A noise floors](/project/benchmark-noise-floors.md) for

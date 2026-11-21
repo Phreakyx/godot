@@ -1,5 +1,7 @@
-"""Self-checks of the runner's statistics: python devtools/bench/test_bench.py"""
+"""Self-checks of the runner's statistics and the Linux adapter's parsers: python devtools/bench/test_bench.py"""
 
+import ast
+import re
 import sys
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench  # noqa: E402
+import bench_linux  # noqa: E402  (imports on every OS; Linux calls sit inside functions)
 
 FLOOR = 0.02
 
@@ -362,6 +365,211 @@ class TypeperfParsing(unittest.TestCase):
             "Exiting, please wait...\nThe command completed successfully.\n"
         )
         self.assertEqual(bench.osb.typeperf_values(text, 2), [[150.0, 3200.0]])
+
+
+HERE = Path(__file__).resolve().parent
+P_SIBLINGS = {cpu: f"{cpu & ~1}-{cpu | 1}" for cpu in range(16)}  # 14900K: P-cores 0-15 as HT pairs
+
+
+class LinuxParsers(unittest.TestCase):
+    def test_cpu_lists(self):
+        self.assertEqual(bench_linux.parse_cpu_list("0-15"), list(range(16)))
+        self.assertEqual(bench_linux.parse_cpu_list("0-3,8,10-11\n"), [0, 1, 2, 3, 8, 10, 11])
+        self.assertEqual(bench_linux.cpu_list_text([2, 3, 4, 8, 10, 11]), "2-4,8,10-11")
+
+    def test_bench_cpus_drop_the_core_of_the_lowest_cpu(self):
+        self.assertEqual(bench_linux.bench_cpus("0-15", P_SIBLINGS), list(range(2, 16)))
+        siblings = {cpu: f"{cpu},{cpu + 8}" if cpu < 8 else f"{cpu - 8},{cpu}" for cpu in range(16)}  # other numbering
+        self.assertEqual(bench_linux.bench_cpus("0-15", siblings), [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15])
+        self.assertEqual(bench_linux.cpus_mask(bench_linux.bench_cpus("0-15", P_SIBLINGS)), 0xFFFC)
+        with self.assertRaises(RuntimeError):
+            bench_linux.bench_cpus("0-1", P_SIBLINGS)
+
+    def test_ignorepkg(self):
+        conf = "[options]\n#IgnorePkg   =\nIgnorePkg = gcc gcc-libs clang llvm llvm-libs lld\n"
+        self.assertTrue(bench_linux.ignorepkg_held(conf))
+        self.assertEqual(bench_linux.ignorepkg_missing("[options]\nIgnorePkg = gcc gcc-libs clang llvm\n"),
+                         ["llvm-libs", "lld"])
+        self.assertEqual(bench_linux.ignorepkg_missing("#IgnorePkg = gcc gcc-libs clang llvm llvm-libs lld\n"),
+                         list(bench_linux.HELD_PACKAGES))
+        self.assertTrue(bench_linux.ignorepkg_held("IgnorePkg = gcc*\nIgnorePkg = clang llvm* lld\n"))
+
+    def test_cpu_load_of_the_listed_cpus(self):
+        before = "cpu  0 0 0 0 0 0 0 0 0 0\ncpu2 100 0 100 800 0 0 0 0 0 0\ncpu3 0 0 0 1000 0 0 0 0 0 0\n"
+        after = "cpu  0 0 0 0 0 0 0 0 0 0\ncpu2 150 0 150 900 0 0 0 0 0 0\ncpu3 0 0 0 1200 0 0 0 0 0 0\nintr 5\n"
+        self.assertAlmostEqual(bench_linux.cpu_load(before, after, [2]), 0.5)
+        self.assertAlmostEqual(bench_linux.cpu_load(before, after, [2, 3]), 100 / 400)
+
+    def test_os_release_and_cpuinfo(self):
+        self.assertEqual(bench_linux.os_release('NAME="CachyOS Linux"\nPRETTY_NAME="CachyOS"\nID=cachyos\n'),
+                         "CachyOS")
+        cpuinfo = "processor\t: 0\nmodel name\t: Intel(R) Core(TM) i9-14900K\nmicrocode\t: 0x12b\n"
+        self.assertEqual(bench_linux.cpuinfo_field(cpuinfo, "model name"), "Intel(R) Core(TM) i9-14900K")
+        self.assertEqual(bench_linux.cpuinfo_field(cpuinfo, "microcode"), "0x12b")
+
+    def test_idle_compilers(self):
+        procs = [("bash", ""), ("cc1plus", ""), ("ld.lld", ""), ("python3", "python3 /usr/bin/scons -j32"),
+                 ("python3", "python3 devtools/bench/bench.py aa"), ("clang-21", ""), ("godot", "")]
+        self.assertEqual(bench_linux.busy_compilers(procs), ["cc1plus", "clang-21", "ld.lld", "python3"])
+
+    def test_binary_names_put_llvm_before_the_suffix(self):
+        self.assertEqual(bench_linux.linux_binary("editor", "bench.aa", clang=True).as_posix(),
+                         "bin/godot.linuxbsd.editor.x86_64.llvm.bench.aa")
+        self.assertEqual(bench_linux.linux_binary("template_release", "bench.tests", clang=False).as_posix(),
+                         "bin/godot.linuxbsd.template_release.x86_64.bench.tests")
+
+    def test_scons_args_per_compiler(self):
+        old = bench_linux.COMPILER
+        try:
+            bench_linux.COMPILER = "gcc"
+            gcc = bench_linux.scons_args("editor", "aa", "FORK_BACKEND_X=1", True)
+            bench_linux.COMPILER = "clang"
+            clang = bench_linux.scons_args("editor", "aa", "FORK_BACKEND_X=1", True)
+        finally:
+            bench_linux.COMPILER = old
+        self.assertEqual([a for a in clang if a not in gcc], ["use_llvm=yes", "linker=lld"])
+        for arg in ("platform=linuxbsd", "production=yes", "tests=yes", "object_prefix=t_", "debug_symbols=yes",
+                    "disable_path_overrides=no", "extra_suffix=bench.aa.tests",
+                    "cppdefines=FORK_ALLOC_COUNTERS=1 FORK_BACKEND_X=1"):
+            self.assertIn(arg, gcc)
+
+
+GOOD_STATE = {"governor": "performance", "epp": "performance", "no_turbo": "0", "sched_ext": "disabled",
+              "sched_ext_ops": "unavailable", "compiler_hold": "held", "perf_event_paranoid": "2"}
+
+
+class LinuxChecks(unittest.TestCase):
+    def test_good_state_passes(self):
+        self.assertEqual(bench_linux.state_problems(GOOD_STATE, [2, 3], perf=True), [])
+
+    def test_each_wrong_setting_refuses_with_its_fix(self):
+        cases = {
+            "governor": ("powersave", "sudo cpupower -c 2-3 frequency-set -g performance"),
+            "epp": ("balance_performance",
+                    "echo performance | sudo tee /sys/devices/system/cpu/cpu{2,3}/cpufreq/energy_performance_preference"),
+            "no_turbo": ("1", "echo 0 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo"),
+            "sched_ext": ("enabled", "sudo systemctl stop scx_loader.service"),
+            "compiler_hold": ("lld", "IgnorePkg = gcc gcc-libs clang llvm llvm-libs lld"),
+            "perf_event_paranoid": ("4", "sudo sysctl kernel.perf_event_paranoid=2"),
+        }
+        for key, (value, fix) in cases.items():
+            with self.subTest(key=key):
+                problems = bench_linux.state_problems(dict(GOOD_STATE, **{key: value}), [2, 3], perf=True)
+                self.assertEqual(len(problems), 1)
+                self.assertIn(fix, problems[0])
+
+    def test_paranoid_matters_only_for_counters_and_profiles(self):
+        self.assertEqual(bench_linux.state_problems(dict(GOOD_STATE, perf_event_paranoid="4"), [2], perf=False), [])
+
+    def test_missing_sysfs_files_are_recorded_not_refused(self):
+        state = dict.fromkeys(GOOD_STATE, "unavailable")
+        self.assertEqual(bench_linux.state_problems(state, [2], perf=True), [])
+
+    def test_no_sudo_run_and_no_system_file_written(self):
+        """T-02-26: fixes exist only as printed strings; nothing writes /sys, /proc/sys or /etc."""
+        tree = ast.parse((HERE / "bench_linux.py").read_text(encoding="utf-8"))
+        names = {t.id: n.value.value for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+                 and isinstance(n.value.value, str) for t in n.targets if isinstance(t, ast.Name)}
+
+        def strings(node):
+            for n in ast.walk(node):
+                if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                    yield n.value
+                elif isinstance(n, ast.Name) and n.id in names:
+                    yield names[n.id]
+
+        system = ("/sys", "/proc/sys", "/etc")
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            if func in ("run", "Popen", "call", "check_call", "check_output", "system", "execv", "execvp"):
+                self.assertFalse(any("sudo" in s for a in node.args for s in strings(a)), ast.unparse(node))
+            if func == "open" and node.args:
+                mode = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"),
+                                                                    None)
+                mode = mode.value if isinstance(mode, ast.Constant) else "r"
+                if set(mode) & set("wax+"):
+                    self.assertFalse(any(s.startswith(system) for s in strings(node.args[0])), ast.unparse(node))
+            if func in ("write_text", "write_bytes"):
+                self.assertFalse(any(s.startswith(system) for s in strings(node.func)), ast.unparse(node))
+
+
+class LinuxPerf(unittest.TestCase):
+    STAT = ("# started on Sat Nov 21 10:00:00 2026\n\n"
+            "12345678901,,cpu_core/instructions/u,2003456789,100.00,2.70,insn per cycle\n"
+            "4567890123,,cpu_core/cycles/u,2003456789,100.00,,\n"
+            "<not counted>,,cpu_core/cache-misses/u,0,0.00,,\n"
+            "<not supported>,,cpu_core/cache-references/u,0,0.00,,\n")
+
+    def test_parse_perf_stat_missing_is_none_not_zero(self):
+        self.assertEqual(bench_linux.parse_perf_stat(self.STAT), {
+            "instructions": 12345678901, "cycles": 4567890123, "cache_misses": None, "cache_references": None})
+        counted = self.STAT.replace("<not counted>", "98765").replace("<not supported>", "1234567")
+        self.assertEqual(bench_linux.parse_perf_stat(counted)["cache_misses"], 98765)
+        self.assertEqual(bench_linux.parse_perf_stat(counted)["cache_references"], 1234567)
+
+    def test_counter_command(self):
+        self.assertEqual(bench_linux.counter_command("c.txt", ["bin/godot", "--headless"]), [
+            "perf", "stat", "-x,", "-o", "c.txt", "-e",
+            "cpu_core/instructions/u,cpu_core/cycles/u,cpu_core/cache-misses/u,cpu_core/cache-references/u",
+            "--", "bin/godot", "--headless"])
+
+    def test_micro_command_differs_only_in_the_compiler(self):
+        args = (Path("out/bench"), [Path("a.cpp")], [Path(".")], ["BENCH_CONTROLS"])
+        gcc, clang = (bench_linux.micro_command(c, *args) for c in ("gcc", "clang"))
+        self.assertEqual((gcc[0], clang[0]), ("g++", "clang++"))
+        self.assertEqual(gcc[1:], clang[1:])
+        for flag in ("-O2", "-std=gnu++20", "-fno-rtti", "-DDEBUG_ENABLED", "-DTOOLS_ENABLED", "-DLINUXBSD_ENABLED",
+                     "-DUNIX_ENABLED", "-DFORK_ALLOC_COUNTERS=1", "-DBENCH_CONTROLS"):
+            self.assertIn(flag, gcc)
+
+    def test_counter_columns_never_change_a_verdict(self):
+        item, metric, build = "scene:churn:10", "frame_ms_p50", "editor"
+        name, params = bench.parse_workload(item)
+        meta = {"msvc_toolset": "v", "compiler_version": "v", "bios": "b", "microcode": "m", "os_build": "1.1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            floors = Path(tmp) / "floors.json"
+            floors.write_text(bench.json.dumps({bench.floor_key(name, "churn:10", metric, build, bench.COMPILER): {
+                "floor": 0.01, "n": 5, "compiler_version": "v", "bios": "b", "microcode": "m", "os_build": "1.1"}}))
+            args = type("Args", (), {"floors": str(floors), "target": item})()
+            items = [(item, (item, name, params, bench.item_def(item, name, params, item)))]
+            values = {(item, m, build, label): {r: base * (0.9 if label == "candidate" else 1.0) for r in range(1, 6)}
+                      for m, base in (("frame_ms_p50", 10.0), ("peak_ws_mb", 100.0))
+                      for label in ("previous", "candidate", "control")}
+            plain = bench.summarize_compare(args, items, [build], values, {item: 5}, meta)
+            counted = [dict(row) for row in plain]
+            found = {(item, build, label): dict(zip(bench.COUNTER_COLUMNS, (100, 50, None, 10)))
+                     for label in ("previous", "candidate", "control")}
+            bench.add_counter_columns(counted, found, ("previous", "candidate", "control"))
+        self.assertEqual([row["verdict"] for row in plain], ["ACCEPT", "NO-FLOOR"])
+        for before, after in zip(plain, counted):
+            self.assertEqual({k: after[k] for k in before}, before)
+            self.assertEqual(after["cache_misses"], "previous=n/a candidate=n/a control=n/a")
+            self.assertEqual(after["instructions"], "previous=100 candidate=100 control=100")
+
+
+class LinuxAdapterShape(unittest.TestCase):
+    # Windows-only calls in bench.py, each inside an `os.name == "nt"` branch (no Linux equivalent).
+    WINDOWS_ONLY = {"check_power_plan", "game_mode", "msvc_toolset", "vs_version"}
+
+    def test_linux_has_every_function_bench_py_calls(self):
+        called = set(re.findall(r"\bosb\.(\w+)", (HERE / "bench.py").read_text(encoding="utf-8")))
+        windows = {n.name for n in ast.parse((HERE / "bench_windows.py").read_text(encoding="utf-8")).body
+                   if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        windows |= set(re.findall(r"^([A-Z_]+) =", (HERE / "bench_windows.py").read_text(encoding="utf-8"), re.M))
+        self.assertLessEqual(self.WINDOWS_ONLY, windows)
+        self.assertEqual(sorted(n for n in called & windows - self.WINDOWS_ONLY if not hasattr(bench_linux, n)), [])
+
+    def test_kernel_release_floors(self):
+        self.assertEqual(bench._major_os("6.17.8-2-cachyos"), "6.17")
+        self.assertEqual(bench._major_os("26100.9711"), "26100")
+        key = bench.floor_key("scene", "churn:10000", "frame_ms_p50", "editor", "gcc")
+        meta = {"compiler_version": "g++ (GCC) 15.2.1", "bios": "1.K0", "microcode": "0x12b",
+                "os_build": "6.17.8-2-cachyos"}
+        floors = {key: dict(meta, floor=0.03, n=5)}
+        self.assertEqual(bench.lookup_floor(floors, key, dict(meta, os_build="6.17.9-1-cachyos"), 5), 0.03)
+        self.assertEqual(bench.lookup_floor(floors, key, dict(meta, os_build="6.18.1-1-cachyos"), 5), "RE-MEASURE-AA")
 
 
 if __name__ == "__main__":

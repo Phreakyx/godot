@@ -345,6 +345,7 @@ MICRO_FLAGS = [
     "/DTOOLS_ENABLED", "/DWINDOWS_ENABLED", "/DNOMINMAX", "/D_CRT_SECURE_NO_WARNINGS", "/DFORK_ALLOC_COUNTERS=1",
 ]
 MICRO_LINK = ["/link", "/OPT:REF", "/OPT:ICF", "/INCREMENTAL:NO"]
+MICRO_EXE = "bench.exe"
 
 
 def msvc_env():
@@ -358,7 +359,7 @@ def msvc_env():
 def compile_micro(out_dir, inputs, include_dirs, defines):
     """cl inputs into out_dir/bench.exe through a build.cmd; returns the cl version from its banner."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    exe = out_dir / "bench.exe"
+    exe = out_dir / MICRO_EXE
     exe.unlink(missing_ok=True)
     args = ["cl", *MICRO_FLAGS, *(f"/D{d}" for d in defines), *(f"/I{p}" for p in include_dirs),
             f"/Fo{out_dir}\\", f"/Fe{exe}", *map(str, inputs), *MICRO_LINK]
