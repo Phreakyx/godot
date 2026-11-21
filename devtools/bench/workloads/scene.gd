@@ -1,6 +1,6 @@
 extends SceneTree
 ## Scene workload of devtools/bench/bench.py (workload id scene:<scenario>:<count>),
-## a copy of devtools/test/scene_bench.gd with the runner's line protocol.
+## grown from the former scene driver (kb/project/benchmark-driver-migration.md) with the runner's line protocol.
 ##   godot --headless --path misc/scene_bench_project --fixed-fps 60 --script <this file> -- --scenario=<name> --count=N [--frames=F] [--warmup=W] [--visual]
 ## One scenario per process. Prints one BENCH line: frame time (wall, between
 ## frames), the time of the scenario's own operations each frame, setup time and

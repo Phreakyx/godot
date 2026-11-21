@@ -9,7 +9,7 @@ buildable, testable and revertible on its own. State and results:
 Rules for every milestone:
 
 - Baseline and candidate in the same session, builds alternated
-  (`devtools/test/scene_bench.ps1 -Builds base,candidate`), at least 3
+  (`python devtools/bench/bench.py compare --prev <base> --defines <macro> --target scene:<scenario>:<count> --workloads <all scene cases>`), at least 3
   rounds; a control build of the same source when the effect is a few
   percent.
 - Keep only a reproducible gain with no regression elsewhere in the 12

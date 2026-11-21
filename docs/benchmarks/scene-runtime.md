@@ -1,8 +1,11 @@
 # Scene runtime benchmarks
 
-How: `devtools/test/scene_bench.ps1` runs `devtools/test/scene_bench.gd` in
-`misc/scene_bench_project`, one process per scenario and node count,
-headless (no GPU work; `-Visual` for MeshInstance3D with a window), builds
+How: `python devtools/bench/bench.py aa|compare --workloads
+scene:<scenario>:<count>` runs `devtools/bench/workloads/scene.gd` in
+`misc/scene_bench_project` (the numbers below came from the former scene
+driver, which the runner reproduces:
+[migration record](../../kb/project/benchmark-driver-migration.md)), one process per scenario and node count,
+headless (no GPU work; `--visual` on `scene.gd` run by hand for MeshInstance3D with a window), builds
 alternated per round with the order reversed every other round. Each run:
 30 warm-up frames and 120 measured ones (5 and 30 at 100k nodes). It
 reports the wall time per frame (p50, p95), the time of the scenario's own

@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-11-21 (old benchmark drivers reproduced; scene driver deleted)
+
+* **Added**: [the migration record](/project/benchmark-driver-migration.md):
+  on the same binaries `bench.py` reproduces the scene driver (instance
+  and churn at 10k nodes within 3%, node counts and memory identical),
+  the container driver (same-code cases within 1% once the runner's
+  allocation counter is accounted for; the integer-map rows are different
+  workloads in the matrix) and the profile driver (script-mode directory
+  shares within 0.7 points), with the case-name mapping.
+* **Removed**: the scene driver (`devtools/test/scene_bench.ps1` and
+  `scene_bench.gd`); `devtools/README.md`, the scene runtime docs, the
+  scene runtime kb entry and the bench project's header now point at
+  `bench.py` and `devtools/bench/workloads/`. The profile and container
+  drivers follow in plan 02-13.
+
 ## 2026-11-21 (runner profiles and family shares)
 
 * **Added**: `bench.py profile` samples any runner workload on the bench

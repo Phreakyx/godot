@@ -18,7 +18,7 @@ sources:
 
 Branch `feat/scene-runtime`. Targeted fixes inside Node, SceneTree and
 Node3D, chosen from sampling profiles of a 14-scenario benchmark
-(`devtools/test/scene_bench.ps1`); no duplicate state, no API change
+(the former scene driver, now `bench.py` workloads `scene:<scenario>:<count>`); no duplicate state, no API change
 (`--dump-extension-api` identical before and after). Details per
 milestone in the roadmap and the architecture page
 (`docs/architecture/hybrid-scene-runtime.md`, "Final state").

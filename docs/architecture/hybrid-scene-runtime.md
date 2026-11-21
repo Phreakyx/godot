@@ -193,8 +193,9 @@ no scenario slower beyond the code layout spread
 
 ## Profiling and measuring
 
-- Scenario benchmark: `devtools/test/scene_bench.ps1` (12 scenarios, 1k/10k/100k
-  nodes, headless or `-Visual`, builds alternated per round).
+- Scenario benchmark: `python devtools/bench/bench.py aa|compare --workloads
+  scene:<scenario>:<count>` (`devtools/bench/workloads/scene.gd`, 12 scenarios,
+  1k/10k/100k nodes, headless; `--visual` when the script is run by hand).
 - Workload profiles: `devtools/profile/` (sampler with inlined frames).
 - Release numbers from a `template_release` build with symbols; editor
   builds carry `DEBUG_ENABLED` allocation accounting.

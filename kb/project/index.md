@@ -10,6 +10,7 @@
 
 * [Packed core containers and compatible hashing](/project/core-template-storage.md) - dropped 2026-11-15: packed storage and robin-hood indices made numeric hash tables slower and bigger; only the String-key byte hash was kept
 * [Core template migration benchmarks](/project/core-template-benchmarks.md) - 24-case controlled A/B: the dropped migration, and the kept String-key byte hash (integer tables unchanged, String hits 0.55-0.62x)
+* [Old benchmark drivers against the runner](/project/benchmark-driver-migration.md) - on the same binaries `bench.py` reproduces the scene driver (within 3%, same node counts), the container driver's same-code cases (within 1% with the allocation counter accounted for) and the profile driver (shares within 0.7 points); the scene driver is deleted
 * [Where engine CPU time goes in core code](/project/core-cpu-profiles.md) - sampling profiles of five workloads: hash lookups 3-16%, scene instancing 21% in RID checks, locks and refcounts plus 14% heap; the callers' patterns cost more than container internals
 
 * [Sync to Godot 4.8-beta4 and PhysX module 1302f909ca](/project/fork-sync-2026-11.md) - the milestone's one sync: two conflicts combined, fork-owned core files reviewed, one PhysX master adaptation, NVIDIA `49a825dc52` in part (N1, N2; the rest deferred); tests 1497/1497 and smoke pass

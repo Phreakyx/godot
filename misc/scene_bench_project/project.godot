@@ -1,4 +1,4 @@
-; Empty project for devtools/test/scene_bench.gd (docs/benchmarks/scene-runtime.md).
+; Empty project for the scene and script workloads in devtools/bench/workloads/ (docs/benchmarks/scene-runtime.md).
 
 config_version=5
 

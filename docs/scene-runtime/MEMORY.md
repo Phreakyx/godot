@@ -56,8 +56,8 @@ short; details go in the linked files.
 - The worktree's `bin/` needs the Streamline runtime (`sl.*`, `nvngx_*`,
   copied from the main checkout) or the PhysX smoke checks fail on the
   DLSS init error.
-- `scene_bench.ps1` list parameters need `& script -Scenarios @(...)`;
-  `powershell -File` passes a comma list as one string.
+- `bench.py --workloads` takes a comma list of `scene:<scenario>:<count>`;
+  `--rounds` fixes n and `--skip-build` reuses the bench binaries in `bin/`.
 
 ## Failed experiments
 
@@ -73,5 +73,6 @@ short; details go in the linked files.
    Read `kb/mistakes/iterated-builds-instead-of-design.md` and
    `kb/mistakes/renderer-bound-frame-for-scene-changes.md`.
 2. Read the roadmap row of the next milestone and the benchmark page.
-3. Build, run `devtools/test/scene_bench.ps1` for the touched scenarios
-   with the previous binary copied as a baseline.
+3. Run `python devtools/bench/bench.py compare --prev <previous commit>
+   --defines <macro> --target scene:<scenario>:<count> --workloads <touched
+   scenarios>` (see `devtools/bench/README.md`).
