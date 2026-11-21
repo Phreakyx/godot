@@ -98,11 +98,11 @@ class Families(unittest.TestCase):
 PERF = """\
 godot.linuxbsd. 4242
 \t    55d0c0001234 HashMap<StringName, Node*>::_lookup_pos
-  /home/u/godot/core/templates/hash_map.h:105 (inlined)
-\t    55d0c0001234 Node::get_node+0x34 (/home/u/godot/bin/godot.linuxbsd.editor.x86_64.bench)
-  /home/u/godot/scene/main/node.cpp:2001
-\t    55d0c0005678 SceneTree::process+0x10 (/home/u/godot/bin/godot.linuxbsd.editor.x86_64.bench)
-  /home/u/godot/scene/main/scene_tree.cpp:600
+  /build/godot/core/templates/hash_map.h:105 (inlined)
+\t    55d0c0001234 Node::get_node+0x34 (/build/godot/bin/godot.linuxbsd.editor.x86_64.bench)
+  /build/godot/scene/main/node.cpp:2001
+\t    55d0c0005678 SceneTree::process+0x10 (/build/godot/bin/godot.linuxbsd.editor.x86_64.bench)
+  /build/godot/scene/main/scene_tree.cpp:600
 
 WorkerThread 3 4243
 \t    7f0000001000 _int_malloc+0x1a (/usr/lib/libc.so.6)
@@ -111,11 +111,11 @@ WorkerThread 3 4243
 
 godot.linuxbsd. 4242
 \t    55d0c0001234 HashMap<StringName, Node*>::_lookup_pos
-  /home/u/godot/core/templates/hash_map.h:105 (inlined)
-\t    55d0c0001234 Node::get_node+0x34 (/home/u/godot/bin/godot.linuxbsd.editor.x86_64.bench)
-  /home/u/godot/scene/main/node.cpp:2001
-\t    55d0c0005678 SceneTree::process+0x10 (/home/u/godot/bin/godot.linuxbsd.editor.x86_64.bench)
-  /home/u/godot/scene/main/scene_tree.cpp:600
+  /build/godot/core/templates/hash_map.h:105 (inlined)
+\t    55d0c0001234 Node::get_node+0x34 (/build/godot/bin/godot.linuxbsd.editor.x86_64.bench)
+  /build/godot/scene/main/node.cpp:2001
+\t    55d0c0005678 SceneTree::process+0x10 (/build/godot/bin/godot.linuxbsd.editor.x86_64.bench)
+  /build/godot/scene/main/scene_tree.cpp:600
 """
 
 
@@ -146,11 +146,11 @@ class PerfToTsv(unittest.TestCase):
         self.assertEqual(analyze.family(module, segments[0][0]), "allocation")
 
     def test_samples_without_call_graph(self):
-        text = ("godot.linuxbsd. 4242 55d0c0001234 Node::get_node+0x34 (/home/u/godot/bin/godot.bench)\n"
-                "  /home/u/godot/scene/main/node.cpp:2001\n")
+        text = ("godot.linuxbsd. 4242 55d0c0001234 Node::get_node+0x34 (/build/godot/bin/godot.bench)\n"
+                "  /build/godot/scene/main/node.cpp:2001\n")
         names, rows = self.load(text)
         self.assertEqual(rows[0][:3], (1, "4242", "godot.bench"))
-        self.assertEqual(analyze.split_frame(rows[0][3][0][0]), ("Node::get_node", "/home/u/godot/scene/main/node.cpp"))
+        self.assertEqual(analyze.split_frame(rows[0][3][0][0]), ("Node::get_node", "/build/godot/scene/main/node.cpp"))
 
 
 if __name__ == "__main__":
