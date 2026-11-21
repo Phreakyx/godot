@@ -412,6 +412,11 @@ class LinuxParsers(unittest.TestCase):
                  ("python3", "python3 devtools/bench/bench.py aa"), ("clang-21", ""), ("godot", "")]
         self.assertEqual(bench_linux.busy_compilers(procs), ["cc1plus", "clang-21", "ld.lld", "python3"])
 
+    def test_child_peak_must_exceed_the_runners(self):
+        self.assertEqual(bench_linux.child_peak_bytes(90_000, 40_000), 90_000 * 1024)
+        with self.assertRaises(RuntimeError):  # 02-12: every workload below the runner's 603 MiB read exactly that
+            bench_linux.child_peak_bytes(617_868, 617_868)
+
     def test_binary_names_put_llvm_before_the_suffix(self):
         self.assertEqual(bench_linux.linux_binary("editor", "bench.aa", clang=True).as_posix(),
                          "bin/godot.linuxbsd.editor.x86_64.llvm.bench.aa")

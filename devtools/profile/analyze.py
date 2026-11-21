@@ -49,7 +49,8 @@ FAMILIES = [(name, re.compile(file) if file else None, re.compile(function) if f
             for name, file, function in (
                 ("bench counter", r"^core/os/fork_alloc_counters", None),
                 ("formatting", None, r"^String::(sprintf|num)|^vformat\b|grisu2"),
-                ("allocation", r"^core/os/memory\.cpp", ALLOC_FUNCTIONS),
+                # glibc's allocator by its source file too: perf names its internal frames [unknown] (02-12).
+                ("allocation", r"^core/os/memory\.cpp|(^|/)malloc/(malloc|arena)\.c$", ALLOC_FUNCTIONS),
                 ("hash tables", r"^core/templates/(hash_map|hash_set|a_hash_map|oa_hash_map|hashfuncs)\.", None),
                 ("Variant containers", r"^core/variant/(dictionary|array)\.cpp|^core/string/string_name\.",
                  r"^Variant::(recursive_)?hash\b"),
@@ -66,7 +67,8 @@ def family(module, frame):
         if (file_re and file_re.search(rel)) or (function_re and function_re.search(function)):
             return name
     return "other"
-TOP_DIRS = r"/(core|scene|servers|drivers|modules|platform|editor|thirdparty|main|tests)/"
+# Repository-relative too: GCC and Clang builds name a translation unit "core/os/memory.cpp" (headers "./core/...").
+TOP_DIRS = r"(?:^|/)((?:core|scene|servers|drivers|modules|platform|editor|thirdparty|main|tests)/.*)"
 
 
 def load(path):
@@ -97,7 +99,7 @@ def split_frame(frame):
 
 def relative(file):
     m = re.search(TOP_DIRS, file)
-    return file[m.start() + 1:] if m else ""
+    return m.group(1) if m else ""
 
 
 def category(module, frame):

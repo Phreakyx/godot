@@ -479,7 +479,7 @@ def prepare_level(out, mask):
     (out / "override.cfg").write_text(LEVEL_OVERRIDE, encoding="utf-8")
     changed = git("status", "--porcelain", root=src).decode().splitlines()
     return pck, {"repository": pin["url"], "commit": pin["commit"], "license": pin["license"],
-                 "pck_sha256": hashlib.sha256(pck.read_bytes()).hexdigest(), "pck_bytes": pck.stat().st_size,
+                 "pck_sha256": sha_file(pck), "pck_bytes": pck.stat().st_size,
                  "editor_changed_files": len(changed), "robots": LEVEL_ROBOTS, "frames": LEVEL_FRAMES,
                  "exported_by": editor.name}
 
@@ -1312,7 +1312,10 @@ def extract_string_methods(ustring_cpp, dest):
 
 
 def sha_file(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    # In chunks: a whole-file read of the 569 MB level pack made the runner's peak RSS what Linux reports as every
+    # smaller child's (bench_linux.child_peak_bytes).
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def rel(path):

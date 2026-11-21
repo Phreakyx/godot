@@ -270,6 +270,9 @@ def run_pinned(args, cwd, mask, timeout):
         timer.cancel()
     wall = time.perf_counter() - start
     proc.returncode = os.waitstatus_to_exitcode(status)  # Popen must not wait for a reaped child
+    import resource  # Unix only; this module imports on every OS
+
+    runner_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     reader.join(timeout=30)
     proc.stdout.close()
     return {
@@ -277,10 +280,20 @@ def run_pinned(args, cwd, mask, timeout):
         "returncode": proc.returncode,
         "timed_out": timed_out.is_set(),
         "child_mask": child,
-        "peak_ws_bytes": usage.ru_maxrss * 1024,  # KiB: the child's VmHWM
+        "peak_ws_bytes": child_peak_bytes(usage.ru_maxrss, runner_kib),
         "cpu_s": usage.ru_utime + usage.ru_stime,
         "wall_s": wall,
     }
+
+
+def child_peak_bytes(child_kib, runner_kib):
+    """A child's ru_maxrss (KiB) in bytes. Linux starts it at the spawning process's peak (exec keeps the old address
+    space's high-water mark, and vfork's old space is the runner's), so a reading not above the runner's own peak
+    may be the runner's: refuse it (02-12 read the runner's 603 MiB for every workload smaller than that)."""
+    if child_kib <= runner_kib:
+        raise RuntimeError(f"child peak RSS {child_kib} KiB is not above the runner's own {runner_kib} KiB, so it may be"
+                           " the runner's; keep the runner small (hash big files with hashlib.file_digest)")
+    return child_kib * 1024
 
 
 def ensure_idle():
@@ -461,7 +474,8 @@ def perf_profile(perf, command, mask, form, warmup, seconds, stem, log, timeout)
     recorded after warmup for seconds, then ended (SIGINT to perf, which ends its own workload); a launch
     workload until it exits. Writes <stem>.perf.data and <stem>.tsv; returns (perf Popen, CompletedProcess)."""
     data, tsv = stem.with_name(stem.name + ".perf.data"), stem.with_name(stem.name + ".tsv")
-    record = [perf, "record", "-e", "cpu_core/cycles/u", "-F", "997", "-g", "-o", str(data)]
+    # --user-callchains: at perf_event_paranoid=2 a -g call graph that may include kernel frames is refused.
+    record = [perf, "record", "-e", "cpu_core/cycles/u", "-F", "997", "-g", "--user-callchains", "-o", str(data)]
     if form == "frames":
         record += ["-D", str(int(warmup * 1000))]
     record += ["--", "taskset", "-c", cpu_list_text(mask_cpus(mask)), *map(str, command)]
@@ -478,8 +492,11 @@ def perf_profile(perf, command, mask, form, warmup, seconds, stem, log, timeout)
             proc.kill()  # the runner's own child only
             proc.wait()
     with open(tsv, "w", encoding="utf-8") as out:
+        # Clang binaries: binutils addr2line restarts on timeouts (6-7 min per profile, 02-12) and added no source
+        # line; with llvm-addr2line perf 7.3 skips the external tool (same TSV, 8 s), a perf that takes it is right too.
+        addr2line = ["--addr2line", "llvm-addr2line"] if COMPILER == "clang" else []
         script = subprocess.Popen([perf, "script", "-i", str(data), "-F", "tid,comm,ip,sym,dso,srcline", "--inline",
-                                   "--full-source-path"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                   "--full-source-path", *addr2line], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         convert = subprocess.run([sys.executable, str(PERF_TO_TSV)], stdin=script.stdout, stdout=out)
         script.stdout.close()
         script.wait()

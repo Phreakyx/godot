@@ -145,6 +145,21 @@ class PerfToTsv(unittest.TestCase):
         self.assertEqual(segments[1], ["malloc"])
         self.assertEqual(analyze.family(module, segments[0][0]), "allocation")
 
+    def test_linux_paths(self):
+        # GCC and Clang name a translation unit relative to the repository; perf names glibc's allocator [unknown].
+        self.assertEqual(analyze.category("godot.bench", "Memory::free_static@core/os/memory.cpp:120")[0], "core/os")
+        self.assertEqual(analyze.relative("./core/templates/hash_map.h"), "core/templates/hash_map.h")
+        self.assertEqual(analyze.relative("E:/src/godot/core/os/memory.cpp"), "core/os/memory.cpp")
+        self.assertEqual(analyze.family("libc.so.6", "[unknown]@/usr/src/debug/glibc/glibc/malloc/malloc.c:3092"),
+                         "allocation")
+        self.assertEqual(analyze.family("libc.so.6", "[unknown]@../sysdeps/x86_64/multiarch/memmove-vec.S:300"), "other")
+
+    def test_header_with_trailing_space(self):
+        # perf 7.3 writes call-graph headers as "godot.linuxbsd.  137569 " (02-12); the old pattern read none.
+        names, rows = self.load(PERF.replace("godot.linuxbsd. 4242\n", "godot.linuxbsd.  4242 \n"))
+        self.assertEqual(names["4242"], "godot.linuxbsd.")
+        self.assertEqual(len(rows), 2)
+
     def test_samples_without_call_graph(self):
         text = ("godot.linuxbsd. 4242 55d0c0001234 Node::get_node+0x34 (/build/godot/bin/godot.bench)\n"
                 "  /build/godot/scene/main/node.cpp:2001\n")

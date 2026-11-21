@@ -74,15 +74,18 @@ the workload under it), then `perf_to_tsv.py` writes the same TSV format,
 so `analyze.py` computes the shares with the same rules:
 
 ```bash
-perf record -F 997 -g -p <pid> -- sleep 15        # or: perf record -F 997 -g -- <engine command>
+perf record -F 997 -g --user-callchains -p <pid> -- sleep 15   # or: ... -- <engine command>
 perf script -F tid,comm,ip,sym,dso,srcline --inline --full-source-path | python devtools/profile/perf_to_tsv.py > x.tsv
 python devtools/profile/analyze.py x.tsv families
 ```
 
 `ip` is needed for perf to print symbols and the call graph,
-`--full-source-path` for the repository paths the families match. The
-converter is checked on a fixture of the documented format; real CachyOS
-output is checked when the Linux profiles are taken.
+`--full-source-path` for the repository paths the families match,
+`--user-callchains` because `perf_event_paranoid` 2 refuses a call graph
+that may include kernel frames. For a Clang build add `--addr2line
+llvm-addr2line` to `perf script` (binutils `addr2line` takes minutes on
+it and adds no line). The converter is checked on fixtures, including
+perf 7.3's call-graph header, which ends with a space after the tid.
 
 ## Notes
 

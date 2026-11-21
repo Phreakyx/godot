@@ -622,7 +622,12 @@ it needs nothing beyond the standard library and `perf`
 - **Memory and CPU time (BENCH-05).** The runner reaps each child with
   `os.wait4`: peak memory is `ru_maxrss` (the peak resident set, KiB),
   CPU time `ru_utime + ru_stime`. Peak RSS and the Windows peak working
-  set are each compared within their OS only.
+  set are each compared within their OS only. Linux starts a child's
+  `ru_maxrss` at the runner's own peak (kept across `vfork` and `exec`),
+  so the runner must stay small: it hashes big files in chunks, and a
+  child peak that is not above the runner's refuses the run
+  (`child_peak_bytes`;
+  [the mistake](/mistakes/child-peak-rss-inherits-the-runners.md)).
 - **Checks that refuse (D-13, D-17).** Read only; each refusal prints
   the command that fixes it, for the user to run (the runner never runs
   sudo or writes a system file). A file that does not exist here is
@@ -658,14 +663,22 @@ it needs nothing beyond the standard library and `perf`
   printed `<not counted>` or `<not supported>`). Counts are reported,
   never judged, and their run-to-run spread has no floor (one pass).
 - **Profiles (BENCH-07).** `bench.py profile` runs `perf record -e
-  cpu_core/cycles/u -F 997 -g -o <stem>.perf.data` with the workload
-  pinned by `taskset` (perf itself stays on the home CPUs); frame
-  workloads start recording after `--warmup` (`-D`) and end after
-  `--seconds` (SIGINT to perf, which ends its workload). Then `perf
-  script -F tid,comm,ip,sym,dso,srcline --inline --full-source-path`
-  goes through `devtools/profile/perf_to_tsv.py` into the same TSV, and
-  `analyze.py families` applies the Windows rules. `perf script` with
-  source lines on a `debug_symbols=yes` build can take minutes.
+  cpu_core/cycles/u -F 997 -g --user-callchains -o <stem>.perf.data`
+  (`--user-callchains`: at `perf_event_paranoid` 2 a call graph that may
+  include kernel frames is refused) with the workload pinned by
+  `taskset` (perf itself stays on the home CPUs); frame workloads start
+  recording after `--warmup` (`-D`) and end after `--seconds` (SIGINT
+  to perf, which ends its workload). Then `perf script -F
+  tid,comm,ip,sym,dso,srcline --inline --full-source-path` goes through
+  `devtools/profile/perf_to_tsv.py` into the same TSV, and `analyze.py
+  families` applies the Windows rules. On Clang binaries `perf script`
+  gets `--addr2line llvm-addr2line`: binutils `addr2line` restarts on
+  timeouts there (6-7 min per profile) and adds no source line, and
+  perf 7.3 skips the external tool with it (the same TSV in 8 s).
+  Two Linux-only facts the analysis handles: perf names glibc's
+  internal allocator frames `[unknown]` with a `malloc/malloc.c` line,
+  so allocation also takes that file, and GCC and Clang name translation
+  units repository-relative (`core/os/memory.cpp`).
 - **Micro tier.** `micro` compiles the harness with `g++` or `clang++`,
   the same flags on every side and for both compilers (`-O2
   -std=gnu++20 -fno-rtti -DDEBUG_ENABLED -DTOOLS_ENABLED
@@ -678,11 +691,23 @@ it needs nothing beyond the standard library and `perf`
   `devtools/bench/floors.json` (merged, committed with their `kb/` notes),
   and from each series directory `summary.csv`, `counts.csv`,
   `meta.json`, `raw.csv` and `counters/`, and from each profile the
-  `.families.json` and `.summary.txt`, for
+  `.families.json`, `.summary.txt` and `.tsv` (the TSV lets the shares
+  be made again when an attribution rule changes, as in 02-12), for
   [the floors](/project/benchmark-noise-floors.md) and
   [the shares](/project/family-shares.md). Binaries, `.perf.data` and
   `.pck` files stay on Linux. Tracked notes use repository-relative paths
   only (the output keeps absolute paths in `runner_args`).
+- **Session practice (02-12).** Builds and series run on a Linux
+  partition, never an image file on NTFS
+  ([mistake](/mistakes/ext4-image-on-ntfs-build-disk.md)); a compiler's
+  bench objects take about 40 GB (GCC: 39 GB in `bin/obj`). Hand loops
+  over option lists run under bash, not zsh
+  ([mistake](/mistakes/zsh-unquoted-args-not-split.md)); a watch on a
+  series matches the real process or its output file
+  ([mistake](/mistakes/pgrep-f-matches-its-own-shell.md)). Afterwards,
+  `sudo systemctl start scx_loader.service` brings the scheduler back
+  (the governor resets at reboot); the `IgnorePkg` hold stays only
+  while another series is planned.
 
 # Commands
 

@@ -20,7 +20,8 @@ SRCLINE = re.compile(r"^\s+(?P<file>[^\s()]+):(?P<line>\d+|\?+)(?:\s+\(discrimin
 FRAME = re.compile(r"^(?:[0-9a-f]+\s+)?(?P<sym>.*?)(?:\+0x[0-9a-f]+)?(?:\s+\((?P<dso>[^()]*)\))?(?P<inlined>\s+\(inlined\))?\s*$")
 # ponytail: a comm that ends in a number token is taken whole (greedy); a frame whose ip is all decimal digits on a
 # header line (no call graph) would be read as the tid. Checked against real output in 02-12.
-HEADER = re.compile(r"^\s*(?P<comm>.*\S)\s+(?P<tid>\d+)(?:\s+(?P<frame>\S.*))?$")
+# perf 7.3 ends a call-graph header with a space after the tid ("godot.linuxbsd.  137569 "), hence the trailing \s*.
+HEADER = re.compile(r"^\s*(?P<comm>.*\S)\s+(?P<tid>\d+)(?:\s+(?P<frame>\S.*?))?\s*$")
 
 
 def convert(lines):

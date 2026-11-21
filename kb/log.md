@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-11-21 (GCC and Clang floors, counters and final family decisions)
+
+* **Added**: GCC 16.2.1 and Clang 23.1.5 A/A floors (1942 each) in
+  `devtools/bench/floors.json`, MSVC's 1959 unchanged, with the CachyOS
+  conditions, perf counters (instructions, IPC, cache misses) next to
+  the medians and the Linux micro floors in
+  [the noise floors](/project/benchmark-noise-floors.md); Linux shares
+  and the final decisions in [the family shares](/project/family-shares.md):
+  build allocation, hash tables and CowData, skip Variant containers,
+  formatting and trees/lists; none changed from the MSVC-only ones, the
+  targets moved to Linux workloads.
+* **Fixed**: the Linux runner read the runner's own 603 MiB peak for
+  every smaller workload (it hashed the level pack in one read; Linux
+  starts a child's `ru_maxrss` there): hashes in chunks now, refuses a
+  child peak not above its own, and the 34 affected floors are left out
+  until the next CachyOS session. `analyze.py` counts glibc's
+  `[unknown]` allocator frames (`malloc/malloc.c`) as allocation (up to
+  +27 points on Linux) and reads repository-relative paths (the "godot
+  (no line)" 30%); `perf record --user-callchains` at paranoid 2;
+  `perf_to_tsv.py` reads perf 7.3's call-graph header; Clang profiles
+  skip binutils `addr2line`.
+* **Added**: mistakes
+  [peak memory read the runner's](/mistakes/child-peak-rss-inherits-the-runners.md)
+  and [pgrep -f matched its own shell](/mistakes/pgrep-f-matches-its-own-shell.md).
+
 ## 2026-11-21 (Linux builds, tests and smoke)
 
 * **Added**: [Linux builds](/project/linux-build.md): on CachyOS (same

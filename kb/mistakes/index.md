@@ -64,3 +64,5 @@ What worked is in [successes](/successes/).
 * [A version name change didn't reach the exe after an incremental build](/mistakes/version-name-incremental-build.md) - after changing version info in methods.py, delete the objects that use core/version.h (editor and tests builds); check the name in the output
 * [A Linux build disk kept as an ext4 image on the NTFS drive](/mistakes/ext4-image-on-ntfs-build-disk.md) - Linux builds go on a real Linux partition, never an image file or mount on NTFS
 * [An option list in a zsh variable reached the command as one argument](/mistakes/zsh-unquoted-args-not-split.md) - loops that keep options in a variable run under bash, or use an array
+* [Linux peak memory of small workloads read the runner's own peak](/mistakes/child-peak-rss-inherits-the-runners.md) - keep the runner small (hash in chunks); a memory reading identical across binaries is the measurement; never keep a floor known to be wrong
+* [pgrep -f and pkill -f matched the watching shell](/mistakes/pgrep-f-matches-its-own-shell.md) - match the real process anchored, or wait on the job; never pkill -f a pattern in the current command line
