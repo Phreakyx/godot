@@ -1,5 +1,30 @@
 # Update log
 
+## 2026-11-21 (in-engine StringName and Variant-key micro cases)
+
+* **Added**: `tests/fork/test_fork_bench_variant_keys.cpp`, 10 `[Bench]`
+  doctest cases, all `doctest::skip()` (BENCH-04 keys the standalone
+  harness can't link): HashMap and AHashMap with StringName keys,
+  `HashMap<Variant, Variant>`, Dictionary with String, StringName, int and
+  Vector2 keys (insert, hit, miss, erase, iterate, copy; N = 0 to
+  1048576), and StringName creation from a String or a C string and
+  comparison; 298 cases, one BENCH line each. `bench.py` runs them as the
+  `aa`/`compare` workload `micro_engine` (`--test --test-case=*Bench*
+  --no-skip`, bench tests builds, n = 11, operations and checksum parity);
+  `check` prints `disk_free_gb` and a building series refuses below 5 GB.
+  See the [benchmark protocol](/tooling/benchmark-protocol.md) and the
+  [unit-test baseline](/project/unit-test-baseline.md) (13 skipped now,
+  nothing else changed).
+* **Probe**: `tests=yes` builds and runs for `template_release`, so
+  `micro_engine` covers both build types.
+* **Mistake**: [benchmark build variants filled the disk](/mistakes/bench-variants-filled-the-disk.md).
+* **Measured** (smoke, i9-14900K, MSVC, n = 5, not floors): one process
+  about 12 s; `hit` at N = 4096 5.6 ns AHashMap StringName, 10.0 ns HashMap
+  StringName, 18-19 ns Dictionary StringName and int, 34 ns Dictionary
+  String; StringName from an existing String 0.42 us. A/A floors median
+  30% on both build types, set by per-case outliers (about 10% of cases
+  per process above 1.3x their median, process medians within 1%).
+
 ## 2026-11-21 (container micro-benchmarks with third-party controls)
 
 * **Added**: `bench.py micro` and `devtools/bench/micro/containers_bench.cpp`

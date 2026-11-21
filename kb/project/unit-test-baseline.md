@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each.
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped.
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -40,6 +40,7 @@ off as old. No full `--test` run of this fork had been recorded before.
 | post-NVIDIA | `bdb3398d56` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 | C++20 (MSVC) | `dev` after `6f3534edba` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 | contracts (MSVC) | `dev` after `c7dc4f6683` | 1564 | 1564 | 0 | 3 | 594947 passed, 0 failed | `SUCCESS!` |
+| bench cases (MSVC) | `dev` after `d43457e8b2` | 1564 | 1564 | 0 | 13 | 594947 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -58,6 +59,7 @@ Doctest summary of the pre-sync run, verbatim:
 | post-NVIDIA | none | | | |
 | C++20 (MSVC) | none | | | |
 | contracts (MSVC) | none | | | |
+| bench cases (MSVC) | none | | | |
 
 The three skipped cases are skipped on purpose in the source, not by this
 build: `Validate tests / Pending tests are skipped`
@@ -94,6 +96,17 @@ StringName, 4 layout reads) and one GDScript script under
 `modules/gdscript/tests/scripts/runtime/fork/`. 1564 cases (1497 plus 67),
 0 failed, the same three skipped and the same three prints; no case that
 passed before fails. Log: `devtools/out/tests/contracts-msvc.log`.
+
+The benchmark cases (`dev` after `d43457e8b2`, plan 02-07) add 10
+`[Bench]` cases in `tests/fork/test_fork_bench_variant_keys.cpp`, every
+one `doctest::skip()` by design: `bench.py` runs them as workload
+`micro_engine` with `--test --test-case="*Bench*" --no-skip` on the bench
+tests builds (see the [benchmark protocol](/tooling/benchmark-protocol.md)).
+So the skipped total grows by 10 and nothing else changes: `--test`
+reports 1564 test cases, 1564 passed, 0 failed, 13 skipped (594947
+assertions, the same as before), and `--test --test-case="*Fork*"` still runs the 67
+`[Fork]` cases (no `[Bench]` name contains "Fork"). `--test
+--test-case="*Bench*"` alone reports 0 passed, 0 failed, 1577 skipped.
 
 # Smoke on the same tree
 

@@ -49,6 +49,14 @@ python devtools/bench/test_bench.py
   `churn` at N = 0 do not apply (no key to find or erase). A comparison prints
   `LAYOUT-SENTINEL` (control rows beyond their floor) and every run prints `RATIO` to the fastest
   matching control. Micro rows never accept or reject a candidate alone.
+- `micro_engine` (an `aa`/`compare` workload) runs the StringName, Variant and Dictionary cases
+  the standalone harness can't link: the `[Bench]` doctest cases of
+  `tests/fork/test_fork_bench_variant_keys.cpp`, skipped in every normal `--test` run, run with
+  `--test --test-case=*Bench* --no-skip` on the bench tests builds (`build.ps1 -Tests -Bench`,
+  binary `bin/godot.windows.<target>.x86_64.bench[.<variant>].tests.exe`), n = 11, one process
+  of about 12 s per sample. Each case is the item `micro_engine/<case>` (`ns_per_op` judged,
+  `allocs` counted); operations and checksum must repeat in every process. Runs on editor and template_release
+  (`tests=yes` builds for both).
 - `--skip-build` reuses the binaries in `bin/` (and the previous build's worktree in
   `devtools/out/bench/wt/<sha7>/`); `--rounds` fixes n; `--budget` is the minutes of measurement
   allowed (default 30); `--floors` is the floors file (default `devtools/bench/floors.json`).

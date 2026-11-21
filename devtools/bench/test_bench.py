@@ -315,6 +315,39 @@ class Micro(unittest.TestCase):
             bench.micro_rows({**result, "output": output + "BENCH_FAIL: correctness check\n", "returncode": 2})
 
 
+class MicroEngine(unittest.TestCase):
+    LINE = "BENCH: workload=micro_engine case=dict_sname_hit_16 ns_per_op=19.5 operations=131072 allocs=0 checksum=99"
+
+    def test_cases_are_items_with_ns_per_op_and_allocs(self):
+        result = {"output": self.LINE + "\n", "returncode": 0, "timed_out": False, "peak_ws_bytes": 1 << 20,
+                  "wall_s": 1}
+        fields = bench.process_fields("micro_engine", "micro_engine", result, {})
+        self.assertEqual(fields["micro_engine/dict_sname_hit_16"][0]["ns_per_op"], "19.5")
+        d = bench.item_def("micro_engine", "micro_engine", [], "micro_engine/dict_sname_hit_16")
+        self.assertEqual((d["metrics"], d["counts"]), (("ns_per_op",), ("allocs",)))
+
+    def test_parity_stops_a_series_whose_work_changed(self):
+        refs = {}
+        fields = {"operations": "131072", "checksum": "99", "ns_per_op": "19.5"}
+        bench.engine_parity(refs, "micro_engine/x", fields, bench.MICRO_ENGINE_PARITY)
+        bench.engine_parity(refs, "micro_engine/x", {**fields, "ns_per_op": "20.1"}, bench.MICRO_ENGINE_PARITY)
+        with self.assertRaisesRegex(RuntimeError, "different work"):
+            bench.engine_parity(refs, "micro_engine/x", {**fields, "checksum": "98"}, bench.MICRO_ENGINE_PARITY)
+
+    def test_runs_the_skipped_cases_of_the_tests_build(self):
+        self.assertIn("--no-skip", bench.WORKLOADS["micro_engine"]["command"]("x.exe", [], {}))
+        self.assertTrue(bench.is_tests("micro_engine"))
+        self.assertFalse(bench.is_tests("scene"))
+
+    @unittest.skipUnless(bench.osb is not None and bench.os.name == "nt", "Windows adapter")
+    def test_tests_build_arguments(self):
+        self.assertIn("-Tests", bench.osb.build_args("editor", "aa", None, None, True))
+        args = bench.osb.scons_args("editor", "aa", None, True)
+        self.assertIn("extra_suffix=bench.aa.tests", args)
+        self.assertIn("tests=yes", args)
+        self.assertNotIn("tests=yes", bench.osb.scons_args("editor", "aa"))
+
+
 @unittest.skipUnless(bench.osb is not None and bench.os.name == "nt", "Windows adapter")
 class TypeperfParsing(unittest.TestCase):
     def test_only_sample_values_are_kept(self):

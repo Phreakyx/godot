@@ -47,6 +47,7 @@ MAX_LOAD_PCT = 10.0  # mean % Processor Utility of the bench CPUs before a serie
 CLOCK_TOLERANCE = 0.05  # rounds this far off the series median clock are flagged (D-14)
 GAME_WORKERS = 14  # the worker pool cap of the bench project (D-12)
 UNAVAILABLE = "unavailable"
+MIN_BUILD_FREE_GB = 5.0  # a build that fills the disk fails at the link (LNK1106) and can't write its logs
 # Metrics judged per scene sample: one from the BENCH line, one from the OS.
 SCENE_METRICS = ("frame_ms_p50", "peak_ws_mb")
 
@@ -502,6 +503,22 @@ def level_command(exe, params, ctx):
             f"--frames={LEVEL_FRAMES}", f"--robots={LEVEL_ROBOTS}"]
 
 
+MICRO_ENGINE_PARITY = ("operations", "checksum")  # the same work in every process of a series, as in micro
+
+
+def micro_engine_command(exe, params, ctx):
+    # The [Bench] doctest cases of tests/fork/test_fork_bench_variant_keys.cpp; skipped in every other run.
+    return [str(exe), "--test", "--test-case=*Bench*", "--no-skip"]
+
+
+def engine_parity(refs, item, fields, names):
+    """Stop the series unless a case does the work its first process did (every binary, every round)."""
+    seen = {name: fields.get(name) for name in names}
+    first = refs.setdefault(item, seen)
+    if first != seen:
+        raise RuntimeError(f"{item} ran different work: {first} then {seen}")
+
+
 def _editor_json(ctx):
     return ctx["out"] / "editor_startup" / f"{ctx['label']}-{ctx['round']}.json"
 
@@ -528,8 +545,10 @@ SCENE_COUNTS = ("allocs", "reallocs")  # bench builds only (fork/alloc_count); j
 # name -> definition. metrics: judged per process, the time metric first; counts: allocation counts;
 # cases: the process prints one BENCH line per case, each its own item <spec>/<case> with case_metrics and
 # case_counts; info: printed and stored, never judged; builds: the build types it runs on (others read n/a);
-# costly: n = 5 whatever the cold round takes; editor_mode: starts 32 workers whatever the project says (D-12
-# exception), so the count is recorded, not checked.
+# costly: n = 5 whatever the cold round takes; rounds: n whatever the cold round takes; editor_mode: starts 32
+# workers whatever the project says (D-12 exception), so the count is recorded, not checked; workers: False for a
+# process with no game (no worker check); tests_build: runs the bench tests build (bench[.<variant>].tests);
+# parity: case fields every process must repeat.
 WORKLOADS = {
     "scene": {"command": scene_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS},
     "script": {"command": script_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS},
@@ -538,6 +557,10 @@ WORKLOADS = {
     "editor_startup": {"command": editor_command, "metrics": ("wall_ms", "peak_ws_mb"), "counts": (),
                        "info": ("main_start_ms", "first_scan_ms"), "read": editor_fields, "bench_line": False,
                        "builds": ("editor",), "costly": True, "editor_mode": True},
+    # BENCH-04 keys the standalone harness can't link (StringName, Variant, Dictionary), in the engine (02-07).
+    "micro_engine": {"command": micro_engine_command, "metrics": ("peak_ws_mb",), "counts": (), "cases": True,
+                     "case_metrics": ("ns_per_op",), "case_counts": ("allocs",), "rounds": 11, "workers": False,
+                     "tests_build": True, "parity": MICRO_ENGINE_PARITY},
     # D-09: load and CPU frame times are judged; GPU time and the wall frame time are stored, never judged.
     "level": {"command": level_command,
               "metrics": ("main_ms_p50", "instance_ms", "load_ms", "peak_ws_mb", "render_cpu_ms_p50"),
@@ -632,6 +655,10 @@ def runs_on(name, build):
     return build in WORKLOADS.get(name, {}).get("builds", (build,))  # micro is not in WORKLOADS
 
 
+def is_tests(name):
+    return bool(WORKLOADS.get(name, {}).get("tests_build"))
+
+
 # --- machine checks (D-13: read, refuse with the fix, never change) ---
 
 
@@ -662,6 +689,7 @@ def run_checks(mask, max_load):
         except (RuntimeError, OSError) as error:
             problems.append(str(error))
     values["game_mode"] = probe(osb.game_mode)
+    values["disk_free_gb"] = round(shutil.disk_usage(ROOT).free / 1e9, 1)
     return values, problems
 
 
@@ -718,12 +746,19 @@ def run_series(args, sides):
         raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
     if mode == "compare":
         sides[0]["root"] = ensure_worktree(sides[0]["commit"], not args.skip_build)
+    # (build type, tests build) pairs some workload runs on: micro_engine runs the bench tests build.
+    kinds = sorted({(b, is_tests(name)) for _, name, _ in workloads for b in builds if runs_on(name, b)})
+    if not args.skip_build and checks["disk_free_gb"] < MIN_BUILD_FREE_GB:
+        raise RuntimeError(f"{checks['disk_free_gb']} GB free on the repository's disk, below {MIN_BUILD_FREE_GB} GB:"
+                           " a bench variant writes about 3 GB of objects and a 0.7 GB pdb; delete the objects"
+                           " (bin/obj/**/*.<variant>.obj) of variants you no longer need")
     if not args.skip_build:
-        for build in builds:
+        for build, tests in kinds:
             for side in sides:
                 source_root = side["root"] if side["root"] != ROOT else None
-                osb.build(build, side["variant"], side["defines"], source_root)
-    exes = {(b, s["label"]): osb.engine_exe(b, s["suffix"], s["root"]) for b in builds for s in sides}
+                osb.build(build, side["variant"], side["defines"], source_root, tests)
+    exes = {(b, s["label"], t): osb.engine_exe(b, s["suffix"] + (".tests" if t else ""), s["root"])
+            for b, t in kinds for s in sides}
     missing = [str(exe.relative_to(ROOT)) for exe in exes.values() if not exe.is_file()]
     if missing:
         raise RuntimeError(f"Missing {', '.join(missing)}; run without --skip-build")
@@ -746,13 +781,13 @@ def run_series(args, sides):
         "runner_args": vars(args),
         "binaries": [  # round-1 order
             {
-                "build": build, "label": s["label"], "exe": exes[build, s["label"]].name, "commit": s["commit"],
+                "build": build, "label": s["label"], "exe": exes[build, s["label"], tests].name, "commit": s["commit"],
                 "build_ps1_args": osb.build_args(build, s["variant"], s["defines"],
-                                                 "<worktree>" if s["root"] != ROOT else None),
-                "scons_args": osb.scons_args(build, s["variant"], s["defines"]),
+                                                 "<worktree>" if s["root"] != ROOT else None, tests),
+                "scons_args": osb.scons_args(build, s["variant"], s["defines"], tests),
                 "cppdefines": osb.bench_defines(s["defines"]),
             }
-            for build in builds
+            for build, tests in kinds
             for s in sides
         ],
     }
@@ -766,6 +801,7 @@ def run_series(args, sides):
     # item label -> (spec, name, params, item_def): every workload's process item, plus the cases found.
     items = {spec: (spec, name, params, item_def(spec, name, params, spec)) for spec, name, params in workloads}
     expected = {}  # spec -> the case items its cold round printed (multi-case workloads)
+    parity = {}  # case item -> the parity fields of its first process
 
     def row(rnd, position, label, build, name, case, metric, value, failed, reason, result, wall):
         return {
@@ -783,6 +819,8 @@ def run_series(args, sides):
         for item, (item_fields, reason) in fields.items():
             d = item_def(spec, name, params, item)
             items.setdefault(item, (spec, name, params, d))
+            if item != spec and item_fields is not None and "parity" in WORKLOADS[name]:
+                engine_parity(parity, item, item_fields, WORKLOADS[name]["parity"])
             for metric, (value, why) in metric_values(item_fields, reason, d["metrics"]).items():
                 raw.append(row(rnd, position, label, build, name, d["case"], metric,
                                "" if value is None else repr(value), int(value is None), why or "", result, wall))
@@ -823,7 +861,7 @@ def run_series(args, sides):
                 for label in order:
                     position += 1
                     call = {**ctx, "label": label, "round": f"r{rnd}"}
-                    command = WORKLOADS[name]["command"](exes[build, label], params, call)
+                    command = WORKLOADS[name]["command"](exes[build, label, is_tests(name)], params, call)
                     start = time.perf_counter()
                     result = osb.run_pinned(command, ROOT, mask, TIMEOUT_S)
                     wall = time.perf_counter() - start
@@ -851,13 +889,15 @@ def run_series(args, sides):
     # D-12: game runs must start GAME_WORKERS workers; editor-mode runs start 32 and are recorded only.
     found = {False: {}, True: {}}
     for editor_mode in found:
-        first = next((w for w in workloads if bool(WORKLOADS[w[1]].get("editor_mode")) == editor_mode), None)
+        first = next((w for w in workloads if bool(WORKLOADS[w[1]].get("editor_mode")) == editor_mode
+                      and WORKLOADS[w[1]].get("workers", True)), None)
         if first is None:
             continue
         spec, name, params = first
         for b in (b for b in builds if runs_on(name, b)):
             for s in labels:
-                command = WORKLOADS[name]["command"](exes[b, s], params, {**ctx, "label": s, "round": "workers"})
+                command = WORKLOADS[name]["command"](exes[b, s, is_tests(name)], params,
+                                                     {**ctx, "label": s, "round": "workers"})
                 found[editor_mode][f"{b}/{s}"] = worker_count(command, mask)
         print(f"WORKERS {spec}: {', '.join(f'{k}={v}' for k, v in found[editor_mode].items())}")
     meta["workers"] = found[False]
@@ -874,7 +914,8 @@ def run_series(args, sides):
     def costly(spec, name):
         return WORKLOADS[name].get("costly") or cold_s.get(spec, 0.0) >= CHEAP_S
 
-    n_of = {spec: args.rounds or (5 if costly(spec, name) else plan_rounds(cold_s.get(spec, 0.0)))
+    n_of = {spec: args.rounds or WORKLOADS[name].get("rounds")
+            or (5 if costly(spec, name) else plan_rounds(cold_s.get(spec, 0.0)))
             for spec, name, _ in workloads}
     print(f"\nPLAN {'workload':28} {'s/process':>9} {'class':>6} {'n':>3} {'k':>3} {'processes':>9} {'minutes':>7}")
     total = 0.0

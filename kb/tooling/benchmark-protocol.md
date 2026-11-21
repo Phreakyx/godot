@@ -27,6 +27,9 @@ sources:
   - id: containers-bench
     resource: ../../devtools/bench/micro/containers_bench.cpp
     title: The container micro-benchmark harness (bench.py micro)
+  - id: micro-engine-cases
+    resource: ../../tests/fork/test_fork_bench_variant_keys.cpp
+    title: The in-engine StringName and Variant-key cases (workload micro_engine)
   - id: unordered-dense
     resource: https://github.com/martinus/unordered_dense/tree/7c58a8b7a48e790fe72f6508eb3b46317cbba9d5
     title: ankerl::unordered_dense v5.3.3 (MIT; micro control, fetched, never vendored)
@@ -347,7 +350,7 @@ diagnostics are stubbed, and any diagnostic fails the run.
   `copy` (Vector copies are detached with `ptrw()`). N = 0, 1, 16, 256,
   4096, 32768, 1048576. Plus `string_copy_detach_16`/`_128` and
   `hash_bytes_8` to `_65536` from the old harness. StringName and Variant
-  keys need the engine and run in-engine (02-07).
+  keys need the engine: see the next section (`micro_engine`).
 - **Work per case.** About 2^17 element operations: lookups, iterations
   and erases repeat over small containers; at large N, lookups and erases
   touch 2^17 keys of the container (in query order) and churn swaps 2^15
@@ -400,6 +403,78 @@ diagnostics are stubbed, and any diagnostic fails the run.
   none and is never read as a result.
 - The old driver `devtools/test/core_templates_bench.py` stays until 02-13.
 
+# Micro tier in the engine: StringName and Variant keys (`micro_engine`)
+
+The standalone harness can't link StringName, Variant or Dictionary (they
+need the engine), so those cases are doctest cases in
+`tests/fork/test_fork_bench_variant_keys.cpp`, run by `aa` and `compare`
+as the workload `micro_engine`.
+
+- **Skipped everywhere else.** Each of the 10 cases is `TEST_CASE("[Bench]
+  <name>" * doctest::skip())`, and no name contains "Fork": `--test` and
+  the `*Fork*` contract runs count them as skipped and run none of them
+  ([unit-test baseline](/project/unit-test-baseline.md)).
+- **Builds.** The bench tests builds: `build.ps1 -Tests -Bench`
+  (`extra_suffix=bench.tests`, `FORK_ALLOC_COUNTERS=1`), `-Variant aa`
+  (`bench.aa.tests`) for `aa`, `-Variant <name>` for the candidate of
+  `compare`; `bench.py` builds them unless `--skip-build`. A series that
+  mixes `micro_engine` with game workloads builds and runs both kinds.
+- **Run.** One process per sample runs every case: the real exe with
+  `--test --test-case=*Bench* --no-skip`, pinned like every workload, one
+  discarded cold round, then n = 11 rounds (fixed, whatever the cold round
+  takes; `--rounds` overrides), alternating order. No worker-count check
+  (no game runs). One process takes about 12 s, of which about 2.5 s are
+  timed; the rest builds the 2^20 keys of each case.
+- **Items.** Each case prints `BENCH: workload=micro_engine case=<name>
+  ns_per_op=... operations=... allocs=... checksum=...` and is the item
+  `micro_engine/<name>`: `ns_per_op` is judged (`FLOOR` in `aa`,
+  `VERDICT` in `compare`), `allocs` (Godot allocations in the timed
+  region) goes through the count rule (`COUNTS`), and the process item
+  `micro_engine` has `peak_ws_mb`. Operations and checksum must repeat in
+  every process of the series, every binary and round (`engine_parity`);
+  otherwise the series stops. A failed `CHECK` fails the process (exit
+  code), and with it every case of that sample.
+- **Matrix.** Names follow the standalone harness,
+  `<container>_<key>_<op>_<N>`: `hashmap_sname`, `ahashmap_sname`
+  (`HashMap`/`AHashMap<StringName, int>`), `hashmap_variant`
+  (`HashMap<Variant, Variant>` with Vector2 keys), `dict_str`,
+  `dict_sname`, `dict_i64`, `dict_variant` (Dictionary with String,
+  StringName, int and Vector2 keys); ops `insert` (`set()` for
+  Dictionary), `hit` (`getptr()`), `miss` (`has()`), `erase`, `iterate`,
+  `copy` (`duplicate()` for Dictionary, whose copy only shares); N = 0, 1,
+  16, 256, 4096, 32768, 1048576, the same work per case as the standalone
+  harness (about 2^17 element operations). Left out as there: `copy` at
+  N = 1048576 and `hit` at N = 0. Plus `sname_from_string_<N>`,
+  `sname_from_cstr_<N>` (a StringName made from a String or a C string
+  of one of N existing names, destruction included) and
+  `sname_compare_<N>` (two names in query order), N = 1 to 1048576:
+  280 + 18 = 298 cases.
+- **Release coverage.** `tests=yes` builds for `template_release` too
+  (probe of 02-07, `build.ps1 -Tests -Bench -Target template_release`,
+  4.1 min, `bin/godot.windows.template_release.x86_64.bench.tests.exe`): it
+  runs the 10 cases (10 passed, 0 failed; 1554 cases in that binary, the
+  editor-only tests are not built in it), so `micro_engine` runs on both
+  build types and `aa --builds template_release` prints a `FLOOR` per case
+  (299 lines in the probe series). Each new tests variant takes about 3 GB
+  of objects and a 0.7 GB pdb; see [the disk-full mistake](/mistakes/bench-variants-filled-the-disk.md).
+- **First series** (smoke, i9-14900K, MSVC, n = 5, not floors): editor at
+  the default `--max-load` (bench CPUs 7.9% busy), template_release with
+  `--max-load 50` (10.9%). Every process ran 298 cases, identical
+  operations and checksums and identical allocation counts in every
+  process (298 `COUNTS ... identical`). Control medians on the editor
+  build at N = 4096: `hit` 5.6 ns AHashMap StringName, 10.0 ns HashMap
+  StringName, 18-19 ns Dictionary StringName and int, 21 ns
+  `HashMap<Variant, Variant>` and 23 ns Dictionary with Vector2 keys,
+  34 ns Dictionary String; StringName from an existing String 0.42 us
+  (0.77 us at 1M names, one global table), comparison 1.1 ns.
+  Floors (largest of 5 paired differences): median 30% on both build
+  types. The process medians of all cases agree within 1%, but about 10%
+  of the cases in each process read more than 1.3x their median, spread
+  over all processes and sizes; one such case in one round sets the
+  floor. 02-10 measures the floors at n = 11 and decides whether the
+  cases need longer timed regions (now about 2^17 operations, 0.1 to
+  14 ms).
+
 # Budget (D-03)
 
 At most 30 minutes of measurement per compiler (MSVC; GCC and Clang each),
@@ -449,6 +524,7 @@ python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" 
     --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
 python devtools/bench/bench.py micro --aa --write-floors
 python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
+python devtools/bench/bench.py aa --workloads micro_engine --write-floors
 ```
 
 `micro` takes `--aa` or `--prev`, and `--name`, `--defines`, `--target`
@@ -473,6 +549,14 @@ import cache takes about 1.5 GB in `devtools/out/bench/src/tps-demo/`.
 The micro controls take about 0.5 GB in `devtools/out/bench/src/` (Boost:
 the 73 MB archive and its 443 MB, 49,000-file tree); a micro series keeps
 its side builds in `<series>/build/`.
+
+`check` prints `disk_free_gb` (free space on the repository's disk), and
+a series that builds refuses below 5 GB (`MIN_BUILD_FREE_GB`): a full disk
+fails the link with LNK1106 and cuts the series' own logs short
+([the disk-full mistake](/mistakes/bench-variants-filled-the-disk.md)). A
+tests variant (`micro_engine`) adds about 3 GB of objects (2.1 GB for
+template_release) and a 0.5-0.65 GB pdb; the objects of a linked variant
+can be deleted when it won't be rebuilt soon.
 
 # Lessons this protocol applies
 

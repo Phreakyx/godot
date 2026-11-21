@@ -292,8 +292,8 @@ def acquire_lock(path):
     return handle
 
 
-def build_args(target, variant, defines=None, source_root=None):
-    args = ["-Bench", "-Target", target]
+def build_args(target, variant, defines=None, source_root=None, tests=False):
+    args = ["-Bench", "-Target", target] + (["-Tests"] if tests else [])
     if variant:
         args += ["-Variant", variant]
     if defines:
@@ -303,10 +303,11 @@ def build_args(target, variant, defines=None, source_root=None):
     return args
 
 
-def scons_args(target, variant, defines=None):
+def scons_args(target, variant, defines=None, tests=False):
     """The SCons arguments of build.ps1 -Bench (kept in step with Invoke-Scons there), for meta.json."""
-    suffix = ".".join(part for part in ("bench", variant) if part)
-    args = [f"target={target}", "production=yes", "debug_symbols=yes", "disable_path_overrides=no"]
+    suffix = ".".join(part for part in ("bench", variant, "tests" if tests else None) if part)
+    args = [f"target={target}", "production=yes"] + (["tests=yes", "object_prefix=t_"] if tests else [])
+    args += ["debug_symbols=yes", "disable_path_overrides=no"]
     args = ["platform=windows"] + args + [f"extra_suffix={suffix}"]
     return args + [f"cppdefines={bench_defines(defines)}"]
 
@@ -316,11 +317,11 @@ def bench_defines(defines=None):
     return " ".join(part for part in ("FORK_ALLOC_COUNTERS=1", defines) if part)
 
 
-def build(target, variant, defines=None, source_root=None):
+def build(target, variant, defines=None, source_root=None, tests=False):
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "devtools/build/build.ps1"]
-    result = subprocess.run(command + build_args(target, variant, defines, source_root), cwd=ROOT)
+    result = subprocess.run(command + build_args(target, variant, defines, source_root, tests), cwd=ROOT)
     if result.returncode:
-        shown = build_args(target, variant, defines, "<worktree>" if source_root else None)
+        shown = build_args(target, variant, defines, "<worktree>" if source_root else None, tests)
         raise RuntimeError(f"Build failed: build.ps1 {' '.join(shown)}")
 
 
