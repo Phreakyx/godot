@@ -190,6 +190,8 @@ reads a live String and PackedInt32Array header with the C# offsets
 (refcount 1, then 2 after a copy; capacity at least size; size is
 `length() + 1` for String, 5 for 5 elements) and finds Vector's data
 pointer right after its write proxy. Only 64-bit targets are checked.
+On Linux (GCC and Clang, 2026-11-21) the asserts compile and the
+layout reads pass with `DATA_OFFSET` 32 ([Linux builds](/project/linux-build.md)).
 
 When upstream changes the CowData header or these structs, update the C#
 structs, the formula and the asserts together; the release notes then say

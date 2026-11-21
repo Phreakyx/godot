@@ -41,8 +41,9 @@ Write-Host "Editor: $(& $editor --version 2>$null)"
 
 if (Test-Path (Join-Path $PhysXExample "project.godot")) {
 	$physxCheck = { param($l) $m = $l | Where-Object { $_ -match "PhysX 5.*initialized" } | Select-Object -First 1; if ($m) { $m.Trim() } else { "missing 'PhysX ... initialized'" } }
-	Run-Test "PhysX, game" @("--verbose", "--path", $PhysXExample, "--quit-after", "600") $physxCheck
+	# The editor first: it writes the global class cache a fresh clone lacks, without which the game fails to parse its scripts.
 	Run-Test "PhysX, editor" @("--editor", "--verbose", "--path", $PhysXExample, "--quit-after", "600") $physxCheck
+	Run-Test "PhysX, game" @("--verbose", "--path", $PhysXExample, "--quit-after", "600") $physxCheck
 } else {
 	Write-Host "SKIP  PhysX tests: no example project at $PhysXExample" -ForegroundColor Yellow
 }

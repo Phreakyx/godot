@@ -62,3 +62,5 @@ What worked is in [successes](/successes/).
 * [Benchmark build variants filled the disk](/mistakes/bench-variants-filled-the-disk.md) - check `disk_free_gb` before building variants (about 4 GB each); delete objects of linked variants
 * [A profile ran a different command than its workload](/mistakes/profile-command-differs-from-workload.md) - profile with the measured command; check a summary's top directories are the workload's work
 * [A version name change didn't reach the exe after an incremental build](/mistakes/version-name-incremental-build.md) - after changing version info in methods.py, delete the objects that use core/version.h (editor and tests builds); check the name in the output
+* [A Linux build disk kept as an ext4 image on the NTFS drive](/mistakes/ext4-image-on-ntfs-build-disk.md) - Linux builds go on a real Linux partition, never an image file or mount on NTFS
+* [An option list in a zsh variable reached the command as one argument](/mistakes/zsh-unquoted-args-not-split.md) - loops that keep options in a variable run under bash, or use an array

@@ -1331,7 +1331,7 @@ public:
 
 	void _update_planar_reflection_data(Scenario *p_scenario);
 	void _render_mirror(const RendererSceneRender::CameraData &p_camera_data, const Ref<RenderSceneBuffers> &p_render_buffers, RID p_environment, RID p_camera_attributes, uint32_t p_visible_layers, RID p_scenario, RID p_viewport, Size2 p_viewport_size, RID p_shadow_atlas, float p_screen_mesh_lod_threshold, float p_window_output_max_value);
-	virtual void free_mirror_views() override;
+	virtual void free_mirror_views(); // No override: the class marks none, and one makes Clang warn on every other.
 	void render_camera(const Ref<RenderSceneBuffers> &p_render_buffers, RID p_camera, RID p_scenario, RID p_viewport, Size2 p_viewport_size, uint32_t p_jitter_phase_count, float p_screen_mesh_lod_threshold, RID p_shadow_atlas, float p_window_output_max_value, RenderingServerTypes::RenderInfo *r_render_info = nullptr);
 	void update_dirty_instances() const;
 

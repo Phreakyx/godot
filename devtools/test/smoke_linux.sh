@@ -79,8 +79,9 @@ run_test() { # run_test binary name extra-args...
 
 for bin in "${binaries[@]}"; do
 	echo "Editor: $bin ($("$bin" --version 2> /dev/null | head -n 1))"
-	run_test "$bin" "PhysX, game"
+	# The editor first: it writes the global class cache a fresh clone lacks, without which the game fails to parse its scripts.
 	run_test "$bin" "PhysX, editor" --editor
+	run_test "$bin" "PhysX, game"
 done
 
 if [ "$failed" -gt 0 ]; then

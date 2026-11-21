@@ -147,6 +147,12 @@ Update this table after every sync. A source without new commits is written
 
 diginaat `13e860dfbe` checked 2026-11-19: nothing taken (README commits only).
 
+Linux check 2026-11-21 (`7b81582fab`): GCC 16.2.1, Clang 23.1.5 on CachyOS:
+build, tests and smoke passed, after a GCC-only test compile fix, a fix for
+a flood of Clang override warnings, and running the smoke's editor check
+before its game check
+([kb/project/linux-build.md](kb/project/linux-build.md)).
+
 ### History layout
 
 The history was rebuilt on 2026-10-09 so that each source stays visible
@@ -465,8 +471,11 @@ when the module's `build_physx.py` pin, patches or presets change.
 
 Linux builds run on CachyOS, dual-booted on the same PC as the Windows
 builds, so Windows and Linux numbers come from the same hardware. Clone the
-repository onto the Linux file system, not an NTFS mount (slow, unreliable
-builds; the setup script warns). Then:
+repository onto a Linux partition, not an NTFS mount (slow, unreliable
+builds; the setup script warns) and not an image file kept on NTFS (I/O
+errors mid-build; the script can't see it, see
+[kb/mistakes/ext4-image-on-ntfs-build-disk.md](kb/mistakes/ext4-image-on-ntfs-build-disk.md)).
+Then:
 
 ```bash
 devtools/setup/setup_dev_cachyos.sh --install-deps --build
@@ -484,9 +493,13 @@ scons platform=linuxbsd target=editor production=yes use_llvm=yes linker=lld tes
 scons platform=linuxbsd target=editor dev_build=yes tests=yes                          # GCC, DEV_ASSERT compiled in
 ```
 
-Run the tests with `bin/godot.linuxbsd.editor.x86_64.tests --test` (and the
-`.llvm.tests` and `.dev` binaries), and the smoke test with
-`devtools/test/smoke_linux.sh`.
+Run the tests with `bin/godot.linuxbsd.editor.x86_64.tests --test`,
+`bin/godot.linuxbsd.editor.x86_64.llvm.tests --test` and
+`bin/godot.linuxbsd.editor.dev.x86_64 --test --test-case="*Fork*"` (the
+dev build has no `.tests` in its name), and the smoke test with
+`devtools/test/smoke_linux.sh`. On Linux `production=yes` turns on LTO
+(full with GCC, thin with Clang), so the GCC builds take long; MSVC builds
+keep LTO off.
 
 CachyOS is rolling. While a measurement series runs, hold the compilers in
 `/etc/pacman.conf` (`IgnorePkg = gcc gcc-libs clang llvm llvm-libs lld`), so

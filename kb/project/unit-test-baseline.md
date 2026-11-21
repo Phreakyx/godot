@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10).
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10); contracts (GCC) and (Clang) on CachyOS 1570/1570 with 9 skipped, [Fork] 67/67 on GCC, Clang and the GCC dev build.
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -41,6 +41,9 @@ off as old. No full `--test` run of this fork had been recorded before.
 | C++20 (MSVC) | `dev` after `6f3534edba` | 1497 | 1497 | 0 | 3 | 594617 passed, 0 failed | `SUCCESS!` |
 | contracts (MSVC) | `dev` after `c7dc4f6683` | 1564 | 1564 | 0 | 3 | 594947 passed, 0 failed | `SUCCESS!` |
 | bench cases (MSVC) | `dev` after `d43457e8b2` | 1564 | 1564 | 0 | 13 | 594947 passed, 0 failed | `SUCCESS!` |
+| contracts (GCC) | `7b81582fab` + fix | 1570 | 1570 | 0 | 9 | 595031 passed, 0 failed | `SUCCESS!` |
+| contracts (Clang) | `7b81582fab` + fix | 1570 | 1570 | 0 | 9 | 595022 passed, 0 failed | `SUCCESS!` |
+| fork tests (GCC dev) | `7b81582fab` + fix | 67 | 67 | 0 | 1512 | 329 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -60,6 +63,9 @@ Doctest summary of the pre-sync run, verbatim:
 | C++20 (MSVC) | none | | | |
 | contracts (MSVC) | none | | | |
 | bench cases (MSVC) | none | | | |
+| contracts (GCC) | none | | | |
+| contracts (Clang) | none | | | |
+| fork tests (GCC dev) | none | | | |
 
 The three skipped cases are skipped on purpose in the source, not by this
 build: `Validate tests / Pending tests are skipped`
@@ -112,6 +118,15 @@ AHashMap and Dictionary, one name set for the three StringName
 operations; the same 298 `BENCH` lines): `--test --test-case="*Bench*"`
 now reports 1573 skipped, and with `--no-skip` 6 passed, so the full
 `--test` skips 9 instead of 13.
+
+The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
+the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
+builds, at `7b81582fab` plus the `-> uint64_t` fix in
+`tests/core/templates/test_hash_set.cpp` that GCC needed. They have six
+more cases than MSVC, upstream's `[UDSServer]` cases (built only with
+`UNIX_ENABLED`); the same nine are skipped. `--test-case="*Fork*"` runs the
+67 `[Fork]` cases on GCC, Clang and the GCC `dev_build=yes` build
+(`DEV_ASSERT` compiled in): 67 passed, 329 assertions each.
 
 # Smoke on the same tree
 

@@ -86,7 +86,10 @@ for the flag change: 2391 files):
 No new warning code and no count change: MSVC at the default warning
 level reports none of the C++20 deprecations (enum arithmetic between
 different enums, implicit `this` capture with `[=]`, `volatile` compound
-assignment). GCC and Clang may; they are checked in the Linux session.
+assignment). On Linux, GCC 16 and Clang 23 report one of them, implicit
+`this` capture, at the same 17 lambdas in
+`modules/godot_physx/godot_physx_server_3d.cpp` (review WR-06, left open
+in the vendored module); see [Linux builds](/project/linux-build.md).
 
 # Tests and smoke
 

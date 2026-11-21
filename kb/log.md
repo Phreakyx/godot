@@ -1,5 +1,22 @@
 # Update log
 
+## 2026-11-21 (Linux builds, tests and smoke)
+
+* **Added**: [Linux builds](/project/linux-build.md): on CachyOS (same
+  PC), `7b81582fab` builds with GCC 16.2.1 and Clang 23.1.5 (all five
+  builds, all eight PhysX SDK patches), `--test` passes 1570/1570 on both
+  (six more upstream `[UDSServer]` cases than MSVC), `[Fork]` 67/67 on
+  GCC, Clang and the dev build, smoke 4/4. Rows in the
+  [unit-test baseline](/project/unit-test-baseline.md); the C++20 `[=]`
+  deprecation (WR-06, 17 lambdas in godot_physx) confirmed on both.
+* **Fixed**: GCC test compile error in `test_hash_set.cpp` (`uint64_t` is
+  `unsigned long` on Linux); 762 Clang override warnings from one
+  `override` in `renderer_scene_cull.h`; both smoke scripts run the editor
+  check first, so a fresh example clone gets its class cache.
+* **Added**: mistakes
+  [an ext4 image on NTFS as the build disk](/mistakes/ext4-image-on-ntfs-build-disk.md)
+  and [zsh does not split an option string](/mistakes/zsh-unquoted-args-not-split.md).
+
 ## 2026-11-21 (Linux adapter of the benchmark runner)
 
 * **Added**: `devtools/bench/bench_linux.py`, the Linux half of
