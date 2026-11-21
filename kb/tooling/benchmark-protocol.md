@@ -108,8 +108,8 @@ the candidate wins at least k of n rounds, k from the one-sided sign test
 
 n = 10 is no better than n = 11 (both need 9 wins).
 
-**Regression (every other workload, and peak memory everywhere, D-06).**
-Time or OS peak memory regresses when the median paired difference is
+**Regression (every other workload, a target that is not faster, and peak
+memory everywhere, D-06).** Time or OS peak memory regresses when the median paired difference is
 slower or bigger than the floor and the candidate loses at least k of n
 rounds. Allocation counts are deterministic once the A/A run shows two
 same-source builds give identical counts: then **any allocation-count
@@ -739,8 +739,9 @@ Options of `aa` and `compare`: `--workloads`, `--builds` (default
 `--max-load`, `--skip-build` (reuse the binaries), `--out`, and on Linux
 `--counters`. `compare` adds
 `--name` (the candidate's `build.ps1 -Variant`, binary `bench.<name>`),
-`--defines`, `--prev` (required) and `--target` (the workloads judged by
-the accept rule; the others get the regression rule). Later plans add
+`--defines`, `--prev` (required) and `--target` (the workloads, or single
+cases such as `micro/<case>` or `gdbench/<case>`, judged by the accept
+rule; the others get the regression rule). Later plans add
 their workloads and options to [the runner README](../../devtools/bench/README.md).
 
 # Disk

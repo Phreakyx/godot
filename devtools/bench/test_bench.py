@@ -38,6 +38,7 @@ class Verdict(unittest.TestCase):
 
     def test_other_regression(self):
         self.assertEqual(bench.verdict([0.05] * 5, FLOOR, False), "REGRESSION")
+        self.assertEqual(bench.verdict([0.05] * 5, FLOOR, True), "REGRESSION")  # a slower target too (review CR-02)
 
     def test_other_equal_memory_is_not_a_regression(self):
         self.assertEqual(bench.verdict([0.0] * 5, FLOOR, False), "WITHIN-NOISE")
@@ -528,6 +529,27 @@ class LinuxPerf(unittest.TestCase):
         for flag in ("-O2", "-std=gnu++20", "-fno-rtti", "-DDEBUG_ENABLED", "-DTOOLS_ENABLED", "-DLINUXBSD_ENABLED",
                      "-DUNIX_ENABLED", "-DFORK_ALLOC_COUNTERS=1", "-DBENCH_CONTROLS"):
             self.assertIn(flag, gcc)
+
+    def test_micro_target_names_one_case(self):
+        # Review CR-01: micro items share the spec "micro"; --target micro/<case> must reach the accept rule.
+        meta = {"msvc_toolset": "v", "compiler_version": "v", "bios": "b", "microcode": "m", "os_build": "1.1"}
+        d = {"case": "x", "metrics": ("ns_per_op",), "counts": (), "info": (), "time": "ns_per_op"}
+        items = [("micro/x", ("micro", "micro", [], d)), ("micro/y", ("micro", "micro", [], {**d, "case": "y"}))]
+        with tempfile.TemporaryDirectory() as tmp:
+            floors = Path(tmp) / "floors.json"
+            floors.write_text(bench.json.dumps({bench.floor_key("micro", c, "ns_per_op", bench.MICRO_BUILD, bench.COMPILER): {
+                "floor": 0.01, "n": 5, "compiler_version": "v", "bios": "b", "microcode": "m", "os_build": "1.1"}
+                for c in ("x", "y")}))
+            args = type("Args", (), {"floors": str(floors), "target": "micro/x"})()
+            values = {(item, "ns_per_op", bench.MICRO_BUILD, label): {r: 10.0 * (0.5 if label == "candidate" else 1.0)
+                                                                     for r in range(1, 6)}
+                      for item, _ in items for label in ("previous", "candidate", "control")}
+            rows = bench.summarize_compare(args, items, [bench.MICRO_BUILD], values, {"micro": 5}, meta)
+        self.assertEqual([row["verdict"] for row in rows], ["ACCEPT", "WITHIN-NOISE"])
+
+    def test_negative_counts_are_values(self):
+        self.assertEqual(bench.count_values({"allocs": "-3", "reallocs": "x"}, ("allocs", "reallocs")),
+                         {"allocs": -3, "reallocs": None})  # review WR-02
 
     def test_counter_columns_never_change_a_verdict(self):
         item, metric, build = "scene:churn:10", "frame_ms_p50", "editor"

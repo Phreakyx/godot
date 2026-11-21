@@ -250,6 +250,9 @@ def start_pinned(args, cwd, mask, stdout=subprocess.PIPE):
 
 def run_pinned(args, cwd, mask, timeout):
     """Start args pinned, reap it with wait4 (its rusage: peak RSS, CPU time), as bench_windows.run_pinned."""
+    import resource  # Unix only; this module imports on every OS
+
+    runner_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # what the child's ru_maxrss starts at
     start = time.perf_counter()
     proc = start_pinned(args, cwd, mask)
     child = cpus_mask(os.sched_getaffinity(proc.pid))  # a zombie still answers; only wait4 below reaps it
@@ -270,9 +273,6 @@ def run_pinned(args, cwd, mask, timeout):
         timer.cancel()
     wall = time.perf_counter() - start
     proc.returncode = os.waitstatus_to_exitcode(status)  # Popen must not wait for a reaped child
-    import resource  # Unix only; this module imports on every OS
-
-    runner_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     reader.join(timeout=30)
     proc.stdout.close()
     return {

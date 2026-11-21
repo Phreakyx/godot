@@ -153,6 +153,7 @@ class PerfToTsv(unittest.TestCase):
         self.assertEqual(analyze.family("libc.so.6", "[unknown]@/usr/src/debug/glibc/glibc/malloc/malloc.c:3092"),
                          "allocation")
         self.assertEqual(analyze.family("libc.so.6", "[unknown]@../sysdeps/x86_64/multiarch/memmove-vec.S:300"), "other")
+        self.assertEqual(analyze.family("libc.so.6", "malloc@??:?"), "allocation")  # perf's unknown line (review WR-05)
 
     def test_header_with_trailing_space(self):
         # perf 7.3 writes call-graph headers as "godot.linuxbsd.  137569 " (02-12); the old pattern read none.

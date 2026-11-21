@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-11-21 (runner review fixes)
+
+* **Fixed**: from the Phase 2 code review of the runner: `micro --target
+  micro/<case>` never reached the accept rule (every micro case has the
+  spec `micro`); a target that got slower read WITHIN-NOISE instead of
+  REGRESSION, which hid a slowed case of a multi-case target; A/A floors
+  now store the pairs they were measured from; negative counts are
+  values, not n/a; a gdbench pin whose ITERATIONS line can't be reduced
+  is refused; `analyze.py` keeps the file of a `file:?` frame; the Linux
+  runner reads its own peak before starting a child; `bench.py` needs
+  Python 3.12 and says so at once. No stored floor, share or decision
+  changes (every floor series had its full n; all 63 family files are
+  identical with the fixes). Rules in the
+  [benchmark protocol](/tooling/benchmark-protocol.md).
+
 ## 2026-11-21 (GCC and Clang floors, counters and final family decisions)
 
 * **Added**: GCC 16.2.1 and Clang 23.1.5 A/A floors (1942 each) in

@@ -93,7 +93,7 @@ def load(path):
 
 
 def split_frame(frame):
-    m = re.match(r"(.*)@(.*):(\d+)$", frame)
+    m = re.match(r"(.*)@(.*):(\d+|\?+)$", frame)
     return (m.group(1), m.group(2).replace("\\", "/")) if m else (frame, "")
 
 

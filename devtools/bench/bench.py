@@ -37,6 +37,9 @@ import time
 import urllib.request
 from pathlib import Path
 
+if sys.version_info < (3, 12):  # hashlib.file_digest, tarfile filter="data"; fail before any build or export
+    raise SystemExit(f"bench.py needs Python 3.12 or newer (this is {sys.version.split()[0]})")
+
 if os.name == "nt":
     import bench_windows as osb
 else:
@@ -98,10 +101,9 @@ def verdict(diffs, floor, is_target):
     k = wins_needed(len(diffs))
     median = statistics.median(diffs)
     wins, losses = wins_losses(diffs)
-    if is_target:
-        if median < -floor:
-            return "ACCEPT" if wins >= k else "REJECT"
-        return "WITHIN-NOISE"
+    if is_target and median < -floor:
+        return "ACCEPT" if wins >= k else "REJECT"
+    # A slower target is judged like every other workload (so a slowed case of a multi-case target is reported).
     # Equal values (memory equal to the control) never pass the median test, so they never regress.
     return "REGRESSION" if median > floor and losses >= k else "WITHIN-NOISE"
 
@@ -373,6 +375,8 @@ def gdbench_copy(text, iterations):
         out.append(body + end)
     if not any(line == "extends Benchmark" for line in text.splitlines()):
         raise RuntimeError("no `extends Benchmark` line: the upstream file changed shape")
+    if iterations is not None and not any(line.startswith("const ITERATIONS = ") for line in "".join(out).splitlines()):
+        raise RuntimeError("no `const ITERATIONS = <n>` line to reduce: the upstream file changed shape")
     return "".join(out), sum(a != b for a, b in zip(lines, out))
 
 
@@ -666,7 +670,7 @@ def metric_values(fields, reason, metrics):
 def count_values(fields, names):
     """Count -> int, or None (n/a) when the sample failed or the binary has no counter. Zero is a count."""
     fields = fields or {}
-    return {name: int(fields[name]) if str(fields.get(name, "")).isdigit() else None for name in names}
+    return {name: int(fields[name]) if re.fullmatch(r"-?\d+", str(fields.get(name, ""))) else None for name in names}
 
 
 def item_def(spec, name, params, label):
@@ -1107,7 +1111,7 @@ def summarize_aa(args, items, builds, values, n_of, meta):
                 if floor is not None:
                     floors[floor_key(name, d["case"], metric, build, COMPILER)] = {
                         "workload": name, "case": d["case"], "metric": metric, "build": build, "compiler": COMPILER,
-                        "floor": floor, "n": n_of[spec], "date": date, **machine,
+                        "floor": floor, "n": len(diffs), "date": date, **machine,
                     }
             if runs_on(name, build):
                 print_info(item, d, build, values, ("control", "aa"))
@@ -1132,7 +1136,7 @@ def summarize_compare(args, items, builds, values, n_of, meta):
         for build in sorted(builds):
             for metric in sorted(d["metrics"]):
                 # The accept rule judges the target's time metric; memory and other workloads get the regression rule.
-                is_target = spec in targets and metric == d["time"]
+                is_target = (spec in targets or item in targets) and metric == d["time"]
                 if not runs_on(name, build):
                     print(f"VERDICT {item} {metric} {build}: {only_on(name)}")
                     summary.append({
