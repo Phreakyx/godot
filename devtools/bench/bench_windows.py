@@ -87,8 +87,8 @@ def set_home_affinity(bench_mask):
     return home
 
 
-def run_pinned(args, cwd, mask, timeout):
-    """Start args with the runner's affinity set to mask (inherited at creation), then read the OS counters."""
+def start_pinned(args, cwd, mask, stdout=subprocess.PIPE):
+    """Start args with the runner's affinity set to mask (inherited at creation); returns the Popen."""
     me = _k.GetCurrentProcess()
     previous, system = ctypes.c_size_t(), ctypes.c_size_t()
     if not _k.GetProcessAffinityMask(me, ctypes.byref(previous), ctypes.byref(system)):
@@ -96,12 +96,25 @@ def run_pinned(args, cwd, mask, timeout):
     if not _k.SetProcessAffinityMask(me, mask):
         raise OSError(ctypes.get_last_error(), "SetProcessAffinityMask failed")
     try:
-        proc = subprocess.Popen(
-            args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-            errors="replace",
+        return subprocess.Popen(
+            args, cwd=cwd, stdout=stdout, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
         )
     finally:
         _k.SetProcessAffinityMask(me, previous.value)  # back to the home mask
+
+
+def sampler_exe():
+    """devtools/out/profile/sampler.exe (devtools/profile/README.md), built with MSVC on first use."""
+    exe = ROOT / "devtools/out/profile/sampler.exe"
+    if not exe.is_file():
+        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                        str(ROOT / "devtools/profile/build_sampler.ps1")], check=True, capture_output=True)
+    return exe
+
+
+def run_pinned(args, cwd, mask, timeout):
+    """Start args pinned to mask (start_pinned), wait for it, then read the OS counters."""
+    proc = start_pinned(args, cwd, mask)
     # Private Popen handle: the only place that touches it, so a Python change breaks one function.
     handle = w.HANDLE(int(proc._handle))
     child, _ = ctypes.c_size_t(), ctypes.c_size_t()

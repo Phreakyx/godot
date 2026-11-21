@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-11-21 (runner profiles and family shares)
+
+* **Added**: `bench.py profile` samples any runner workload on the bench
+  control exe it starts itself (no console-wrapper lookup) with
+  `sampler.exe`, release builds included; `analyze.py families` gives
+  each family's share of the busiest thread and of all busy samples by
+  the innermost frame, with the bench counter excluded; `perf_to_tsv.py`
+  turns `perf script` output into the same TSV, so Linux shares use the
+  same rules. See `devtools/profile/README.md` and the
+  protocol's [Shares](/tooling/benchmark-protocol.md) section.
+* **Measured** (smoke runs, i9-14900K, MSVC, not recorded shares):
+  `scene:instance:10000` on `template_release`: allocation 20.7% of the
+  main thread, hash tables 7.0%, bench counter 2.5%; `script:script` on
+  the editor: allocation 22.4%, CowData 7.4%, hash tables 5.1%.
+
 ## 2026-11-21 (in-engine StringName and Variant-key micro cases)
 
 * **Added**: `tests/fork/test_fork_bench_variant_keys.cpp`, 10 `[Bench]`

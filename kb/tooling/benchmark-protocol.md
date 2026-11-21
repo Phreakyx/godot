@@ -30,6 +30,9 @@ sources:
   - id: micro-engine-cases
     resource: ../../tests/fork/test_fork_bench_variant_keys.cpp
     title: The in-engine StringName and Variant-key cases (workload micro_engine)
+  - id: profile
+    resource: ../../devtools/profile/README.md
+    title: Sampling profiles (bench.py profile, sampler.exe, perf) and analyze.py families
   - id: unordered-dense
     resource: https://github.com/martinus/unordered_dense/tree/7c58a8b7a48e790fe72f6508eb3b46317cbba9d5
     title: ankerl::unordered_dense v5.3.3 (MIT; micro control, fetched, never vendored)
@@ -475,6 +478,30 @@ as the workload `micro_engine`.
   cases need longer timed regions (now about 2^17 operations, 0.1 to
   14 ms).
 
+# Shares (BENCH-07, BENCH-10)
+
+A family's share is measured from a sampling profile of each target
+workload, per build type (editor and `template_release`) and per
+compiler: `bench.py profile` on Windows, `perf record` and
+`perf_to_tsv.py` on Linux ([profiling](../../devtools/profile/README.md)).
+Both feed `analyze.py families`, one rule set for every OS:
+
+- each busy sample (waits excluded) goes to one family by its innermost
+  frame, inline frames included, first match of `FAMILIES` wins:
+  formatting by function name, then allocation, hash tables, Variant
+  containers, trees/lists, CowData; anything else is `other`;
+- the share is computed twice, of the **busiest thread** and of all busy
+  samples, and the larger of the two (`share_pct` in the JSON) is the
+  family's share for that workload and build;
+- the bench counter (`core/os/fork_alloc_counters`, in every `-Bench`
+  build and in no shipped one) is its own excluded row, never part of a
+  family; its share is printed so a profile where it is large is seen.
+
+The max gain of a family is then `share x (1 - 1/speedup)` (Skip rule
+above, D-07), with the largest share across build types and compilers.
+A profile taken with `--max-load` above the default is not a recorded
+share.
+
 # Budget (D-03)
 
 At most 30 minutes of measurement per compiler (MSVC; GCC and Clang each),
@@ -525,11 +552,16 @@ python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" 
 python devtools/bench/bench.py micro --aa --write-floors
 python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
 python devtools/bench/bench.py aa --workloads micro_engine --write-floors
+python devtools/bench/bench.py profile --workload scene:instance:10000 --build template_release
 ```
 
 `micro` takes `--aa` or `--prev`, and `--name`, `--defines`, `--target`
 (`micro/<case>` items), `--samples`, `--floors`, `--write-floors`,
 `--max-load`, `--out`; it always builds its sides (seconds each).
+
+`profile` takes `--workload`, `--build`, `--seconds`, `--warmup`,
+`--interval-us`, `--max-load` and `--out`; it never builds and writes
+`devtools/out/bench/profile/<series>/`.
 
 Options of `aa` and `compare`: `--workloads`, `--builds` (default
 `editor,template_release`), `--rounds`, `--budget`, `--floors`,

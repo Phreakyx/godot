@@ -17,6 +17,7 @@ python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" 
     --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
 python devtools/bench/bench.py micro --aa --write-floors
 python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
+python devtools/bench/bench.py profile --workload scene:instance:10000 --build template_release
 python devtools/bench/test_bench.py
 ```
 
@@ -61,3 +62,6 @@ python devtools/bench/test_bench.py
   `devtools/out/bench/wt/<sha7>/`); `--rounds` fixes n; `--budget` is the minutes of measurement
   allowed (default 30); `--floors` is the floors file (default `devtools/bench/floors.json`).
 - Windows only for now; the Linux adapter comes with the Linux session.
+- `profile` samples one workload on the existing bench control exe (never builds) and writes its
+  TSV, `analyze.py` summary and family shares to `devtools/out/bench/profile/<series>/`; see
+  [profiling](../profile/README.md).

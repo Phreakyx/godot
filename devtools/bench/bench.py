@@ -5,6 +5,7 @@
   python devtools/bench/bench.py aa --workloads scene:instance:10000 --builds editor,template_release
   python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
       --target scene:churn:10000 --workloads scene:churn:10000,scene:instance:10000
+  python devtools/bench/bench.py profile --workload scene:instance:10000 --build template_release
 
 `check` reads the machine state (power plan, core parking, idle compilers, bench-CPU load, Game Mode,
 the runner lock) and prints every value. `aa` builds a control (extra_suffix bench) and an A/A twin
@@ -12,6 +13,8 @@ the runner lock) and prints every value. `aa` builds a control (extra_suffix ben
 git worktree under devtools/out/bench/wt/), the candidate (same source plus --defines) and the
 same-source control; the verdict compares the candidate with the control only. Every series runs one
 discarded cold round, plans its rounds within --budget, then alternates the order every other round.
+`profile` samples one workload on the existing bench control exe with devtools/profile/sampler.exe and
+writes its TSV, analyze.py summary and family shares under devtools/out/bench/profile/.
 The protocol is kb/tooling/benchmark-protocol.md. Outputs go to devtools/out/bench/ (gitignored).
 """
 
@@ -26,6 +29,7 @@ import re
 import shutil
 import statistics
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.request
@@ -47,6 +51,8 @@ MAX_LOAD_PCT = 10.0  # mean % Processor Utility of the bench CPUs before a serie
 CLOCK_TOLERANCE = 0.05  # rounds this far off the series median clock are flagged (D-14)
 GAME_WORKERS = 14  # the worker pool cap of the bench project (D-12)
 UNAVAILABLE = "unavailable"
+PROFILE_FRAMES = 1000000  # a "frames" workload under `profile` outlives any warm-up plus sampling
+ANALYZE = ROOT / "devtools/profile/analyze.py"
 MIN_BUILD_FREE_GB = 5.0  # a build that fills the disk fails at the link (LNK1106) and can't write its logs
 # Metrics judged per scene sample: one from the BENCH line, one from the OS.
 SCENE_METRICS = ("frame_ms_p50", "peak_ws_mb")
@@ -484,12 +490,13 @@ def scene_command(exe, params, ctx):
     scenario, count = params[0], int(params[1])
     # 100k-node runs take up to a second or more per frame (instancing): fewer frames, as the old driver.
     frames, warmup = (30, 5) if count >= 100000 else (120, 30)
+    frames = ctx.get("frames", frames)  # profile: runs until the runner ends it
     return _game(exe, "scene.gd", [f"--scenario={scenario}", f"--count={count}", f"--frames={frames}",
                                    f"--warmup={warmup}"])
 
 
 def script_command(exe, params, ctx):
-    return _game(exe, "script.gd", [f"--mode={params[0]}", "--frames=120", "--warmup=30"])
+    return _game(exe, "script.gd", [f"--mode={params[0]}", f"--frames={ctx.get('frames', 120)}", "--warmup=30"])
 
 
 def gdbench_command(exe, params, ctx):
@@ -500,7 +507,7 @@ def level_command(exe, params, ctx):
     # Windowed on Vulkan (render-thread CPU needs a window); no audio device, so no audio thread or sound.
     return [str(exe), "--main-pack", str(ctx["level"]), "--script", str(LEVEL_SCRIPT), "--fixed-fps", "60",
             "--rendering-driver", "vulkan", "--resolution", "1920x1080", "--audio-driver", "Dummy", "--",
-            f"--frames={LEVEL_FRAMES}", f"--robots={LEVEL_ROBOTS}"]
+            f"--frames={ctx.get('frames', LEVEL_FRAMES)}", f"--robots={LEVEL_ROBOTS}"]
 
 
 MICRO_ENGINE_PARITY = ("operations", "checksum")  # the same work in every process of a series, as in micro
@@ -531,6 +538,11 @@ def editor_command(exe, params, ctx):
     return [str(exe), "--headless", "--editor", "--quit", "--path", str(project), "--benchmark-file", str(json_path)]
 
 
+def editor_profile_command(exe, params, ctx):
+    project = ctx["out"] / "editor_project" / ctx["label"]
+    return [str(exe), "--headless", "--editor", "--quit-after", "3000", "--path", str(project)]
+
+
 def editor_fields(ctx):
     """Main::Start and First Scan from the editor's --benchmark-file JSON (seconds), in ms."""
     try:
@@ -548,25 +560,28 @@ SCENE_COUNTS = ("allocs", "reallocs")  # bench builds only (fork/alloc_count); j
 # costly: n = 5 whatever the cold round takes; rounds: n whatever the cold round takes; editor_mode: starts 32
 # workers whatever the project says (D-12 exception), so the count is recorded, not checked; workers: False for a
 # process with no game (no worker check); tests_build: runs the bench tests build (bench[.<variant>].tests);
-# parity: case fields every process must repeat.
+# parity: case fields every process must repeat; profile: how `profile` samples it, "frames" (runs PROFILE_FRAMES
+# frames, sampled after --warmup for --seconds, then ended) or "launch" (sampled from launch until it exits),
+# with profile_command in place of command when given.
 WORKLOADS = {
-    "scene": {"command": scene_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS},
-    "script": {"command": script_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS},
+    "scene": {"command": scene_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS, "profile": "frames"},
+    "script": {"command": script_command, "metrics": SCENE_METRICS, "counts": SCENE_COUNTS, "profile": "frames"},
     "gdbench": {"command": gdbench_command, "metrics": ("peak_ws_mb",), "counts": (), "cases": True,
-                "case_metrics": ("time_ms",), "case_counts": SCENE_COUNTS, "costly": True},
+                "case_metrics": ("time_ms",), "case_counts": SCENE_COUNTS, "costly": True, "profile": "launch"},
     "editor_startup": {"command": editor_command, "metrics": ("wall_ms", "peak_ws_mb"), "counts": (),
                        "info": ("main_start_ms", "first_scan_ms"), "read": editor_fields, "bench_line": False,
-                       "builds": ("editor",), "costly": True, "editor_mode": True},
+                       "builds": ("editor",), "costly": True, "editor_mode": True, "profile": "launch",
+                       "profile_command": editor_profile_command},
     # BENCH-04 keys the standalone harness can't link (StringName, Variant, Dictionary), in the engine (02-07).
     "micro_engine": {"command": micro_engine_command, "metrics": ("peak_ws_mb",), "counts": (), "cases": True,
                      "case_metrics": ("ns_per_op",), "case_counts": ("allocs",), "rounds": 11, "workers": False,
-                     "tests_build": True, "parity": MICRO_ENGINE_PARITY},
+                     "tests_build": True, "parity": MICRO_ENGINE_PARITY, "profile": "launch"},
     # D-09: load and CPU frame times are judged; GPU time and the wall frame time are stored, never judged.
     "level": {"command": level_command,
               "metrics": ("main_ms_p50", "instance_ms", "load_ms", "peak_ws_mb", "render_cpu_ms_p50"),
               "counts": ("load_allocs", "fly_allocs", "fly_reallocs"),
               "info": ("first_frame_ms", "main_ms_p95", "render_cpu_ms_p95", "gpu_ms_p50", "wall_ms"),
-              "costly": True},
+              "costly": True, "profile": "frames"},
 }
 
 
@@ -1369,6 +1384,82 @@ def run_micro(args, sides):
     print(f"\nraw.csv, summary.csv and meta.json in {out}")
 
 
+# --- profile: a sampling profile of one workload (BENCH-07), with its family shares (BENCH-10) ---
+
+
+def profile_stem(spec, build):
+    return spec.replace(":", "_").replace("/", "_") + "." + build
+
+
+def run_profile(args, _sides):
+    """Start the bench control exe pinned, attach sampler.exe to its PID, end it, analyze the TSV."""
+    name, params = parse_workload(args.workload)
+    w = WORKLOADS[name]
+    if not runs_on(name, args.build):
+        raise RuntimeError(f"{name} runs only on {', '.join(w['builds'])}")
+    exe = osb.engine_exe(args.build, "bench.tests" if is_tests(name) else "bench")
+    if not exe.is_file():
+        raise RuntimeError(f"Missing {exe.relative_to(ROOT)}: build it with devtools\\build\\build.ps1 -Bench"
+                           f"{' -Tests' if is_tests(name) else ''} -Target {args.build} (profile never builds)")
+    mask = osb.p_core_mask()
+    checks, problems = run_checks(mask, args.max_load)
+    if problems:
+        raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
+    sampler = osb.sampler_exe()
+    checks["home_mask"] = hex(osb.set_home_affinity(mask))  # the runner and the sampler stay off the bench CPUs
+    out = Path(args.out).resolve()
+    ctx = {"out": out, "label": "control", "round": 0}
+    prepare_scene_project()
+    if name == "gdbench":
+        ctx["gdbench"], _ = prepare_gdbench()
+    if name == "editor_startup":
+        prepare_editor_projects(out, ["control"])
+    if name == "level":
+        ctx["level"], _ = prepare_level(out, mask)
+    form = w["profile"]
+    if form == "frames":
+        ctx["frames"] = PROFILE_FRAMES
+    command = w.get("profile_command", w["command"])(exe, params, ctx)
+    stem = out / profile_stem(args.workload, args.build)
+    tsv = stem.with_name(stem.name + ".tsv")
+    print(f"PROFILE {args.workload} {exe.name} ({form})", flush=True)
+    with open(stem.with_name(stem.name + ".log"), "w", encoding="utf-8") as log:
+        proc = osb.start_pinned(command, ROOT, mask, stdout=log)
+        try:
+            if form == "frames":
+                time.sleep(args.warmup)
+                if proc.poll() is not None:
+                    raise RuntimeError(f"{exe.name} ended during the warm-up (exit {proc.returncode}); see {log.name}")
+            seconds = args.seconds if form == "frames" else TIMEOUT_S  # launch: the sampler stops when it exits
+            sampled = subprocess.run([str(sampler), str(proc.pid), str(seconds), str(args.interval_us), str(tsv),
+                                      str(exe.parent)], capture_output=True, text=True)
+        finally:
+            if proc.poll() is None:
+                proc.kill()  # the runner's own child only
+            proc.wait()
+    if sampled.returncode != 0 or not tsv.is_file():
+        raise RuntimeError(f"sampler.exe failed (exit {sampled.returncode}): {sampled.stderr.strip()}")
+    meta_path = out / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {"profiles": {}}
+    meta.update({**machine_meta(mask), **checks})
+    meta["profiles"][stem.name] = {
+        "workload": args.workload, "build": args.build, "exe": exe.name, "form": form, "command": command[1:],
+        "pid": proc.pid, "returncode": proc.returncode, "sampler": sampled.stdout.strip(),
+        "seconds": args.seconds if form == "frames" else None, "warmup_s": args.warmup if form == "frames" else 0,
+        "interval_us": args.interval_us, "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "runner_args": vars(args),
+    }
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    summary = subprocess.run([sys.executable, str(ANALYZE), str(tsv), "summary"], capture_output=True, text=True,
+                             check=True).stdout
+    stem.with_name(stem.name + ".summary.txt").write_text(summary, encoding="utf-8")
+    families = subprocess.run([sys.executable, str(ANALYZE), str(tsv), "families", "--json",
+                               str(stem.with_name(stem.name + ".families.json"))], capture_output=True, text=True,
+                              check=True).stdout
+    print(sampled.stdout.strip())
+    print(families, end="", flush=True)
+
+
 def run_check(args):
     mask = osb.p_core_mask()
     values, problems = run_checks(mask, args.max_load)
@@ -1395,6 +1486,13 @@ def main():
     compare = sub.add_parser("compare", help="previous, candidate and same-source control; verdict against the control")
     sub.add_parser("fetch", help="fetch every pinned third-party source into devtools/out/bench/src/ and check it")
     micro = sub.add_parser("micro", help="container micro-benchmark: --aa, or previous, candidate and control")
+    prof = sub.add_parser("profile", help="sampling profile of one workload with its family shares (no build)")
+    prof.add_argument("--workload", required=True, help="e.g. scene:instance:10000")
+    prof.add_argument("--build", default="editor", choices=("editor", "template_release"))
+    prof.add_argument("--seconds", type=float, default=15.0, help="sampling time of a frames workload")
+    prof.add_argument("--warmup", type=float, default=3.0, help="seconds before sampling a frames workload")
+    prof.add_argument("--interval-us", type=int, default=1000)
+    prof.add_argument("--out", default=None)
     micro.add_argument("--aa", action="store_true", help="A/A floors: the control against a second control build")
     micro.add_argument("--name", default="cand", help="candidate label (its build directory)")
     micro.add_argument("--defines", default="", help="space-separated macros for the candidate (/D)")
@@ -1404,7 +1502,7 @@ def main():
     micro.add_argument("--floors", default=str(DEFAULT_FLOORS))
     micro.add_argument("--write-floors", action="store_true", help="merge the measured floors into --floors")
     micro.add_argument("--out", default=None)
-    for parsed in (check, aa, compare, micro):
+    for parsed in (check, aa, compare, micro, prof):
         parsed.add_argument("--max-load", type=float, default=MAX_LOAD_PCT,
                             help="refuse above this mean %% busy of the bench CPUs; floors and shares use the default")
     for series in (aa, compare):
@@ -1433,6 +1531,12 @@ def main():
         return
     if args.command == "micro":
         return main_micro(parser, args)
+    if args.command == "profile":
+        try:
+            parse_workload(args.workload)
+        except ValueError as error:
+            parser.error(str(error))
+        return locked(args, run_profile, None)
     if args.rounds is not None and args.rounds < MIN_ROUNDS:
         parser.error(f"Use at least {MIN_ROUNDS} rounds: the sign test cannot pass below that")
     specs = args.workloads.split(",")
@@ -1464,7 +1568,7 @@ def locked(args, run, sides):
     lock = osb.acquire_lock(OUT / ".lock")  # held until the process ends
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime()) + "-" + args.command
     if args.out is None:
-        args.out = str(series_dir(OUT, stamp))
+        args.out = str(series_dir(OUT / "profile" if args.command == "profile" else OUT, stamp))
     else:
         Path(args.out).mkdir(parents=True, exist_ok=True)
     try:
