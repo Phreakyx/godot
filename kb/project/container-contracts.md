@@ -153,6 +153,18 @@ seen through the other); `duplicate()` gives a new one.
   text gives the same pointer on the main thread as in every worker. The
   case runs the stress three times, and passed three runs in a row.
 
+**Public hash outputs** (`tests/fork/test_fork_hash_outputs.cpp`,
+`[Fork][Hash]`, D-11): literal values recorded from the control before any
+hash candidate changed code (2026-11-22, `c1753151ec`): `String::hash()` of
+"", "a", "Godot" and a 300-character string; `StringName::hash()` of
+"Godot" and of an empty StringName; `Variant::hash()` of 42, 1.5, "Godot",
+`Vector2(1, 2)`, `[1, "a"]` and `{"a": 1}`; `HashMapHasherDefault::hash()`
+of `int32_t(-7)`, `int64_t(1) << 40`, `UINT64_MAX`, the pointer 0x1000,
+String and StringName "Godot" and `Vector3(1, 2, 3)`. They feed API
+fingerprints, script `hash()` and saved data; every table-hash candidate
+(byte hash, StringName and pointer table hash, power-of-two mixer) must pass
+them unchanged.
+
 # Layouts the C# glue reads
 
 The C# glue (`modules/mono/glue/GodotSharp/GodotSharp/Core/NativeInterop/InteropStructs.cs`)

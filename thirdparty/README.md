@@ -1037,6 +1037,26 @@ Files extracted from upstream source:
 - `AUTHORS.md` and `LICENCE.md`
 
 
+## rapidhash
+
+- Upstream: https://github.com/Nicoshev/rapidhash
+- Version: V3, tag `rapidhash_v3` (bc4b4baa48a15ff52ff4725e1ccdcda62815221c, 2025)
+- License: MIT
+
+Files extracted from upstream source:
+
+- `rapidhash.h`
+- `LICENSE`
+
+`rapidhash.h` has CRLF line endings upstream; it is stored with LF, otherwise
+unchanged.
+
+Fork candidate `FORK_BACKEND_BYTE_HASH=1` (default 0): `hash_buffer()` in
+`core/templates/hashfuncs.cpp` uses `rapidhash_withSeed()` instead of wyhash for
+buffers below 256 bytes. `tests/core/templates/test_hash_buffer.cpp` checks it
+against this header.
+
+
 ## recastnavigation
 
 - Upstream: https://github.com/recastnavigation/recastnavigation

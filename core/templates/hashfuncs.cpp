@@ -30,7 +30,11 @@
 
 #include "hashfuncs.h"
 
+#if FORK_BACKEND_BYTE_HASH == 1
+#include "thirdparty/rapidhash/rapidhash.h"
+#else
 #include "thirdparty/wyhash/wyhash.h"
+#endif
 
 #include "core/error/error_macros.h"
 #include "core/string/ustring.h"
@@ -45,7 +49,11 @@ uint64_t hash_buffer64(const void *p_data, size_t p_size, uint64_t p_seed) {
 	ERR_FAIL_COND_V(p_data == nullptr && p_size != 0, 0);
 	static constexpr uint8_t empty = 0;
 	const void *data = p_data ? p_data : &empty;
+#if FORK_BACKEND_BYTE_HASH == 1
+	return p_size < HASH_XXH3_THRESHOLD ? rapidhash_withSeed(data, p_size, p_seed) : XXH3_64bits_withSeed(data, p_size, p_seed);
+#else
 	return p_size < HASH_XXH3_THRESHOLD ? wyhash(data, p_size, p_seed, _wyp) : XXH3_64bits_withSeed(data, p_size, p_seed);
+#endif
 }
 
 uint32_t hash_buffer(const void *p_data, size_t p_size, uint64_t p_seed) {

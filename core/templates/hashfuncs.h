@@ -42,6 +42,7 @@
 template <typename F, typename S>
 struct Pair;
 class String;
+class StringName;
 template <typename T>
 class CharStringT;
 
@@ -313,6 +314,15 @@ _FORCE_INLINE_ uint32_t hash_table_key(const T &p_value) {
 		return hash_table_string(p_value);
 	} else if constexpr (std::is_same_v<Hasher, HashMapHasherDefault> && is_char_string<T>::value) {
 		return hash_buffer(p_value.ptr(), size_t(p_value.length()) * sizeof(*p_value.ptr()));
+#if FORK_BACKEND_TABLE_KEY_HASH
+	} else if constexpr (std::is_same_v<Hasher, HashMapHasherDefault> && std::is_same_v<T, StringName>) {
+		// StringName equality is _data identity, so the data pointer is a consistent hash and
+		// saves the load of the cached hash.
+		return hash_table_key<Hasher>(p_value.data_unique_pointer());
+	} else if constexpr (std::is_same_v<Hasher, HashMapHasherDefault> && std::is_pointer_v<T> && !std::is_same_v<std::remove_cv_t<std::remove_pointer_t<T>>, char>) {
+		// char pointers keep HashMapHasherDefault's string hash (djb2).
+		return uint32_t((uint64_t(uintptr_t(p_value)) * 0x9E3779B97F4A7C15ull) >> 32);
+#endif
 	} else {
 		return Hasher::hash(p_value);
 	}

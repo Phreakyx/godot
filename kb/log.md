@@ -1,5 +1,19 @@
 # Update log
 
+## 2026-11-22 (HASH-04 and HASH-05 candidates, public hash outputs pinned)
+
+* **Added**: [StringName and pointer table hashes](/project/table-key-hash.md)
+  (HASH-05, draft): `FORK_BACKEND_TABLE_KEY_HASH`, StringName keys hashed by
+  their data pointer and pointer keys by one multiply inside
+  `hash_table_key()`; built and tested, timings to come from 03-10.
+* **Added**: [rapidhash V3 against wyhash](/project/rapidhash-byte-hash.md)
+  (HASH-04, draft): `FORK_BACKEND_BYTE_HASH`, rapidhash V3 vendored at tag
+  `rapidhash_v3`; xxHash updated to 0.8.4 in its own commit, same outputs.
+* **Updated**: [container contracts](/project/container-contracts.md): the
+  public hash outputs (`String`, `StringName`, `Variant`,
+  `HashMapHasherDefault`) pinned as literals recorded from the control
+  before any hash change (`[Fork][Hash]`).
+
 ## 2026-11-22 (HASH-02 and HASH-03 candidates)
 
 * **Added**: [HashMap slot array](/project/hashmap-slot-array.md) (HASH-02,

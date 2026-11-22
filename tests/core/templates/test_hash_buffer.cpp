@@ -32,15 +32,21 @@
 
 TEST_FORCE_LINK(test_hash_buffer)
 
+#include "core/string/string_name.h"
+#include "core/templates/a_hash_map.h"
+#include "core/templates/fork_backends.h"
+#include "core/templates/hash_map.h"
+#include "core/templates/hash_set.h"
+
+#if FORK_BACKEND_BYTE_HASH == 1
+#include "thirdparty/rapidhash/rapidhash.h"
+#else
 // Upstream also defines two non-inline prime helpers. Isolate the reference
 // copy so it cannot collide with the production copy linked from hashfuncs.cpp.
 namespace ReferenceWyhash {
 #include "thirdparty/wyhash/wyhash.h"
 }
-
-#include "core/templates/a_hash_map.h"
-#include "core/templates/hash_map.h"
-#include "core/templates/hash_set.h"
+#endif
 
 #define XXH_INLINE_ALL
 #include "thirdparty/xxhash/xxhash.h"
@@ -52,22 +58,31 @@ struct ConstantHasher {
 	static uint32_t hash(int) { return 0; }
 };
 
-TEST_CASE("[Hashing] Byte hash dispatch matches upstream wyhash and XXH3") {
+// The short-key byte hash selected by FORK_BACKEND_BYTE_HASH: rapidhash V3 or wyhash.
+static uint64_t reference_short_hash(const void *p_data, size_t p_size, uint64_t p_seed) {
+#if FORK_BACKEND_BYTE_HASH == 1
+	return rapidhash_withSeed(p_data, p_size, p_seed);
+#else
+	return ReferenceWyhash::wyhash(p_data, p_size, p_seed, ReferenceWyhash::_wyp);
+#endif
+}
+
+TEST_CASE("[Hashing] Byte hash dispatch matches the short-key hash and XXH3") {
 	uint8_t data[1025];
 	for (size_t i = 0; i < sizeof(data); i++) {
 		data[i] = uint8_t(i * 37);
 	}
-	const size_t lengths[] = { 0, 1, 3, 4, 7, 8, 15, 16, 17, 47, 48, 49, 127, 255, 256, 257, 1024 };
+	const size_t lengths[] = { 0, 1, 3, 4, 7, 8, 15, 16, 17, 47, 48, 49, 63, 64, 65, 80, 81, 112, 113, 127, 255, 256, 257, 1024 };
 	for (uint64_t seed : { uint64_t(0), uint64_t(42), UINT64_MAX }) {
 		for (size_t length : lengths) {
 			// Offset one byte exercises unaligned reads as well as threshold edges.
 			const void *ptr = data + 1;
-			const uint64_t expected = length < HASH_XXH3_THRESHOLD ? ReferenceWyhash::wyhash(ptr, length, seed, ReferenceWyhash::_wyp) : XXH3_64bits_withSeed(ptr, length, seed);
+			const uint64_t expected = length < HASH_XXH3_THRESHOLD ? reference_short_hash(ptr, length, seed) : XXH3_64bits_withSeed(ptr, length, seed);
 			CHECK(hash_buffer64(ptr, length, seed) == expected);
 			CHECK(hash_buffer(ptr, length, seed) == (uint32_t(expected) ^ uint32_t(expected >> 32)));
 		}
 	}
-	CHECK(hash_buffer64(nullptr, 0) == ReferenceWyhash::wyhash("", 0, 0, ReferenceWyhash::_wyp));
+	CHECK(hash_buffer64(nullptr, 0) == reference_short_hash("", 0, 0));
 }
 
 TEST_CASE("[Hashing] Public hashes keep their outputs") {
@@ -88,6 +103,16 @@ TEST_CASE("[Hashing] Table keys: only String and CharString use the byte hash") 
 	CHECK(hash_table_key<HashMapHasherDefault>(uint32_t(42)) == HashMapHasherDefault::hash(uint32_t(42)));
 	CHECK(hash_table_key<HashMapHasherDefault>(int64_t(-7)) == HashMapHasherDefault::hash(int64_t(-7)));
 	CHECK(hash_table_key<ConstantHasher>(42) == 0);
+	CHECK(hash_table_key<HashMapHasherDefault>((const char *)"foo") == hash_djb2("foo"));
+	const StringName name = "table key";
+	const void *pointer = (const void *)uintptr_t(0x12345670);
+#if FORK_BACKEND_TABLE_KEY_HASH
+	CHECK(hash_table_key<HashMapHasherDefault>(pointer) == uint32_t((uint64_t(0x12345670) * 0x9E3779B97F4A7C15ull) >> 32));
+	CHECK(hash_table_key<HashMapHasherDefault>(name) == hash_table_key<HashMapHasherDefault>(name.data_unique_pointer()));
+#else
+	CHECK(hash_table_key<HashMapHasherDefault>(pointer) == HashMapHasherDefault::hash(pointer));
+	CHECK(hash_table_key<HashMapHasherDefault>(name) == name.hash());
+#endif
 }
 
 TEST_CASE("[HashMap][AHashMap][HashSet] String keys keep insertion order and lookups") {

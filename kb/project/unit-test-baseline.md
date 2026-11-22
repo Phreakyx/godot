@@ -134,6 +134,16 @@ failed, 9 skipped (595396 assertions) on the production control, the
 production `FORK_BACKEND_HASHMAP_POOL=1` build and the dev pool build;
 `--test-case="*Fork*"` runs 79 cases (778 assertions).
 
+The public hash outputs pin and the HASH-04 and HASH-05 candidates (plan
+03-07, [table key hash](/project/table-key-hash.md),
+[rapidhash](/project/rapidhash-byte-hash.md)) add three `[Fork][Hash]`
+cases: MSVC `--test` reports 1584 cases, 1584 passed, 0 failed, 9 skipped
+(601388 assertions) on the production control, `tkh`
+(`FORK_BACKEND_TABLE_KEY_HASH=1`), `rapid` (`FORK_BACKEND_BYTE_HASH=1`) and
+`hashpow2` (both with `FORK_BACKEND_HASH_POW2=1`);
+`--test-case="*Fork*"` runs 87 cases (6725 assertions) on the dev `tkh` and
+`rapid` builds.
+
 The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
 the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
 builds, at `7b81582fab` plus the `-> uint64_t` fix in

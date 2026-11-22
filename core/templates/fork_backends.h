@@ -91,3 +91,27 @@
 #if !(FORK_BACKEND_HASH_POW2 == 0 || FORK_BACKEND_HASH_POW2 == 1 || FORK_BACKEND_HASH_POW2 == 2)
 #error "FORK_BACKEND_HASH_POW2 must be 0, 1 or 2."
 #endif
+
+// Table-internal hash of StringName and pointer keys (HASH-05, kb/project/table-key-hash.md).
+// 0: HashMapHasherDefault's output (upstream): StringName's cached hash, Thomas Wang's
+//    64-to-32 mix for pointers.
+// 1: hash_table_key() with the default hasher hashes a StringName by its data pointer (its
+//    equality is pointer identity) and a pointer with one 64-bit multiply, high half.
+//    HashMapHasherDefault and every public hash keep their outputs.
+#ifndef FORK_BACKEND_TABLE_KEY_HASH
+#define FORK_BACKEND_TABLE_KEY_HASH 0
+#endif
+#if !(FORK_BACKEND_TABLE_KEY_HASH == 0 || FORK_BACKEND_TABLE_KEY_HASH == 1)
+#error "FORK_BACKEND_TABLE_KEY_HASH must be 0 or 1."
+#endif
+
+// Short-key byte hash in hash_buffer64() below HASH_XXH3_THRESHOLD (HASH-04,
+// kb/project/rapidhash-byte-hash.md). Only table-internal hashes use hash_buffer*.
+// 0: wyhash final v4.3 (the fork's current byte hash; upstream has no byte hash).
+// 1: rapidhash V3 (thirdparty/rapidhash, rapidhash_withSeed). XXH3 above the threshold either way.
+#ifndef FORK_BACKEND_BYTE_HASH
+#define FORK_BACKEND_BYTE_HASH 0
+#endif
+#if !(FORK_BACKEND_BYTE_HASH == 0 || FORK_BACKEND_BYTE_HASH == 1)
+#error "FORK_BACKEND_BYTE_HASH must be 0 or 1."
+#endif
