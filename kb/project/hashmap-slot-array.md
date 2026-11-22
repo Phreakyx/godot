@@ -71,3 +71,34 @@ its own and has no stable small index, so the only layouts left are:
 Both raise `live_bytes`, which the gate forbids, and the second repeats the
 2026-11-15 shape. No code was written. If a later baseline (GCC and Clang,
 03-11) takes the pool in, this entry is the design to build.
+
+# Rules stated before measuring (MSVC)
+
+Written before the first 03-10 series. HASH-02 has no binary: it was
+rejected before building (above), so 03-10 does not measure it and records
+it as "not measured". If a later baseline takes the pool in and the
+candidate is built as `slots` (`FORK_BACKEND_HASHMAP_SLOTS=1`), these are
+its rules.
+
+- **Micro gate (D-10):**
+  `python devtools/bench/bench.py micro --base-defines "<BASE>" --name slots --defines "FORK_BACKEND_HASHMAP_SLOTS=1" --prev 71b2819fec --out devtools/out/bench/hash-micro-slots`.
+  No `hashmap_i64` or `hashmap_ptr` row of `insert`, `hit`, `miss`,
+  `erase` or `churn` at N 16 and up reads REGRESSION against the
+  same-source control, and `live_bytes` is lower than the control's at each
+  of those rows. If either fails, the result is FAIL (gate). The entry
+  records the `LAYOUT-SENTINEL: <k> of <m> control rows moved` line. If k
+  is above 0, the series is repeated once with the same command and both
+  lines are recorded. The gate is then read on the repeat.
+- **Engine series (D-09), only after the gate passes:**
+  `python devtools/bench/bench.py compare --skip-build --base-defines "<BASE>" --name slots --defines "FORK_BACKEND_HASHMAP_SLOTS=1" --prev 71b2819fec --target scene:reparent:10000,scene:script:10000 --workloads all --out devtools/out/bench/hash-slots`,
+  then
+  `bench.py verdict --series devtools/out/bench/hash-slots --rows scene:reparent:10000@editor,scene:script:10000@template_release`
+  must print PASS. Every `ALLOC-INCREASE` or `INCREASE` count row is
+  explained here. A series that refuses, or that has more than a fifth of
+  its rounds clock-flagged, is repeated.
+
+# Results (MSVC, provisional until GCC and Clang)
+
+**Not measured.** HASH-02 has no binary (rejected before building,
+above), so 03-10 ran no micro or engine series for it. Its rules above
+stand for a later baseline that takes the node pool in.

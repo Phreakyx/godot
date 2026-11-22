@@ -33,8 +33,11 @@ sources:
 - Check free space before building variants: `bench.py check` prints
   `disk_free_gb`, and a series that builds refuses below
   `MIN_BUILD_FREE_GB` (5 GB). Plan about 4 GB per new tests variant.
-- Once a variant is linked and won't be rebuilt soon, its objects can go
-  (`bin/obj/**/*.<target>.x86_64.<suffix>.obj`); the exe and pdb stay. The
-  next build of that variant is then a full build.
+- Once a variant is linked and won't be rebuilt soon, its objects can go,
+  and its static libraries with them: `bin/obj/**/*.<target>.x86_64.<suffix>.obj`
+  and `bin/obj/**/*.<target>.x86_64.<suffix>.lib` (for a bench variant
+  `bench.<n>` and `bench.<n>.tests`). The libraries are a large share of a
+  variant's size; deleting only the objects left them behind in 03-10. The
+  exe and pdb stay. The next build of that variant is then a full build.
 - After a disk-full failure, re-run the series: its log, `raw.csv` or
   `summary.csv` may be cut short.

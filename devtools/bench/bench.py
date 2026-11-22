@@ -1260,7 +1260,7 @@ MICRO_HEADERS = (
     "core/templates/vector.h", "core/templates/cowdata.h", "core/templates/a_hash_map.h", "core/templates/hash_map.h",
     "core/templates/hash_set.h", "core/templates/hashfuncs.h", "core/templates/hashfuncs.cpp",
     "core/templates/rb_map.h", "core/templates/rb_set.h", "core/templates/list.h", "core/templates/local_vector.h",
-    "core/string/ustring.h", "core/string/ustring.cpp",
+    "core/string/ustring.h", "core/string/ustring.cpp", "thirdparty/xxhash/xxhash.h",
 )
 # Not the whole String TU (it needs Variant, translation and OS): only these definitions, verbatim.
 STRING_METHODS = (

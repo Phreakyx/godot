@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Power-of-two capacity with a mixer for HashMap and HashSet (HASH-03 candidate)
-description: HashMap and HashSet behind FORK_BACKEND_HASH_POW2 (default 0, prime capacity with fastmod) - power-of-two capacities from 8, the table hash mixed once in _hash() (1 multiply then xorshift, 2 hash_fmix32; byte-hashed String and CharString keys are not mixed again), slot and probe distance with a mask. Storage unchanged, HashSet keeps its one-block layout (D013); hasher outputs unchanged. Built and pinned; timings to come from 03-10.
+description: HashMap and HashSet behind FORK_BACKEND_HASH_POW2 (default 0, prime capacity with fastmod) - power-of-two capacities from 8, the table hash mixed once in _hash() (1 multiply then xorshift, 2 hash_fmix32; byte-hashed String and CharString keys are not mixed again), slot and probe distance with a mask. Storage unchanged, HashSet keeps its one-block layout (D013); hasher outputs unchanged. MSVC (provisional): FAIL (engine), 70 REGRESSION rows; micro no evidence (layout sentinel).
 tags: [core, containers, hashmap, hashset, hashing, phase-3]
 status: draft
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
@@ -87,6 +87,150 @@ against the same-source control. `live_bytes` is reported per N but not
 gated: power-of-two steps differ from the primes by design (8, 16, 32 against
 23, 47, 97), so some N are smaller and some larger.
 
-# Results
+# Rules stated before measuring (MSVC)
 
-Not measured yet (03-10).
+Written before the first 03-10 series and not changed after it starts.
+BASE is the provisional MSVC baseline of ALLOC-02, which is empty (no macro,
+[decision](/project/alloc-vs-pool.md)). The control is therefore the plain
+`bench` variant of the same source, and the previous side is `71b2819fec`.
+Each series has one value of this macro on top of BASE and nothing else
+(D-08). Both values are measured: `pow2` (`FORK_BACKEND_HASH_POW2=1`) and
+`pow2b` (`FORK_BACKEND_HASH_POW2=2`).
+
+**Micro gate (D-10), run first, once per value:**
+
+```
+python devtools/bench/bench.py micro --base-defines "" --name pow2 --defines "FORK_BACKEND_HASH_POW2=1" \
+    --prev 71b2819fec --target <T> --out devtools/out/bench/hash-micro-pow2
+python devtools/bench/bench.py micro --base-defines "" --name pow2b --defines "FORK_BACKEND_HASH_POW2=2" \
+    --prev 71b2819fec --target <T> --out devtools/out/bench/hash-micro-pow2b
+```
+
+`<T>` is the comma list of `micro/<case>` for every harness case that starts
+with `hashmap_` or `hashset_`: the i64, ptr and str matrix and the tiny ptr
+rows, 146 cases each, taken from the control's case list. The accept rule
+still judges a slower target row as REGRESSION, the same as any other row
+(`verdict()` in `bench.py`), so the target list leaves the gate unchanged.
+It only lets a faster row read ACCEPT, which the value choice counts.
+
+- **Gate, per value:** no `ns_per_op` row starting with `hashmap_` or
+  `hashset_` (i64, ptr and str keys) reads REGRESSION against the
+  same-source control. A value with a REGRESSION there is FAIL (gate).
+  `live_bytes` and `allocs` are recorded per N where they change, but not
+  gated (power-of-two steps differ from the primes by design).
+- **Value choice:** among the values that pass the gate, take the one with
+  more ACCEPT rows on those rows. A tie goes to 1. Only the chosen value gets
+  an engine series. The other value's code is deleted when the candidate is
+  decided (03-13), not in 03-10.
+- **Layout sentinel:** the entry records the
+  `LAYOUT-SENTINEL: <k> of <m> control rows moved` line of each series. If
+  k is above 0, the series is repeated once with the same command (`--out`
+  with a `-2` suffix) and both lines are recorded. The gate and the value
+  choice are then read on the repeat.
+
+**Engine series (D-09), only for the chosen value, after its gate:**
+
+```
+python devtools/bench/bench.py compare --skip-build --base-defines "" --name <pow2 or pow2b> \
+    --defines "FORK_BACKEND_HASH_POW2=<1 or 2>" --prev 71b2819fec \
+    --target scene:reparent:10000,scene:script:10000 --workloads all --out devtools/out/bench/hash-<name>
+python devtools/bench/bench.py verdict --series devtools/out/bench/hash-<name> \
+    --rows scene:reparent:10000@editor,scene:script:10000@template_release
+```
+
+- **Pass:** `verdict` prints PASS. That means one of the two target rows
+  (`frame_ms_p50`, A/A floors 3.13% for `scene:reparent:10000@editor` and
+  1.79% for `scene:script:10000@template_release`) reads ACCEPT, and no row
+  of the series (time and `peak_ws_mb`, every workload, editor and
+  template_release) reads REGRESSION.
+- **Counts:** every `ALLOC-INCREASE` or `INCREASE` count row is explained
+  in this entry, for example more resizes from a smaller first capacity (8
+  slots against 23).
+- **Repeat:** a series that refuses, or that has more than a fifth of its
+  rounds clock-flagged, is repeated.
+- **Outcome:** PASS, FAIL (gate) or FAIL (engine), provisional until the
+  GCC and Clang numbers (D-07). No default changes in `fork_backends.h`.
+
+**Amendments before measuring (user, 2026-11-22).** Accepted before the
+first series; the rules are frozen from here on.
+
+- **Layout sentinel (B):** a micro gate is read only on a run whose
+  `LAYOUT-SENTINEL` line reads 0 rows moved. If k is above 0, the series is
+  repeated once (`--out` with a `-2` suffix). If the repeat also has k above
+  0, the MSVC micro result is "no evidence (layout sentinel k1, k2)", neither
+  PASS nor FAIL, and the micro gate is decided by GCC and Clang in 03-11. The
+  value choice then falls back to its default, 1.
+  The engine series still runs and its verdict is recorded. Both sentinel
+  lines are recorded here.
+
+# Results (MSVC, provisional until GCC and Clang)
+
+**Micro, `pow2` (`FORK_BACKEND_HASH_POW2=1`):**
+`LAYOUT-SENTINEL: 4 of 256 control rows moved`, repeat
+`LAYOUT-SENTINEL: 6 of 256 control rows moved`: **micro: no evidence on
+MSVC (layout sentinel 4, 6)**. For the record (not a gate reading), on the
+292 `hashmap_*`/`hashset_*` rows the runs read 105 and 111 ACCEPT, 21 and
+16 REGRESSION. Wins: HashMap insert at N 1 and 16 (`hashmap_ptr_insert_1`
+1976 to 110 ns, -94%; `hashmap_i64_insert_16` -70%), misses at every N
+(-17% to -41%), churn and large-N hits (-13% to -31%). Losses, the same in
+both runs: `hashset_{i64,ptr}_copy_32768` +330% to +382% (1.2 to 5.2 ns),
+`hashset_*_insert_16` +11% to +58%, `hashset_*_insert_32768` +8% to +12%,
+the tiny ptr rows at 8 (`hashmap_tiny_ptr_hit_8` +20%,
+`hashset_tiny_ptr_build_8` +61%) and `hashmap_ptr_iterate_4096` +9%.
+
+**Micro, `pow2b` (`FORK_BACKEND_HASH_POW2=2`):**
+`LAYOUT-SENTINEL: 5 of 256 control rows moved`, repeat
+`LAYOUT-SENTINEL: 6 of 256 control rows moved`: **no evidence (5, 6)**.
+80 and 84 ACCEPT, 34 and 32 REGRESSION: the losses of `pow2` plus hits and
+misses at N 0 to 16 (`hashmap_i64_miss_1` +43%), where the second
+`hash_fmix32` costs more than it saves.
+
+**Value:** no value has a readable gate, so the choice falls back to its
+default (amendment B): **1** (`pow2`). `pow2b` gets no engine series.
+
+**Engine, `pow2`** (`devtools/out/bench/hash-pow2`):
+`verdict` prints `FAIL devtools\out\bench\hash-pow2: REGRESSION in ...`
+(70 rows). Targets, `frame_ms_p50` control to candidate:
+`scene:reparent:10000@editor` 0.065 to 0.067 ms (+1.6%, 1 win of 11,
+WITHIN-NOISE), `scene:script:10000@template_release` 1.176 to 1.180 ms
+(-0.6%, WITHIN-NOISE); `scene:script:10000@editor` reads REJECT (-2.4%,
+8 of 11 wins, floor 1.2%). REGRESSION rows: Dictionary duplicate, erase
+and insert in gdbench (+7% to +20%, `benchmark_duplicate_int_100k`
++20%), the `micro_engine` Dictionary copies (+5% to +15%) and small-N
+misses (`hashmap_variant_miss_1` +19% and +26%), several
+`string_manipulation` rows (+5% to +17%), `array.benchmark_fill_loop`
++9% (editor) and `micro_engine` `peak_ws_mb` +1.0% on both builds. Peak
+memory of the targets, `level` and `editor_startup`: WITHIN-NOISE.
+**Counts:** `allocs` ALLOC-INCREASE on the gdbench Dictionary rows
+(`benchmark_insert_int_1k` 101501 to 101901), the `micro_engine` dict and
+hashmap insert and copy rows (`dict_i64_insert_16` 155648 to 188416,
+`dict_i64_copy_256` 132608 to 133632), `scene:instance:10000` (+1.0%),
+`script:instance` and `gdbench/alloc`. The likely cause is the one this
+entry named: the first capacity is 8 slots, so a growing table takes
+more resize steps, and a copy that rebuilds by inserting takes them too.
+No reallocs change.
+
+**Conditions.** Source `f26a9de41f` (bench binaries built in 03-10
+Task 1; the runner tree carried this plan's kb edits and the
+`MICRO_HEADERS` line), previous `71b2819fec`, BASE empty, control the
+plain `bench` build of the same source. MSVC toolset 14.51.36231 (micro
+`cl` 19.51.36260), Visual Studio 18.11.0, i9-14900K, BIOS 1.K0, microcode
+0x12b, Windows build 26100.9711, power plan
+`fe1217fb-3f66-46bf-adc6-e48c27825f80` (core parking off), Game Mode on,
+bench CPUs 0xfffc. 2026-11-22, 19:10-22:15 UTC, PC idle, Inventory and
+Compatibility Appraisal service stopped. Default `--max-load`; bench CPUs
+1.9-6.2% busy at the start of each series; no series refused. Effective
+clocks 3594-4164 MHz (micro), 4114-4443 MHz (engine). Clock-flagged rounds:
+only some warm-up rounds (round 0, discarded) of the micro series; no
+measured round flagged in any series. Micro: 11 rounds after the warm-up
+pair; engine: 11 rounds per workload, 54 workload rounds per series, none
+flagged.
+
+**Layout sentinel (amendment B).** 12 of the 14 MSVC micro series moved 4
+to 16 of the 256 control rows; only `rapid` and the xxHash check read 0.
+Every candidate except `rapid` therefore has no MSVC micro evidence, and
+its micro gate is decided by GCC and Clang (03-11).
+
+**Outcome: FAIL (engine)** (micro: no evidence on MSVC). Rejected on
+MSVC; acceptance needs every compiler, so the GCC and Clang micro
+(03-11) can only confirm the rejection or record numbers.

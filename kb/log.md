@@ -1,5 +1,24 @@
 # Update log
 
+## 2026-11-23 (hash candidates on MSVC, 03-10)
+
+* **Updated**: the six hash candidate entries have their rules (written and
+  amended before the first series) and their MSVC results, provisional
+  until GCC and Clang: [slot array](/project/hashmap-slot-array.md) not
+  measured (no binary); [power-of-two capacity](/project/hash-pow2-mixer.md)
+  value 1, FAIL (engine); [StringName and pointer table hashes](/project/table-key-hash.md)
+  FAIL (engine), both targets faster; [rapidhash](/project/rapidhash-byte-hash.md)
+  FAIL (gate), and xxHash 0.8.4 shows no slowdown against 0.8.3;
+  [SIMD tags](/project/hash-simd-tags.md) FAIL (engine);
+  [small map](/project/hashmap-small-map.md) threshold 8, FAIL (engine).
+  The layout sentinel moved control rows in 12 of 14 micro series, so only
+  rapidhash has an MSVC micro gate reading.
+* **Added**: [transient MSVC internal compiler errors](/mistakes/transient-msvc-internal-compiler-errors.md).
+* **Updated**: [bench variants filled the disk](/mistakes/bench-variants-filled-the-disk.md):
+  cleanup deletes the variant's static libraries too.
+* **Tooling**: `bench.py` `MICRO_HEADERS` includes `thirdparty/xxhash/xxhash.h`,
+  so `micro --prev` compiles the previous side's xxHash.
+
 ## 2026-11-22 (HASH-07 candidate, every candidate in one build)
 
 * **Added**: [Small-map HashMap without an index](/project/hashmap-small-map.md)
