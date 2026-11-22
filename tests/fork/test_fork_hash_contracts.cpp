@@ -32,6 +32,7 @@
 
 TEST_FORCE_LINK(test_fork_hash_contracts)
 
+#include "core/string/string_name.h"
 #include "core/templates/a_hash_map.h"
 #include "core/templates/hash_map.h"
 #include "core/templates/hash_set.h"
@@ -571,6 +572,143 @@ TEST_CASE("[Fork][HashSet] Empty and single-element sets") {
 
 	CHECK(set.erase(7));
 	CHECK(set.begin() == set.end());
+}
+
+// The pins below guard the slot arithmetic (FORK_BACKEND_HASH_POW2): every key in one probe
+// run, empty tables and the key types with their own hashes.
+
+struct ConstantHasher {
+	static uint32_t hash(const int &) { return 7; }
+};
+
+TEST_CASE("[Fork][HashMap] Keys with one hash are found, erased and iterated in insertion order") {
+	HashMap<int, int, ConstantHasher> map;
+	for (int i = 0; i < 50; i++) {
+		map.insert(i, i * 10);
+	}
+	CHECK(map.size() == 50);
+	for (int i = 0; i < 50; i++) {
+		REQUIRE(map.getptr(i) != nullptr);
+		CHECK(*map.getptr(i) == i * 10);
+	}
+	for (int i = 0; i < 50; i += 2) {
+		CHECK(map.erase(i));
+	}
+	Vector<int> expected;
+	for (int i = 1; i < 50; i += 2) {
+		expected.push_back(i);
+		CHECK(map.has(i));
+		CHECK_FALSE(map.has(i - 1));
+	}
+	CHECK(map_keys(map) == expected);
+}
+
+TEST_CASE("[Fork][HashSet] Keys with one hash are found and iterate in insertion order") {
+	HashSet<int, ConstantHasher> set;
+	Vector<int> expected;
+	for (int i = 0; i < 50; i++) {
+		set.insert(i);
+		expected.push_back(i);
+	}
+	Vector<int> keys;
+	for (const int &key : set) {
+		keys.push_back(key);
+	}
+	CHECK(keys == expected);
+	for (int i = 0; i < 50; i++) {
+		CHECK(set.has(i));
+	}
+	for (int i = 0; i < 50; i += 2) {
+		CHECK(set.erase(i));
+	}
+	for (int i = 0; i < 50; i++) {
+		CHECK(set.has(i) == (i % 2 == 1));
+	}
+	CHECK(set.size() == 25);
+}
+
+#ifdef DEBUG_ENABLED
+TEST_CASE("[Fork][HashMap] An empty map finds nothing and allocates nothing") {
+	const uint64_t before = Memory::get_mem_usage();
+	{
+		HashMap<int, int> map;
+		CHECK_FALSE(map.has(1));
+		CHECK(map.getptr(1) == nullptr);
+		CHECK(map.find(1) == map.end());
+		CHECK_FALSE(map.erase(1));
+		CHECK(map.begin() == map.end());
+		CHECK(Memory::get_mem_usage() == before);
+	}
+	CHECK(Memory::get_mem_usage() == before);
+}
+
+TEST_CASE("[Fork][HashSet] An empty set finds nothing and allocates nothing") {
+	const uint64_t before = Memory::get_mem_usage();
+	{
+		HashSet<int> set;
+		CHECK_FALSE(set.has(1));
+		CHECK(set.find(1) == set.end());
+		CHECK_FALSE(set.erase(1));
+		CHECK(set.begin() == set.end());
+		CHECK(Memory::get_mem_usage() == before);
+	}
+	CHECK(Memory::get_mem_usage() == before);
+}
+#endif
+
+template <typename K>
+static void check_key_type(const Vector<K> &p_keys) {
+	HashMap<K, int> map;
+	HashSet<K> set;
+	for (int i = 0; i < p_keys.size(); i++) {
+		map.insert(p_keys[i], i);
+		set.insert(p_keys[i]);
+	}
+	CHECK(map.size() == uint32_t(p_keys.size()));
+	CHECK(set.size() == uint32_t(p_keys.size()));
+	int i = 0;
+	for (const KeyValue<K, int> &E : map) {
+		CHECK(E.key == p_keys[i]);
+		CHECK(E.value == i);
+		i++;
+	}
+	i = 0;
+	for (const K &key : set) {
+		CHECK(key == p_keys[i]);
+		i++;
+	}
+	for (i = 0; i < p_keys.size(); i += 2) {
+		CHECK(map.erase(p_keys[i]));
+		CHECK(set.erase(p_keys[i]));
+	}
+	for (i = 0; i < p_keys.size(); i++) {
+		const bool kept = i % 2 == 1;
+		CHECK(map.has(p_keys[i]) == kept);
+		CHECK(set.has(p_keys[i]) == kept);
+		if (kept) {
+			REQUIRE(map.getptr(p_keys[i]) != nullptr);
+			CHECK(*map.getptr(p_keys[i]) == i);
+		}
+	}
+}
+
+TEST_CASE("[Fork][HashMap] String, StringName, int64 and pointer keys") {
+	constexpr int count = 200;
+	Vector<String> strings;
+	Vector<StringName> names;
+	Vector<int64_t> ints;
+	Vector<const int *> pointers;
+	static int targets[count];
+	for (int i = 0; i < count; i++) {
+		strings.push_back("key_" + itos(i));
+		names.push_back(StringName("name_" + itos(i)));
+		ints.push_back(int64_t(i) << 32); // Differences in the high bits only.
+		pointers.push_back(&targets[i]); // Aligned: low bits always zero.
+	}
+	check_key_type(strings);
+	check_key_type(names);
+	check_key_type(ints);
+	check_key_type(pointers);
 }
 
 } // namespace TestForkHashContracts

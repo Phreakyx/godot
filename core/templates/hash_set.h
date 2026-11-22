@@ -32,6 +32,7 @@
 
 #include "core/os/memory.h"
 #include "core/string/print_string.h" // IWYU pragma: keep. `WARN_VERBOSE` macro.
+#include "core/templates/fork_backends.h"
 #include "core/templates/hashfuncs.h"
 
 /**
@@ -92,8 +93,41 @@ private:
 		_key_idx_to_hash_idx = nullptr;
 	}
 
+	// Fork: slot arithmetic (FORK_BACKEND_HASH_POW2, see fork_backends.h and
+	// kb/project/hash-pow2-mixer.md). With 0, prime capacities and fastmod (upstream); with 1 or
+	// 2, power-of-two capacities from 8 (index 2) and a mask.
+	static constexpr uint32_t _FIRST_CAPACITY_INDEX = FORK_BACKEND_HASH_POW2 ? MIN_CAPACITY_INDEX : 0;
+
+	_FORCE_INLINE_ static constexpr uint32_t _capacity_of(uint32_t p_idx) {
+#if FORK_BACKEND_HASH_POW2
+		return 2u << p_idx;
+#else
+		return hash_table_size_primes[p_idx];
+#endif
+	}
+
+	_FORCE_INLINE_ static constexpr uint64_t _capacity_inv_of([[maybe_unused]] uint32_t p_idx) {
+#if FORK_BACKEND_HASH_POW2
+		return 0; // No fastmod.
+#else
+		return hash_table_size_primes_inv[p_idx];
+#endif
+	}
+
+	// The slot of p_n (a hash, or an index one past a slot) in a table of p_capacity slots.
+	_FORCE_INLINE_ static uint32_t _home(uint32_t p_n, [[maybe_unused]] uint64_t p_capacity_inv, uint32_t p_capacity) {
+#if FORK_BACKEND_HASH_POW2
+		return p_n & (p_capacity - 1);
+#else
+		return fastmod(p_n, p_capacity_inv, p_capacity);
+#endif
+	}
+
 	_FORCE_INLINE_ uint32_t _hash(const TKey &p_key) const {
 		uint32_t hash = hash_table_key<Hasher>(p_key);
+#if FORK_BACKEND_HASH_POW2
+		hash = hash_table_mix<Hasher, TKey>(hash);
+#endif
 
 		if (unlikely(hash == EMPTY_HASH)) {
 			hash = EMPTY_HASH + 1;
@@ -103,18 +137,26 @@ private:
 	}
 
 	_FORCE_INLINE_ static constexpr void _increment_mod(uint32_t &r_idx, const uint32_t p_capacity) {
+#if FORK_BACKEND_HASH_POW2
+		r_idx = (r_idx + 1) & (p_capacity - 1);
+#else
 		r_idx++;
 		// `if` is faster than both fastmod and mod.
 		if (unlikely(r_idx == p_capacity)) {
 			r_idx = 0;
 		}
+#endif
 	}
 
-	static _FORCE_INLINE_ uint32_t _get_probe_length(const uint32_t p_hash_idx, const uint32_t p_hash, const uint32_t p_capacity, const uint64_t p_capacity_inv) {
+	static _FORCE_INLINE_ uint32_t _get_probe_length(const uint32_t p_hash_idx, const uint32_t p_hash, const uint32_t p_capacity, [[maybe_unused]] const uint64_t p_capacity_inv) {
+#if FORK_BACKEND_HASH_POW2
+		return (p_hash_idx - (p_hash & (p_capacity - 1))) & (p_capacity - 1);
+#else
 		const uint32_t original_idx = fastmod(p_hash, p_capacity_inv, p_capacity);
 		const uint32_t distance_idx = p_hash_idx - original_idx + p_capacity;
 		// At most p_capacity over 0, so we can use an if (faster than fastmod).
 		return distance_idx >= p_capacity ? distance_idx - p_capacity : distance_idx;
+#endif
 	}
 
 	bool _lookup_key_idx(const TKey &p_key, uint32_t &r_key_idx) const {
@@ -122,10 +164,10 @@ private:
 			return false; // Failed lookups, no elements
 		}
 
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
 		uint32_t hash = _hash(p_key);
-		uint32_t hash_idx = fastmod(hash, capacity_inv, capacity);
+		uint32_t hash_idx = _home(hash, capacity_inv, capacity);
 		uint32_t distance = 0;
 
 		while (true) {
@@ -148,12 +190,12 @@ private:
 	}
 
 	uint32_t _insert_with_hash(uint32_t p_hash, uint32_t p_key_idx) {
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
 		uint32_t hash = p_hash;
 		uint32_t key_idx = p_key_idx;
 		uint32_t distance = 0;
-		uint32_t hash_idx = fastmod(hash, capacity_inv, capacity);
+		uint32_t hash_idx = _home(hash, capacity_inv, capacity);
 
 		while (true) {
 			if (_hashes[hash_idx] == EMPTY_HASH) {
@@ -181,7 +223,7 @@ private:
 		// Capacity can't be 0.
 		_capacity_idx = MAX((uint32_t)MIN_CAPACITY_INDEX, p_new_capacity_idx);
 
-		uint32_t capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t capacity = _capacity_of(_capacity_idx);
 
 		uint32_t *old_hashes = _hashes;
 		uint32_t *old_key_to_hash = _key_idx_to_hash_idx;
@@ -203,7 +245,7 @@ private:
 
 	// Returns key index.
 	_FORCE_INLINE_ int32_t _insert(const TKey &p_key) {
-		uint32_t capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t capacity = _capacity_of(_capacity_idx);
 		if (unlikely(_keys == nullptr)) {
 			// Allocate on demand to save memory.
 			_allocate_block(capacity);
@@ -236,7 +278,7 @@ private:
 			return;
 		}
 
-		uint32_t capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t capacity = _capacity_of(_capacity_idx);
 
 		_allocate_block(capacity);
 
@@ -252,7 +294,7 @@ private:
 	}
 
 public:
-	_FORCE_INLINE_ uint32_t get_capacity() const { return hash_table_size_primes[_capacity_idx]; }
+	_FORCE_INLINE_ uint32_t get_capacity() const { return _capacity_of(_capacity_idx); }
 	_FORCE_INLINE_ uint32_t size() const { return _size; }
 
 	/* Standard Godot Container API */
@@ -266,7 +308,7 @@ public:
 			return;
 		}
 
-		uint32_t capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t capacity = _capacity_of(_capacity_idx);
 		memset(_hashes, EMPTY_HASH, sizeof(EMPTY_HASH) * capacity);
 
 		if constexpr (!std::is_trivially_destructible_v<TKey>) {
@@ -293,9 +335,9 @@ public:
 
 		uint32_t hash_idx = _key_idx_to_hash_idx[key_idx];
 
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
-		uint32_t next_hash_idx = fastmod(hash_idx + 1, capacity_inv, capacity);
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
+		uint32_t next_hash_idx = _home(hash_idx + 1, capacity_inv, capacity);
 		while (_hashes[next_hash_idx] != EMPTY_HASH && _get_probe_length(next_hash_idx, _hashes[next_hash_idx], capacity, capacity_inv) != 0) {
 			uint32_t cur_key_idx = _hash_idx_to_key_idx[hash_idx];
 			uint32_t next_key_idx = _hash_idx_to_key_idx[next_hash_idx];
@@ -326,7 +368,7 @@ public:
 	void reserve(uint32_t p_new_capacity) {
 		uint32_t new_capacity_idx = _capacity_idx;
 
-		while (hash_table_size_primes[new_capacity_idx] < p_new_capacity) {
+		while (_capacity_of(new_capacity_idx) < p_new_capacity) {
 			ERR_FAIL_COND_MSG(new_capacity_idx + 1 == (uint32_t)HASH_TABLE_SIZE_MAX, nullptr);
 			new_capacity_idx++;
 		}
@@ -458,7 +500,7 @@ public:
 		p_other._hashes = nullptr;
 		p_other._key_idx_to_hash_idx = nullptr;
 
-		p_other._capacity_idx = 0;
+		p_other._capacity_idx = _FIRST_CAPACITY_INDEX;
 		p_other._size = 0;
 	}
 
@@ -507,7 +549,7 @@ public:
 
 	explicit HashSet(uint32_t p_initial_capacity) {
 		// Capacity can't be 0.
-		_capacity_idx = 0;
+		_capacity_idx = _FIRST_CAPACITY_INDEX;
 		reserve(p_initial_capacity);
 	}
 	HashSet() {

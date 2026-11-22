@@ -32,6 +32,7 @@
 
 #include "core/math/math_defs.h"
 #include "core/math/math_funcs.h"
+#include "core/templates/fork_backends.h"
 #include "core/typedefs.h"
 
 #ifdef _MSC_VER
@@ -316,6 +317,23 @@ _FORCE_INLINE_ uint32_t hash_table_key(const T &p_value) {
 		return Hasher::hash(p_value);
 	}
 }
+
+#if FORK_BACKEND_HASH_POW2
+// Fork (FORK_BACKEND_HASH_POW2): HashMap and HashSet take the slot from the low bits with a
+// mask, so the low bits must depend on every bit of the key's hash. Mixes hash_table_key()
+// once per key; the byte hashes of String and CharString keys are mixed already.
+template <typename Hasher, typename T>
+_FORCE_INLINE_ uint32_t hash_table_mix(uint32_t p_hash) {
+	if constexpr (std::is_same_v<Hasher, HashMapHasherDefault> && (std::is_same_v<T, String> || is_char_string<T>::value)) {
+		return p_hash;
+	} else if constexpr (FORK_BACKEND_HASH_POW2 == 1) {
+		p_hash *= 0x9E3779B1u;
+		return p_hash ^ (p_hash >> 16);
+	} else {
+		return hash_fmix32(p_hash);
+	}
+}
+#endif
 
 template <typename, typename = std::void_t<>>
 struct has_is_same_method : std::false_type {};

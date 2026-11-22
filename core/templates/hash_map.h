@@ -265,8 +265,41 @@ private:
 	}
 #endif
 
+	// Fork: slot arithmetic (FORK_BACKEND_HASH_POW2, see fork_backends.h and
+	// kb/project/hash-pow2-mixer.md). With 0, prime capacities and fastmod (upstream); with 1 or
+	// 2, power-of-two capacities from 8 (index 2) and a mask.
+	static constexpr uint32_t _FIRST_CAPACITY_INDEX = FORK_BACKEND_HASH_POW2 ? MIN_CAPACITY_INDEX : 0;
+
+	_FORCE_INLINE_ static constexpr uint32_t _capacity_of(uint32_t p_idx) {
+#if FORK_BACKEND_HASH_POW2
+		return 2u << p_idx;
+#else
+		return hash_table_size_primes[p_idx];
+#endif
+	}
+
+	_FORCE_INLINE_ static constexpr uint64_t _capacity_inv_of([[maybe_unused]] uint32_t p_idx) {
+#if FORK_BACKEND_HASH_POW2
+		return 0; // No fastmod.
+#else
+		return hash_table_size_primes_inv[p_idx];
+#endif
+	}
+
+	// The slot of p_n (a hash, or an index one past a slot) in a table of p_capacity slots.
+	_FORCE_INLINE_ static uint32_t _home(uint32_t p_n, [[maybe_unused]] uint64_t p_capacity_inv, uint32_t p_capacity) {
+#if FORK_BACKEND_HASH_POW2
+		return p_n & (p_capacity - 1);
+#else
+		return fastmod(p_n, p_capacity_inv, p_capacity);
+#endif
+	}
+
 	_FORCE_INLINE_ static uint32_t _hash(const TKey &p_key) {
 		uint32_t hash = hash_table_key<Hasher>(p_key);
+#if FORK_BACKEND_HASH_POW2
+		hash = hash_table_mix<Hasher, TKey>(hash);
+#endif
 
 		if (unlikely(hash == EMPTY_HASH)) {
 			hash = EMPTY_HASH + 1;
@@ -276,11 +309,15 @@ private:
 	}
 
 	_FORCE_INLINE_ static constexpr void _increment_mod(uint32_t &r_idx, const uint32_t p_capacity) {
+#if FORK_BACKEND_HASH_POW2
+		r_idx = (r_idx + 1) & (p_capacity - 1);
+#else
 		r_idx++;
 		// `if` is faster than both fastmod and mod.
 		if (unlikely(r_idx == p_capacity)) {
 			r_idx = 0;
 		}
+#endif
 	}
 
 	// Returns true when the probe length from `a` to `idx` is LESS THAN the probe length from `b` to `idx`.
@@ -297,9 +334,9 @@ private:
 
 	/// Note: Assumes that _elements != nullptr
 	bool _lookup_idx_unchecked(const TKey &p_key, uint32_t p_hash, uint32_t &r_idx) const {
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
-		const uint32_t start_idx = fastmod(p_hash, capacity_inv, capacity);
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
+		const uint32_t start_idx = _home(p_hash, capacity_inv, capacity);
 		uint32_t idx = start_idx;
 
 		if (_hashes[idx] == EMPTY_HASH) {
@@ -316,7 +353,7 @@ private:
 			}
 			if (_hashes[idx] != p_hash) {
 				// Stop search if we probed further than this element.
-				if (_probe_length_cmp(fastmod(_hashes[idx], capacity_inv, capacity), start_idx, idx)) {
+				if (_probe_length_cmp(_home(_hashes[idx], capacity_inv, capacity), start_idx, idx)) {
 					return false;
 				}
 			} else if (Comparator::compare(_elements[idx]->data.key, p_key)) {
@@ -335,12 +372,12 @@ private:
 	}
 
 	void _insert_element(uint32_t p_hash, HashMapElement<TKey, TValue> *p_value) {
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
 		uint32_t hash = p_hash;
 		HashMapElement<TKey, TValue> *value = p_value;
 
-		uint32_t start_idx = fastmod(hash, capacity_inv, capacity);
+		uint32_t start_idx = _home(hash, capacity_inv, capacity);
 		uint32_t idx = start_idx;
 
 		if (_hashes[idx] == EMPTY_HASH) {
@@ -357,7 +394,7 @@ private:
 			}
 
 			// Not an empty slot, let's check the probing length of the existing one.
-			uint32_t new_start_idx = fastmod(_hashes[idx], capacity_inv, capacity);
+			uint32_t new_start_idx = _home(_hashes[idx], capacity_inv, capacity);
 			if (_probe_length_cmp(new_start_idx, start_idx, idx)) {
 				SWAP(hash, _hashes[idx]);
 				SWAP(value, _elements[idx]);
@@ -367,12 +404,12 @@ private:
 	}
 
 	void _resize_and_rehash(uint32_t p_new_capacity_idx) {
-		uint32_t old_capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t old_capacity = _capacity_of(_capacity_idx);
 
 		// Capacity can't be 0.
 		_capacity_idx = MAX((uint32_t)MIN_CAPACITY_INDEX, p_new_capacity_idx);
 
-		uint32_t capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t capacity = _capacity_of(_capacity_idx);
 
 		HashMapElement<TKey, TValue> **old_elements = _elements;
 		uint32_t *old_hashes = _hashes;
@@ -401,7 +438,7 @@ private:
 	}
 
 	_FORCE_INLINE_ HashMapElement<TKey, TValue> *_insert(const TKey &p_key, const TValue &p_value, uint32_t p_hash, bool p_front_insert = false) {
-		uint32_t capacity = hash_table_size_primes[_capacity_idx];
+		uint32_t capacity = _capacity_of(_capacity_idx);
 		if (unlikely(_elements == nullptr)) {
 			// Allocate on demand to save memory.
 
@@ -457,7 +494,7 @@ private:
 	}
 
 public:
-	_FORCE_INLINE_ uint32_t get_capacity() const { return hash_table_size_primes[_capacity_idx]; }
+	_FORCE_INLINE_ uint32_t get_capacity() const { return _capacity_of(_capacity_idx); }
 	_FORCE_INLINE_ uint32_t size() const { return _size; }
 
 	/* Standard Godot Container API */
@@ -542,12 +579,12 @@ public:
 			return false;
 		}
 
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
 
 		uint32_t next_idx = idx;
 		_increment_mod(next_idx, capacity);
-		while (_hashes[next_idx] != EMPTY_HASH && next_idx != fastmod(_hashes[next_idx], capacity_inv, capacity)) {
+		while (_hashes[next_idx] != EMPTY_HASH && next_idx != _home(_hashes[next_idx], capacity_inv, capacity)) {
 			SWAP(_hashes[next_idx], _hashes[idx]);
 			SWAP(_elements[next_idx], _elements[idx]);
 			idx = next_idx;
@@ -592,12 +629,12 @@ public:
 		HashMapElement<TKey, TValue> *element = _elements[idx];
 
 		// Delete the old entries in _hashes and _elements.
-		const uint32_t capacity = hash_table_size_primes[_capacity_idx];
-		const uint64_t capacity_inv = hash_table_size_primes_inv[_capacity_idx];
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		const uint64_t capacity_inv = _capacity_inv_of(_capacity_idx);
 
 		uint32_t next_idx = idx;
 		_increment_mod(next_idx, capacity);
-		while (_hashes[next_idx] != EMPTY_HASH && next_idx != fastmod(_hashes[next_idx], capacity_inv, capacity)) {
+		while (_hashes[next_idx] != EMPTY_HASH && next_idx != _home(_hashes[next_idx], capacity_inv, capacity)) {
 			SWAP(_hashes[next_idx], _hashes[idx]);
 			SWAP(_elements[next_idx], _elements[idx]);
 			idx = next_idx;
@@ -622,7 +659,7 @@ public:
 		_pool_first_page(p_new_capacity);
 		uint32_t new_idx = _capacity_idx;
 
-		while (hash_table_size_primes[new_idx] < p_new_capacity) {
+		while (_capacity_of(new_idx) < p_new_capacity) {
 			ERR_FAIL_COND_MSG(new_idx + 1 == (uint32_t)HASH_TABLE_SIZE_MAX, nullptr);
 			new_idx++;
 		}
@@ -800,7 +837,7 @@ public:
 	/* Constructors */
 
 	explicit HashMap(const HashMap &p_other) {
-		reserve(hash_table_size_primes[p_other._capacity_idx]);
+		reserve(_capacity_of(p_other._capacity_idx));
 		_pool_first_page(p_other._size);
 
 		if (p_other._size == 0) {
@@ -838,7 +875,7 @@ public:
 		}
 		_pool_reset();
 
-		reserve(hash_table_size_primes[p_other._capacity_idx]);
+		reserve(_capacity_of(p_other._capacity_idx));
 		_pool_first_page(p_other._size);
 
 		if (p_other._elements == nullptr) {
@@ -884,7 +921,7 @@ public:
 
 	explicit HashMap(uint32_t p_initial_capacity) {
 		// Capacity can't be 0.
-		_capacity_idx = 0;
+		_capacity_idx = _FIRST_CAPACITY_INDEX;
 		reserve(p_initial_capacity);
 	}
 	HashMap() {

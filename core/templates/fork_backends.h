@@ -79,3 +79,15 @@
 #if !(FORK_BACKEND_HASHMAP_POOL == 0 || FORK_BACKEND_HASHMAP_POOL == 1)
 #error "FORK_BACKEND_HASHMAP_POOL must be 0 or 1."
 #endif
+
+// HashMap and HashSet capacity and slot arithmetic (HASH-03, kb/project/hash-pow2-mixer.md).
+// 0: prime capacities (hash_table_size_primes) and fastmod on every probed slot (upstream).
+// 1, 2: power-of-two capacities from 8 and a mask; _hash() mixes the table hash once with
+//    hash_table_mix() (1: multiply then xorshift, 2: hash_fmix32). Byte-hashed String and
+//    CharString keys are not mixed again. Hasher outputs do not change.
+#ifndef FORK_BACKEND_HASH_POW2
+#define FORK_BACKEND_HASH_POW2 0
+#endif
+#if !(FORK_BACKEND_HASH_POW2 == 0 || FORK_BACKEND_HASH_POW2 == 1 || FORK_BACKEND_HASH_POW2 == 2)
+#error "FORK_BACKEND_HASH_POW2 must be 0, 1 or 2."
+#endif

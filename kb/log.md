@@ -1,5 +1,18 @@
 # Update log
 
+## 2026-11-22 (HASH-02 and HASH-03 candidates)
+
+* **Added**: [HashMap slot array](/project/hashmap-slot-array.md) (HASH-02,
+  draft): design written against the 2026-11-15 result (no second index, no
+  per-entry state, 12 to 8 index bytes per slot), then rejected by the D-10
+  gate before building: it needs the node pool, and the provisional MSVC
+  baseline is empty; without stable node indices the layouts left cost 16 or
+  about 14 bytes per slot.
+* **Added**: [power-of-two capacity with a mixer](/project/hash-pow2-mixer.md)
+  (HASH-03, draft): `FORK_BACKEND_HASH_POW2` 1 and 2 in HashMap and HashSet,
+  built and pinned (constant hasher, empty tables, String, StringName, int64
+  and pointer keys); timings to come from 03-10.
+
 ## 2026-11-22 (ALLOC-02 on MSVC)
 
 * **Updated**: [ALLOC-02](/project/alloc-vs-pool.md) "Results (MSVC)" and
