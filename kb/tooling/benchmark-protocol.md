@@ -138,6 +138,10 @@ The verdict tokens: `ACCEPT`, `REJECT`, `WITHIN-NOISE`, `REGRESSION`,
 `INCOMPLETE`, `NO-FLOOR` (no A/A floor stored), `RE-MEASURE-AA` (the floor
 is from another machine state or n).
 
+`bench.py verdict` is the mechanical reading of a finished series with these
+rules and changes none of them: PASS when a listed target row reads `ACCEPT`
+and no row reads `REGRESSION`, FAIL otherwise.
+
 # Machine
 
 - Intel i9-14900K (8 P-cores with HT, 16 E-cores, 32 logical CPUs),
@@ -748,7 +752,26 @@ python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --
 python devtools/bench/bench.py aa --workloads micro_engine --write-floors
 python devtools/bench/bench.py profile --workload scene:instance:10000 --build template_release
 python3 devtools/bench/bench.py aa --workloads all --compiler clang --write-floors --counters   # Linux
+python devtools/bench/bench.py compare --build-only --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev \
+    --target script:script --workloads all
+python devtools/bench/bench.py compare --base-defines "FORK_BACKEND_A=1" --name cand --defines "FORK_BACKEND_X=1" \
+    --prev origin/dev --target script:script --workloads all
+python devtools/bench/bench.py verdict --series devtools/out/bench/<series> --rows script:script@template_release
 ```
+
+`compare --build-only` builds the binaries the series needs (tests builds
+too for `micro_engine`), prints `BUILT <label> <binary>` per binary and
+stops: no load, clock or power checks, only the 5 GB disk check.
+`--base-defines` (compare and micro) puts a baseline under control and
+candidate: the control builds as variant `b<first 6 hex of the SHA-1 of the
+sorted macro list>` with those macros, the candidate with them plus
+`--defines`; the previous side is unchanged. `meta.json` records
+`base_defines` and `control_variant`. `verdict --series <dir> --rows
+<workload>@<build>[,...]` (micro rows: `micro/<case>@standalone`) prints
+`PASS <dir>` (exit 0) or `FAIL <dir>: <reason>` (exit 1; exit 2 without a
+`summary.csv`), then the unjudged rows (`INCOMPLETE`, `NO-FLOOR`,
+`RE-MEASURE-AA`) and the count rows that read `ALLOC-INCREASE` or
+`INCREASE`; those need an explanation in `kb/` and do not fail the verdict.
 
 Every command but `fetch` takes `--compiler` (Windows `msvc`; Linux
 `gcc` or `clang`). `micro` takes `--aa` or `--prev`, and `--name`, `--defines`, `--target`

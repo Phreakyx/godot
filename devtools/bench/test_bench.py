@@ -611,5 +611,60 @@ class LinuxAdapterShape(unittest.TestCase):
         self.assertEqual(bench.lookup_floor(floors, key, dict(meta, os_build="6.18.1-1-cachyos"), 5), "RE-MEASURE-AA")
 
 
+class SeriesVerdict(unittest.TestCase):
+    """bench.py verdict: the mechanical reading of a finished series (summary.csv and counts.csv)."""
+
+    HEADER = "workload,metric,build,rule,verdict\n"
+
+    def series(self, summary, counts=None):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "summary.csv").write_text(self.HEADER + "".join(f"{r}\n" for r in summary), encoding="utf-8")
+        if counts is not None:
+            (tmp / "counts.csv").write_text("workload,metric,build,verdict\n" + "".join(f"{r}\n" for r in counts),
+                                            encoding="utf-8")
+        return tmp
+
+    TARGET = "script:script,frame_ms_p50,template_release,accept,ACCEPT"
+
+    def test_accept_and_no_regression_passes(self):
+        tmp = self.series([self.TARGET, "scene:instance:10000,peak_ws_mb,editor,regression,WITHIN-NOISE"])
+        code, lines = bench.series_verdict(tmp, "script:script@template_release")
+        self.assertEqual(code, 0)
+        self.assertTrue(lines[0].startswith("PASS "))
+
+    def test_a_regression_anywhere_fails_naming_it(self):
+        tmp = self.series([self.TARGET, "scene:instance:10000,peak_ws_mb,editor,regression,REGRESSION"])
+        code, lines = bench.series_verdict(tmp, "script:script@template_release")
+        self.assertEqual(code, 1)
+        self.assertTrue(lines[0].startswith("FAIL ") and "scene:instance:10000 peak_ws_mb editor" in lines[0])
+
+    def test_target_not_accepted_fails_naming_it(self):
+        for token in ("WITHIN-NOISE", "REJECT", "NO-FLOOR", "INCOMPLETE"):
+            tmp = self.series([f"script:script,frame_ms_p50,template_release,accept,{token}"])
+            code, lines = bench.series_verdict(tmp, "script:script@template_release")
+            self.assertEqual(code, 1, token)
+            self.assertIn("script:script frame_ms_p50 template_release", lines[0])
+            self.assertIn(token, lines[0])
+
+    def test_micro_series_follows_the_same_rule(self):
+        tmp = self.series(["micro/hashmap_i64_insert_4096,ns_per_op,standalone,accept,ACCEPT",
+                           "micro/hashmap_i64_hit_4096,ns_per_op,standalone,regression,WITHIN-NOISE"],
+                          ["micro/hashmap_tiny_ptr_build_2,live_bytes,standalone,INCREASE"])
+        code, lines = bench.series_verdict(tmp, "micro/hashmap_i64_insert_4096@standalone")
+        self.assertEqual(code, 0)
+        self.assertTrue(any("micro/hashmap_tiny_ptr_build_2 live_bytes" in line for line in lines[1:]))
+        tmp = self.series(["micro/hashmap_i64_insert_4096,ns_per_op,standalone,accept,ACCEPT",
+                           "micro/hashmap_i64_hit_4096,ns_per_op,standalone,regression,REGRESSION"])
+        self.assertEqual(bench.series_verdict(tmp, "micro/hashmap_i64_insert_4096@standalone")[0], 1)
+
+    def test_no_summary_is_exit_two(self):
+        self.assertEqual(bench.series_verdict(Path(tempfile.mkdtemp()), "script:script@template_release")[0], 2)
+
+    def test_base_variant_ignores_macro_order(self):
+        self.assertEqual(bench.base_variant("A=1 B=1"), bench.base_variant("B=1 A=1"))
+        self.assertNotEqual(bench.base_variant("A=1 B=1"), bench.base_variant("A=1"))
+        self.assertRegex(bench.base_variant("A=1"), r"^b[0-9a-f]{6}$")
+
+
 if __name__ == "__main__":
     unittest.main()

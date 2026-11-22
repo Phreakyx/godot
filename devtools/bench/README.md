@@ -19,8 +19,21 @@ python devtools/bench/bench.py compare --name cand --defines "FORK_BACKEND_X=1" 
 python devtools/bench/bench.py micro --aa --write-floors
 python devtools/bench/bench.py micro --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev
 python devtools/bench/bench.py profile --workload scene:instance:10000 --build template_release
+python devtools/bench/bench.py compare --build-only --name cand --defines "FORK_BACKEND_X=1" --prev origin/dev \
+    --target script:script --workloads all
+python devtools/bench/bench.py compare --base-defines "FORK_BACKEND_A=1" --name cand --defines "FORK_BACKEND_X=1" \
+    --prev origin/dev --target script:script --workloads all
+python devtools/bench/bench.py verdict --series devtools/out/bench/<series> --rows script:script@template_release
 python devtools/bench/test_bench.py
 ```
+
+- `compare --build-only` builds what the series needs and prints one `BUILT <label> <binary>` line
+  per binary, without measuring or the load and clock checks (the disk check stays).
+  `--base-defines` (compare and micro) builds the control as variant `b<6 hex of the SHA-1 of the
+  sorted macros>` with the baseline macros and the candidate with them plus `--defines`; the
+  previous side is unchanged. `verdict` reads a finished series' `summary.csv` and `counts.csv`:
+  PASS when a listed `<workload>@<build>` target row reads ACCEPT and no row reads REGRESSION
+  (exit 0), else FAIL (exit 1; 2 without `summary.csv`), then the unjudged and increased-count rows.
 
 - Workloads (judged metrics, class and build types in the protocol's "Workloads"):
   `scene:<scenario>:<count>` (`workloads/scene.gd`), `script:<nodes|script|instance>`

@@ -34,15 +34,42 @@ TEST_FORCE_LINK(test_fork_backends)
 
 #include "core/templates/fork_backends.h"
 
+#if FORK_BACKEND_ALLOCATOR
+#include "thirdparty/mimalloc/include/mimalloc.h"
+
+#include <cstdlib>
+#endif
+
 namespace TestForkBackends {
 
 TEST_CASE("[Fork][Backends] Selected backends") {
 	MESSAGE("FORK_BACKEND_SELFTEST=", FORK_BACKEND_SELFTEST);
 	CHECK((FORK_BACKEND_SELFTEST == 0 || FORK_BACKEND_SELFTEST == 1));
 	MESSAGE("FORK_BACKEND_ALLOCATOR=", FORK_BACKEND_ALLOCATOR);
-	CHECK((FORK_BACKEND_ALLOCATOR == 0 || FORK_BACKEND_ALLOCATOR == 1));
+	CHECK((FORK_BACKEND_ALLOCATOR == 0 || FORK_BACKEND_ALLOCATOR == 1 || FORK_BACKEND_ALLOCATOR == 3));
 	MESSAGE("FORK_BACKEND_HASHMAP_POOL=", FORK_BACKEND_HASHMAP_POOL);
 	CHECK((FORK_BACKEND_HASHMAP_POOL == 0 || FORK_BACKEND_HASHMAP_POOL == 1));
 }
+
+#if FORK_BACKEND_ALLOCATOR
+// Which allocations mimalloc owns: with 1 (D-01) only Memory:: calls, so a raw malloc block is
+// the C runtime's; with 3 the process-wide override owns malloc, operator new and the blocks
+// glibc allocates inside itself (realpath; mimalloc does not export realpath on Linux).
+TEST_CASE("[Fork][Backends] Allocator scope") {
+	constexpr bool override_all = FORK_BACKEND_ALLOCATOR == 3;
+	void *raw = malloc(64);
+	CHECK(mi_any_heap_contains(raw) == override_all);
+	free(raw);
+#if FORK_BACKEND_ALLOCATOR == 3
+	void *object = ::operator new(64);
+	CHECK(mi_any_heap_contains(object));
+	::operator delete(object);
+	char *resolved = realpath(".", nullptr);
+	REQUIRE(resolved != nullptr);
+	CHECK(mi_any_heap_contains(resolved));
+	free(resolved);
+#endif
+}
+#endif // FORK_BACKEND_ALLOCATOR
 
 } // namespace TestForkBackends

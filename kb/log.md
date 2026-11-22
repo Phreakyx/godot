@@ -1,5 +1,20 @@
 # Update log
 
+## 2026-11-22 (ALLOC-02 rules and runner options)
+
+* **Added**: [ALLOC-02 decision entry](/project/alloc-vs-pool.md) (draft)
+  with its rules stated before any measurement: the four same-source
+  builds, target rows per compiler (MSVC `script:script`, GCC and Clang
+  `scene:instance:10000`, template_release), the `bench.py verdict` pass
+  rule, the count rules, the tiny-maps report and the baseline rule; plus
+  the exploratory Linux-only override variant (`FORK_BACKEND_ALLOCATOR=3`,
+  mimalloc as the process-wide malloc), reported beside the series and
+  never part of the baseline.
+* **Updated**: [benchmark protocol](/tooling/benchmark-protocol.md):
+  `compare --build-only`, `--base-defines` (compare and micro) and the
+  `verdict` subcommand, the mechanical reading of a series that changes no
+  rule.
+
 ## 2026-11-22 (HashMap node pool candidate)
 
 * **Added**: [per-map HashMap node pool](/project/hashmap-node-pool.md)

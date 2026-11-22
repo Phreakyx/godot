@@ -52,11 +52,20 @@
 // 0: the C runtime malloc, calloc, realloc and free (upstream).
 // 1: mimalloc (thirdparty/mimalloc), called directly from core/os/memory.cpp. It is
 //    compiled by core/os/fork_mimalloc.c, which is empty with 0. Nothing is overridden.
+// 3: Linux only, exploratory, never a default: mimalloc exports malloc, calloc, realloc,
+//    free, the aligned and POSIX variants and operator new/delete for the whole process,
+//    third-party code included. core/os/memory.cpp keeps its C runtime calls, which then
+//    reach mimalloc.
 #ifndef FORK_BACKEND_ALLOCATOR
 #define FORK_BACKEND_ALLOCATOR 0
 #endif
-#if !(FORK_BACKEND_ALLOCATOR == 0 || FORK_BACKEND_ALLOCATOR == 1)
-#error "FORK_BACKEND_ALLOCATOR must be 0 or 1."
+#if !(FORK_BACKEND_ALLOCATOR == 0 || FORK_BACKEND_ALLOCATOR == 1 || FORK_BACKEND_ALLOCATOR == 3)
+#error "FORK_BACKEND_ALLOCATOR must be 0, 1 or 3."
+#endif
+// Windows builds use the static C runtime (/MT), and mimalloc's Windows override needs its
+// redirect DLL and the DLL runtime; macOS and MinGW are not tried either.
+#if FORK_BACKEND_ALLOCATOR == 3 && !(defined(__linux__) && (defined(__GNUC__) || defined(__clang__)))
+#error "FORK_BACKEND_ALLOCATOR=3 replaces malloc for the whole process and is Linux-only (GCC or Clang)."
 #endif
 
 // HashMap node storage (HASH-01).

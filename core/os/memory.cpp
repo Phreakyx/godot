@@ -41,14 +41,17 @@
 
 #include <cstdlib>
 
-#if FORK_BACKEND_ALLOCATOR
+// Values 1 and 2 call mimalloc directly; 3 keeps the C runtime calls, which mimalloc exports.
+#define FORK_MEMORY_MIMALLOC_DIRECT (FORK_BACKEND_ALLOCATOR != 0 && FORK_BACKEND_ALLOCATOR != 3)
+
+#if FORK_MEMORY_MIMALLOC_DIRECT
 #include "thirdparty/mimalloc/include/mimalloc.h"
 #endif
 
 // Fork: the underlying allocator, selected by FORK_BACKEND_ALLOCATOR (fork_backends.h).
 // 0 is upstream's C runtime calls. Prepad, accounting, counters and profiling stay above.
 static _FORCE_INLINE_ void *_fork_sys_malloc(size_t p_bytes) {
-#if FORK_BACKEND_ALLOCATOR
+#if FORK_MEMORY_MIMALLOC_DIRECT
 	return mi_malloc(p_bytes);
 #else
 	return malloc(p_bytes);
@@ -56,7 +59,7 @@ static _FORCE_INLINE_ void *_fork_sys_malloc(size_t p_bytes) {
 }
 
 static _FORCE_INLINE_ void *_fork_sys_calloc(size_t p_bytes) {
-#if FORK_BACKEND_ALLOCATOR
+#if FORK_MEMORY_MIMALLOC_DIRECT
 	return mi_calloc(1, p_bytes);
 #else
 	return calloc(1, p_bytes);
@@ -64,7 +67,7 @@ static _FORCE_INLINE_ void *_fork_sys_calloc(size_t p_bytes) {
 }
 
 static _FORCE_INLINE_ void *_fork_sys_realloc(void *p_memory, size_t p_bytes) {
-#if FORK_BACKEND_ALLOCATOR
+#if FORK_MEMORY_MIMALLOC_DIRECT
 	// mi_realloc(p, 0) returns a live zero-size block; the C runtime frees and returns
 	// nullptr, which realloc_static relies on.
 	if (p_bytes == 0) {
@@ -72,13 +75,20 @@ static _FORCE_INLINE_ void *_fork_sys_realloc(void *p_memory, size_t p_bytes) {
 		return nullptr;
 	}
 	return mi_realloc(p_memory, p_bytes);
+#elif FORK_BACKEND_ALLOCATOR == 3
+	// mimalloc's exported realloc keeps a zero-size block where glibc frees.
+	if (p_bytes == 0) {
+		free(p_memory);
+		return nullptr;
+	}
+	return realloc(p_memory, p_bytes);
 #else
 	return realloc(p_memory, p_bytes);
 #endif
 }
 
 static _FORCE_INLINE_ void _fork_sys_free(void *p_memory) {
-#if FORK_BACKEND_ALLOCATOR
+#if FORK_MEMORY_MIMALLOC_DIRECT
 	mi_free(p_memory);
 #else
 	free(p_memory);

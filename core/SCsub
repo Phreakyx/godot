@@ -213,6 +213,11 @@ if env["builtin_zstd"]:
 # mimalloc code. core/os/SCsub takes only *.cpp files, hence the explicit entry here.
 env_mimalloc = env_thirdparty.Clone()
 env_mimalloc.Prepend(CPPPATH=["#thirdparty/mimalloc/include"])
+# As mimalloc's CMake does with its override on: GCC must not turn a malloc plus memset inside
+# the allocator into a calloc call that re-enters it (FORK_BACKEND_ALLOCATOR=3). SCons does not
+# read the macro; with 1 mimalloc never calls malloc, so the flag changes nothing there.
+if not env.msvc:
+    env_mimalloc.Append(CCFLAGS=["-fno-builtin-malloc"])
 env_mimalloc.add_source_files(thirdparty_obj, "#core/os/fork_mimalloc.c")
 
 

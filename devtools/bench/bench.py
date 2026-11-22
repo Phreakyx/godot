@@ -735,6 +735,48 @@ def run_checks(mask, max_load, perf=False):
 # --- series: aa and compare ---
 
 
+def base_variant(base_defines):
+    """The control's variant on a baseline: b + 6 hex of the SHA-1 of the sorted macro list (order-free)."""
+    return "b" + hashlib.sha1(" ".join(sorted(base_defines.split())).encode()).hexdigest()[:6]
+
+
+UNJUDGED = ("INCOMPLETE", "NO-FLOOR", "RE-MEASURE-AA")
+
+
+def series_verdict(series, rows):
+    """bench.py verdict: (exit code, lines). Reads summary.csv and counts.csv; changes no rule.
+    PASS: a listed accept-rule row reads ACCEPT and no row of summary.csv reads REGRESSION."""
+    series = Path(series)
+    if not (series / "summary.csv").is_file():
+        return 2, [f"FAIL {series}: no summary.csv (an interrupted series writes none)"]
+    with (series / "summary.csv").open(encoding="utf-8") as handle:
+        summary = list(csv.DictReader(handle))
+    counts = []
+    if (series / "counts.csv").is_file():
+        with (series / "counts.csv").open(encoding="utf-8") as handle:
+            counts = list(csv.DictReader(handle))
+
+    def name(r):
+        return f"{r['workload']} {r['metric']} {r['build']}"
+
+    wanted = {tuple(spec.rsplit("@", 1)) for spec in rows.split(",") if spec}
+    listed = [r for r in summary if (r["workload"], r["build"]) in wanted and r["rule"] == "accept"]
+    regressions = [r for r in summary if r["verdict"] == "REGRESSION"]
+    if not listed:
+        result = (1, f"FAIL {series}: no accept-rule row for {rows}")
+    elif regressions:
+        result = (1, f"FAIL {series}: REGRESSION in {', '.join(name(r) for r in regressions)}")
+    elif not any(r["verdict"] == "ACCEPT" for r in listed):
+        result = (1, f"FAIL {series}: {', '.join(f'{name(r)} reads {r['verdict']}' for r in listed)}")
+    else:
+        result = (0, f"PASS {series}")
+    lines = [result[1]]
+    lines += [f"UNJUDGED {name(r)}: {r['verdict']}" for r in summary if r["verdict"] in UNJUDGED]
+    lines += [f"COUNT {name(r)}: {r['verdict']} (explain in kb)" for r in counts
+              if r["verdict"] in ("ALLOC-INCREASE", "INCREASE")]
+    return result[0], lines
+
+
 def print_rules(n):
     k = wins_needed(n)
     print(f"RULES n={n} k={k} (one-sided sign test, chance passes below 5%)")
@@ -780,9 +822,16 @@ def run_series(args, sides):
     builds = args.builds.split(",")
     labels = [side["label"] for side in sides]
     mask = osb.p_core_mask()
-    checks, problems = run_checks(mask, args.max_load, args.counters)
-    if problems:
-        raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
+    base = getattr(args, "base_defines", "")
+    control_variant = next(s["variant"] for s in sides if s["label"] == "control")
+    if base:
+        print(f"BASE {base} (control variant {control_variant})", flush=True)
+    if getattr(args, "build_only", False):  # nothing is measured: no load, clock or power checks, only the disk
+        checks = {"disk_free_gb": round(shutil.disk_usage(ROOT).free / 1e9, 1)}
+    else:
+        checks, problems = run_checks(mask, args.max_load, args.counters)
+        if problems:
+            raise RuntimeError("Refusing to start; nothing was changed.\n" + "\n".join(problems))
     if mode == "compare":
         sides[0]["root"] = ensure_worktree(sides[0]["commit"], not args.skip_build)
     # (build type, tests build) pairs some workload runs on: micro_engine runs the bench tests build.
@@ -801,6 +850,10 @@ def run_series(args, sides):
     missing = [str(exe.relative_to(ROOT)) for exe in exes.values() if not exe.is_file()]
     if missing:
         raise RuntimeError(f"Missing {', '.join(missing)}; run without --skip-build")
+    if getattr(args, "build_only", False):
+        for (_, label, _), exe in exes.items():
+            print(f"BUILT {label} {rel(exe)}", flush=True)
+        return
     checks["home_mask"] = hex(osb.set_home_affinity(mask))  # the runner and its helpers stay off the bench CPUs
     out = Path(args.out).resolve()  # absolute: the engine resolves relative paths from the --path project
     ctx = {"out": out}  # per process: + label and round
@@ -818,6 +871,8 @@ def run_series(args, sides):
         **machine_meta(mask), **checks,
         "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "runner_args": vars(args),
+        "base_defines": base,
+        "control_variant": control_variant,
         "binaries": [  # round-1 order
             {
                 "build": build, "label": s["label"], "exe": exes[build, s["label"], tests].name, "commit": s["commit"],
@@ -1395,7 +1450,9 @@ def run_micro(args, sides):
     labels = [side["label"] for side in sides]
     checks["home_mask"] = hex(osb.set_home_affinity(mask))
     meta = {**machine_meta(mask), **checks, "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "runner_args": vars(args), "binaries": list(built.values()), "controls": control_info}
+            "runner_args": vars(args), "binaries": list(built.values()), "controls": control_info,
+            "base_defines": getattr(args, "base_defines", ""),
+            "control_variant": base_variant(args.base_defines) if getattr(args, "base_defines", "") else None}
     (out / "meta.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
     # The tree sides must still match what was built ("changed after build").
     for side in sides:
@@ -1584,6 +1641,10 @@ def main():
     sub.add_parser("fetch", help="fetch every pinned third-party source into devtools/out/bench/src/ and check it")
     micro = sub.add_parser("micro", help="container micro-benchmark: --aa, or previous, candidate and control")
     prof = sub.add_parser("profile", help="sampling profile of one workload with its family shares (no build)")
+    judge = sub.add_parser("verdict", help="PASS or FAIL of a finished series from its summary.csv (changes no rule)")
+    judge.add_argument("--series", required=True, help="the series directory")
+    judge.add_argument("--rows", required=True, help="comma list of <workload>@<build> target rows,"
+                       " e.g. script:script@template_release or micro/<case>@standalone")
     prof.add_argument("--workload", required=True, help="e.g. scene:instance:10000")
     prof.add_argument("--build", default="editor", choices=("editor", "template_release"))
     prof.add_argument("--seconds", type=float, default=15.0, help="sampling time of a frames workload")
@@ -1593,6 +1654,7 @@ def main():
     micro.add_argument("--aa", action="store_true", help="A/A floors: the control against a second control build")
     micro.add_argument("--name", default="cand", help="candidate label (its build directory)")
     micro.add_argument("--defines", default="", help="space-separated macros for the candidate (/D)")
+    micro.add_argument("--base-defines", default="", help="space-separated baseline macros on control and candidate")
     micro.add_argument("--prev", default=None, help="git ref of the previous side's container headers")
     micro.add_argument("--target", default="", help="comma list of micro/<case> items judged by the accept rule")
     micro.add_argument("--samples", type=int, default=11, help="rounds after the warm-up pair (at least 5)")
@@ -1619,6 +1681,11 @@ def main():
     compare.add_argument("--defines", default="", help="space-separated macros for the candidate (cppdefines)")
     compare.add_argument("--prev", required=True, help="git ref of the previous build, e.g. origin/dev")
     compare.add_argument("--target", required=True, help="comma list of workloads judged by the accept rule")
+    compare.add_argument("--base-defines", default="",
+                         help="space-separated baseline macros: the control builds as variant b<hash> with them,"
+                              " the candidate with them plus --defines; the previous side is unchanged")
+    compare.add_argument("--build-only", action="store_true",
+                         help="build the binaries the series needs, print BUILT lines and stop (no measuring)")
     args = parser.parse_args()
     if getattr(args, "compiler", COMPILER) not in COMPILERS:
         parser.error(f"--compiler {args.compiler} does not build on this OS (use {' or '.join(COMPILERS)})")
@@ -1633,6 +1700,10 @@ def main():
             what = "HEAD is the pin" if "commit" in pin else "size and sha256 are the pin"
             print(f"FETCH {name} {pin.get('commit', pin.get('sha256'))} ({pin['license']}) in {shown}: {what}")
         return
+    if args.command == "verdict":
+        code, lines = series_verdict(args.series, args.rows)
+        print("\n".join(lines))
+        raise SystemExit(code)
     if args.command == "micro":
         return main_micro(parser, args)
     if args.command == "profile":
@@ -1663,9 +1734,14 @@ def main():
             prev = git("rev-parse", "--verify", f"{args.prev}^{{commit}}").decode().strip()  # resolved once (T-02-07)
         except subprocess.CalledProcessError:
             parser.error(f"--prev {args.prev} is not a commit")
+        base = args.base_defines.strip()
+        previous = {**control, "label": "previous", "commit": prev}  # never on the baseline
+        if base:
+            control = {**control, "suffix": f"bench.{base_variant(base)}", "variant": base_variant(base),
+                       "defines": base}
         candidate = {**control, "label": "candidate", "suffix": f"bench.{args.name}", "variant": args.name,
-                     "defines": args.defines or None}
-        sides = [{**control, "label": "previous", "commit": prev}, candidate, control]
+                     "defines": " ".join(d for d in (base, args.defines) if d) or None}
+        sides = [previous, candidate, control]
     locked(args, run_series, sides)
 
 
@@ -1704,8 +1780,12 @@ def main_micro(parser, args):
             prev = git("rev-parse", "--verify", f"{args.prev}^{{commit}}").decode().strip()
         except subprocess.CalledProcessError:
             parser.error(f"--prev {args.prev} is not a commit")
+        base = args.base_defines.split()
+        if base:
+            print(f"BASE {' '.join(base)} (control variant {base_variant(' '.join(base))})", flush=True)
         sides = [{**control, "label": "previous", "commit": prev, "prev": True},
-                 {**control, "label": "candidate", "dir": args.name, "defines": args.defines.split()}, control]
+                 {**control, "label": "candidate", "dir": args.name, "defines": base + args.defines.split()},
+                 {**control, "defines": base}]
     locked(args, run_micro, sides)
 
 
