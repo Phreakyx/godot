@@ -1,5 +1,16 @@
 # Update log
 
+## 2026-11-22 (HASH-07 candidate, every candidate in one build)
+
+* **Added**: [Small-map HashMap without an index](/project/hashmap-small-map.md)
+  (HASH-07, draft): `FORK_BACKEND_HASHMAP_SMALL`, the threshold; no index
+  at or below it, list walk, index built from the list past it; built and
+  tested alone (`small8`) and with every other Phase 3 macro on
+  (`allhash`); timings to come from 03-10.
+* **Updated**: [container contracts](/project/container-contracts.md): the
+  Phase 3 candidates table (every macro, its values, what it changes, the
+  pins that cover it) and the five threshold pins.
+
 ## 2026-11-22 (HASH-06 candidate)
 
 * **Added**: [SIMD tag probing for AHashMap and HashSet](/project/hash-simd-tags.md)

@@ -129,3 +129,16 @@
 #if !(FORK_BACKEND_HASH_TAGS == 0 || FORK_BACKEND_HASH_TAGS == 1)
 #error "FORK_BACKEND_HASH_TAGS must be 0 or 1."
 #endif
+
+// HashMap lookups of small maps (HASH-07, kb/project/hashmap-small-map.md).
+// 0: every map with elements has its index (upstream).
+// 1 to 16: the threshold. A map holds no index while it has at most that many elements and
+//    finds keys by walking its element list with the Comparator. The index is built from the
+//    list (nodes never move) when an insert passes the threshold or reserve() asks for more,
+//    kept when erases take the map back below it, and dropped by clear().
+#ifndef FORK_BACKEND_HASHMAP_SMALL
+#define FORK_BACKEND_HASHMAP_SMALL 0
+#endif
+#if !(FORK_BACKEND_HASHMAP_SMALL >= 0 && FORK_BACKEND_HASHMAP_SMALL <= 16)
+#error "FORK_BACKEND_HASHMAP_SMALL must be 0 (off) or a threshold from 1 to 16."
+#endif

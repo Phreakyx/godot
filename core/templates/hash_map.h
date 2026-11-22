@@ -493,6 +493,78 @@ private:
 		}
 	}
 
+#if FORK_BACKEND_HASHMAP_SMALL
+	// Fork: small maps (FORK_BACKEND_HASHMAP_SMALL, see fork_backends.h and
+	// kb/project/hashmap-small-map.md). `_elements == nullptr` means no index: the keys are found by
+	// walking the element list. Nodes never move, so element pointers and the order hold across it.
+	static constexpr uint32_t _SMALL_MAX = FORK_BACKEND_HASHMAP_SMALL;
+
+	HashMapElement<TKey, TValue> *_small_find(const TKey &p_key) const {
+		for (HashMapElement<TKey, TValue> *E = _head_element; E != nullptr; E = E->next) {
+			if (Comparator::compare(E->data.key, p_key)) {
+				return E;
+			}
+		}
+		return nullptr;
+	}
+
+	HashMapElement<TKey, TValue> *_small_append(const TKey &p_key, const TValue &p_value, bool p_front_insert) {
+		HashMapElement<TKey, TValue> *elem = _element_new(p_key, p_value);
+		if (_tail_element == nullptr) {
+			_head_element = elem;
+			_tail_element = elem;
+		} else if (p_front_insert) {
+			_head_element->prev = elem;
+			elem->next = _head_element;
+			_head_element = elem;
+		} else {
+			_tail_element->next = elem;
+			elem->prev = _tail_element;
+			_tail_element = elem;
+		}
+		_size++;
+		return elem;
+	}
+
+	// Builds the index from the list, large enough for p_count elements at _capacity_idx or above.
+	void _small_build_index(uint32_t p_count) {
+		DEV_ASSERT(_elements == nullptr);
+		while (p_count > MAX_OCCUPANCY * _capacity_of(_capacity_idx)) {
+			_capacity_idx++;
+		}
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		static_assert(EMPTY_HASH == 0, "Assuming EMPTY_HASH = 0 for alloc_static_zeroed call");
+		_hashes = reinterpret_cast<uint32_t *>(Memory::alloc_static_zeroed(sizeof(uint32_t) * capacity));
+		_elements = reinterpret_cast<HashMapElement<TKey, TValue> **>(Memory::alloc_static(sizeof(HashMapElement<TKey, TValue> *) * capacity));
+		const uint32_t size = _size;
+		_size = 0; // _insert_element() counts them again.
+		for (HashMapElement<TKey, TValue> *E = _head_element; E != nullptr; E = E->next) {
+			_insert_element(_hash(E->data.key), E);
+		}
+		DEV_ASSERT(_size == size);
+	}
+
+	void _small_free_index() {
+		if (_elements != nullptr) {
+			Memory::free_static(_elements);
+			Memory::free_static(_hashes);
+			_elements = nullptr;
+			_hashes = nullptr;
+		}
+	}
+#endif
+
+	// Fork: the capacity a copy of p_other reserves. With FORK_BACKEND_HASHMAP_SMALL, a copy of a
+	// map without an index reserves no more than a small map, so it has no index either.
+	static uint32_t _copy_capacity(const HashMap &p_other) {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (p_other._elements == nullptr) {
+			return MIN(_capacity_of(p_other._capacity_idx), _SMALL_MAX);
+		}
+#endif
+		return _capacity_of(p_other._capacity_idx);
+	}
+
 public:
 	_FORCE_INLINE_ uint32_t get_capacity() const { return _capacity_of(_capacity_idx); }
 	_FORCE_INLINE_ uint32_t size() const { return _size; }
@@ -504,6 +576,18 @@ public:
 	}
 
 	void clear() {
+#if FORK_BACKEND_HASHMAP_SMALL
+		// Fork: the map is small again; the capacity index stays for the next index.
+		_small_free_index();
+		if (_size == 0) {
+			_pool_reset();
+			return;
+		}
+		_clear_data();
+		_tail_element = nullptr;
+		_head_element = nullptr;
+		_size = 0;
+#else
 		if (_elements == nullptr || _size == 0) {
 			_pool_reset(); // Fork: the nodes of erased elements.
 			return;
@@ -515,6 +599,7 @@ public:
 		_tail_element = nullptr;
 		_head_element = nullptr;
 		_size = 0;
+#endif
 	}
 
 	void sort() {
@@ -533,6 +618,13 @@ public:
 	}
 
 	TValue &get(const TKey &p_key) _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			CRASH_COND_MSG(E == nullptr, "HashMap key not found.");
+			return E->data.value;
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 		CRASH_COND_MSG(!exists, "HashMap key not found.");
@@ -540,6 +632,13 @@ public:
 	}
 
 	const TValue &get(const TKey &p_key) const _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			CRASH_COND_MSG(E == nullptr, "HashMap key not found.");
+			return E->data.value;
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 		CRASH_COND_MSG(!exists, "HashMap key not found.");
@@ -547,6 +646,12 @@ public:
 	}
 
 	const TValue *getptr(const TKey &p_key) const _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			return E != nullptr ? &E->data.value : nullptr;
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 
@@ -557,6 +662,12 @@ public:
 	}
 
 	TValue *getptr(const TKey &p_key) _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			return E != nullptr ? &E->data.value : nullptr;
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 
@@ -567,11 +678,29 @@ public:
 	}
 
 	_FORCE_INLINE_ bool has(const TKey &p_key) const {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			return _small_find(p_key) != nullptr;
+		}
+#endif
 		uint32_t _idx = 0;
 		return _lookup_idx(p_key, _idx);
 	}
 
 	bool erase(const TKey &p_key) {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			if (E == nullptr) {
+				return false;
+			}
+			(E->prev != nullptr ? E->prev->next : _head_element) = E->next;
+			(E->next != nullptr ? E->next->prev : _tail_element) = E->prev;
+			_element_delete(E);
+			_size--;
+			return true;
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 
@@ -618,6 +747,19 @@ public:
 	// Replace the key of an entry in-place, without invalidating iterators or changing the entries position during iteration.
 	// p_old_key must exist in the map and p_new_key must not, unless it is equal to p_old_key.
 	bool replace_key(const TKey &p_old_key, const TKey &p_new_key) {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			ERR_FAIL_COND_V(_size == 0, false);
+			if (Comparator::compare(p_old_key, p_new_key)) {
+				return true;
+			}
+			ERR_FAIL_COND_V(_small_find(p_new_key) != nullptr, false);
+			HashMapElement<TKey, TValue> *E = _small_find(p_old_key);
+			ERR_FAIL_NULL_V(E, false);
+			const_cast<TKey &>(E->data.key) = p_new_key;
+			return true;
+		}
+#endif
 		ERR_FAIL_COND_V(_elements == nullptr || _size == 0, false);
 		if (Comparator::compare(p_old_key, p_new_key)) {
 			return true;
@@ -663,6 +805,16 @@ public:
 			ERR_FAIL_COND_MSG(new_idx + 1 == (uint32_t)HASH_TABLE_SIZE_MAX, nullptr);
 			new_idx++;
 		}
+
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			_capacity_idx = new_idx;
+			if (p_new_capacity > _SMALL_MAX) {
+				_small_build_index(_size); // More than a small map's worth is coming.
+			}
+			return;
+		}
+#endif
 
 		if (new_idx == _capacity_idx) {
 			if (p_new_capacity < _size) {
@@ -767,6 +919,11 @@ public:
 	}
 
 	_FORCE_INLINE_ Iterator find(const TKey &p_key) _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			return Iterator(_small_find(p_key)); // nullptr is end().
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 		if (!exists) {
@@ -792,6 +949,11 @@ public:
 	}
 
 	_FORCE_INLINE_ ConstIterator find(const TKey &p_key) const _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			return ConstIterator(_small_find(p_key)); // nullptr is end().
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 		if (!exists) {
@@ -803,6 +965,13 @@ public:
 	/* Indexing */
 
 	const TValue &operator[](const TKey &p_key) const _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			CRASH_COND(E == nullptr);
+			return E->data.value;
+		}
+#endif
 		uint32_t idx = 0;
 		bool exists = _lookup_idx(p_key, idx);
 		CRASH_COND(!exists);
@@ -810,6 +979,18 @@ public:
 	}
 
 	TValue &operator[](const TKey &p_key) _LIFETIME_BOUND_ {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			if (E != nullptr) {
+				return E->data.value;
+			}
+			if (_size < _SMALL_MAX) {
+				return _small_append(p_key, TValue(), false)->data.value;
+			}
+			_small_build_index(_size + 1); // Then the index path inserts the key.
+		}
+#endif
 		const uint32_t hash = _hash(p_key);
 		uint32_t idx = 0;
 		bool exists = _elements && _size > 0 && _lookup_idx_unchecked(p_key, hash, idx);
@@ -823,6 +1004,19 @@ public:
 	/* Insert */
 
 	Iterator insert(const TKey &p_key, const TValue &p_value, bool p_front_insert = false) {
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (_elements == nullptr) {
+			HashMapElement<TKey, TValue> *E = _small_find(p_key);
+			if (E != nullptr) {
+				E->data.value = p_value;
+				return Iterator(E);
+			}
+			if (_size < _SMALL_MAX) {
+				return Iterator(_small_append(p_key, p_value, p_front_insert));
+			}
+			_small_build_index(_size + 1); // Then the index path inserts the key.
+		}
+#endif
 		const uint32_t hash = _hash(p_key);
 		uint32_t idx = 0;
 		bool exists = _elements && _size > 0 && _lookup_idx_unchecked(p_key, hash, idx);
@@ -837,7 +1031,7 @@ public:
 	/* Constructors */
 
 	explicit HashMap(const HashMap &p_other) {
-		reserve(_capacity_of(p_other._capacity_idx));
+		reserve(_copy_capacity(p_other));
 		_pool_first_page(p_other._size);
 
 		if (p_other._size == 0) {
@@ -875,10 +1069,14 @@ public:
 		}
 		_pool_reset();
 
-		reserve(_capacity_of(p_other._capacity_idx));
+		reserve(_copy_capacity(p_other));
 		_pool_first_page(p_other._size);
 
+#if FORK_BACKEND_HASHMAP_SMALL
+		if (p_other._size == 0) { // Fork: a small map has elements without an index.
+#else
 		if (p_other._elements == nullptr) {
+#endif
 			return; // Nothing to copy.
 		}
 
@@ -936,14 +1134,14 @@ public:
 	}
 
 	uint32_t debug_get_hash(uint32_t p_idx) {
-		if (_size == 0) {
+		if (_size == 0 || _elements == nullptr) { // Fork: no index in a small map.
 			return 0;
 		}
 		ERR_FAIL_INDEX_V(p_idx, get_capacity(), 0);
 		return _hashes[p_idx];
 	}
 	Iterator debug_get_element(uint32_t p_idx) {
-		if (_size == 0) {
+		if (_size == 0 || _elements == nullptr) { // Fork: no index in a small map.
 			return Iterator();
 		}
 		ERR_FAIL_INDEX_V(p_idx, get_capacity(), Iterator());

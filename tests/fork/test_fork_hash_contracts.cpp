@@ -363,6 +363,183 @@ TEST_CASE("[Fork][HashMap] Re-inserting an existing key at each page size keeps 
 	}
 }
 
+// The pins below cross the small-map threshold (FORK_BACKEND_HASHMAP_SMALL): below it a map
+// has no index and walks its list; past it the index is built from the list. They run on every
+// build and cross 8 (and 4) either way.
+static constexpr int FORK_SMALL_THRESHOLD_FOR_TESTS = 8;
+
+template <typename K>
+static K small_key(int p_i) {
+	if constexpr (std::is_same_v<K, String>) {
+		return "k" + itos(p_i);
+	} else {
+		return K(p_i);
+	}
+}
+
+template <typename K>
+static void check_small_growth() {
+	HashMap<K, int> map;
+	Vector<int *> values;
+	bool stable = true;
+	bool ordered = true;
+	for (int i = 0; i < FORK_SMALL_THRESHOLD_FOR_TESTS + 3; i++) {
+		map.insert(small_key<K>(i), i);
+		values.push_back(map.getptr(small_key<K>(i)));
+		int j = 0;
+		for (const KeyValue<K, int> &E : map) {
+			ordered = ordered && E.key == small_key<K>(j) && &E.value == values[j];
+			j++;
+		}
+		ordered = ordered && j == i + 1;
+		for (j = 0; j <= i; j++) {
+			stable = stable && map.getptr(small_key<K>(j)) == values[j] && *values[j] == j;
+		}
+		stable = stable && !map.has(small_key<K>(i + 1));
+	}
+	CHECK(stable);
+	CHECK(ordered);
+	CHECK(map.size() == uint32_t(FORK_SMALL_THRESHOLD_FOR_TESTS + 3));
+}
+
+TEST_CASE("[Fork][HashMap] Element pointers and order hold while a small map grows past the threshold") {
+	check_small_growth<int>();
+	check_small_growth<String>();
+	check_small_growth<int64_t>();
+}
+
+TEST_CASE("[Fork][HashMap] Erasing back below the threshold, then inserting again") {
+	constexpr int count = FORK_SMALL_THRESHOLD_FOR_TESTS + 3;
+	HashMap<int, int> map;
+	for (int i = 0; i < count; i++) {
+		map.insert(i, i * 10);
+	}
+	int *kept = map.getptr(count - 1);
+	for (int i = 0; i < count - 2; i++) {
+		CHECK(map.erase(i));
+	}
+	CHECK(map_keys(map) == Vector<int>{ count - 2, count - 1 });
+	CHECK(map.getptr(count - 1) == kept);
+	CHECK_FALSE(map.has(0));
+	for (int i = 100; i < 100 + count; i++) {
+		map.insert(i, i);
+	}
+	map.insert(-1, -1, true); // Front insert.
+	CHECK(map.size() == uint32_t(count + 3));
+	CHECK(map.begin()->key == -1);
+	CHECK(map.last()->key == 100 + count - 1);
+	CHECK(map.getptr(count - 1) == kept);
+	CHECK(*kept == (count - 1) * 10);
+	for (int i = 100; i < 100 + count; i++) {
+		REQUIRE(map.getptr(i) != nullptr);
+		CHECK(*map.getptr(i) == i);
+	}
+	for (int i = 0; i < count - 2; i++) {
+		CHECK_FALSE(map.has(i));
+	}
+
+	// A copy of a small map and of a map past the threshold keeps the order.
+	HashMap<int, int> small;
+	small.insert(3, 3);
+	small.insert(1, 1);
+	HashMap<int, int> small_copy(small);
+	HashMap<int, int> large_copy;
+	large_copy = map;
+	small_copy.insert(2, 2);
+	CHECK(map_keys(small_copy) == Vector<int>{ 3, 1, 2 });
+	CHECK(map_keys(small) == Vector<int>{ 3, 1 });
+	CHECK(map_keys(large_copy) == map_keys(map));
+	CHECK(large_copy.has(100));
+	CHECK_FALSE(large_copy.has(0));
+}
+
+TEST_CASE("[Fork][HashMap] reserve() past the threshold, then inserts") {
+	HashMap<int, int> map;
+	map.reserve(FORK_SMALL_THRESHOLD_FOR_TESTS + 10);
+	CHECK_FALSE(map.has(0));
+	CHECK(map.getptr(0) == nullptr);
+	for (int i = 0; i < FORK_SMALL_THRESHOLD_FOR_TESTS + 10; i++) {
+		map.insert(i, i + 1);
+		REQUIRE(map.getptr(i) != nullptr);
+		CHECK(*map.getptr(i) == i + 1);
+		CHECK(map.find(0) == map.begin());
+		CHECK_FALSE(map.has(i + 1));
+	}
+	CHECK(map.last()->key == FORK_SMALL_THRESHOLD_FOR_TESTS + 9);
+
+	HashMap<int, int> sized(FORK_SMALL_THRESHOLD_FOR_TESTS + 10);
+	sized[5] = 50;
+	CHECK(sized.has(5));
+	CHECK(sized[5] == 50);
+	CHECK(sized.size() == 1);
+
+	HashMap<int, int> listed{ { 5, 0 }, { 3, 1 }, { 9, 2 } };
+	CHECK(map_keys(listed) == Vector<int>{ 5, 3, 9 });
+	CHECK(listed[9] == 2);
+}
+
+TEST_CASE("[Fork][HashMap] Erase, remove and replace_key below the threshold") {
+	HashMap<int, int> map;
+	for (int i = 1; i <= 5; i++) {
+		map.insert(i, i);
+	}
+	int *four = map.getptr(4);
+	Vector<int> visited;
+	for (const KeyValue<int, int> &E : map) {
+		visited.push_back(E.key);
+		if (E.key == 2) {
+			map.erase(1); // Head, already visited.
+			map.erase(3); // Not visited yet.
+			map.erase(5); // Tail.
+		}
+	}
+	CHECK(visited == Vector<int>{ 1, 2, 4 });
+	CHECK(map_keys(map) == Vector<int>{ 2, 4 });
+	CHECK(map.last()->key == 4);
+	CHECK(map.getptr(4) == four);
+	CHECK_FALSE(map.erase(3));
+
+	CHECK(map.replace_key(4, 40));
+	CHECK(map.getptr(40) == four);
+	CHECK_FALSE(map.has(4));
+	CHECK(map_keys(map) == Vector<int>{ 2, 40 });
+
+	for (HashMap<int, int>::Iterator it = map.begin(); it;) {
+		HashMap<int, int>::Iterator next = it;
+		++next;
+		map.remove(it);
+		it = next;
+	}
+	CHECK(map.is_empty());
+	CHECK(map.begin() == map.end());
+	map.insert(7, 7);
+	CHECK(map_keys(map) == Vector<int>{ 7 });
+}
+
+TEST_CASE("[Fork][HashMap] clear() past the threshold, then inserts below it") {
+	HashMap<int, int> map;
+	for (int i = 0; i < FORK_SMALL_THRESHOLD_FOR_TESTS * 4; i++) {
+		map.insert(i, i);
+	}
+	map.clear();
+	CHECK(map.is_empty());
+	CHECK_FALSE(map.has(0));
+	CHECK(map.find(1) == map.end());
+	for (int i = 0; i < FORK_SMALL_THRESHOLD_FOR_TESTS / 2; i++) {
+		map.insert(50 - i, i);
+	}
+	CHECK(map_keys(map) == Vector<int>{ 50, 49, 48, 47 });
+	CHECK(map[48] == 2);
+	CHECK_FALSE(map.has(0));
+	for (int i = 0; i < FORK_SMALL_THRESHOLD_FOR_TESTS * 2; i++) {
+		map.insert(i, -i);
+	}
+	CHECK(map.size() == uint32_t(FORK_SMALL_THRESHOLD_FOR_TESTS / 2 + FORK_SMALL_THRESHOLD_FOR_TESTS * 2));
+	CHECK(map[48] == 2);
+	CHECK(map[3] == -3);
+	CHECK(map.last()->key == FORK_SMALL_THRESHOLD_FOR_TESTS * 2 - 1);
+}
+
 #ifdef DEBUG_ENABLED
 TEST_CASE("[Fork][HashMap] Node memory of empty, single-element and cleared maps") {
 	using E = HashMapElement<int, int>;
@@ -377,12 +554,18 @@ TEST_CASE("[Fork][HashMap] Node memory of empty, single-element and cleared maps
 	map->clear();
 	const uint64_t cleared = Memory::get_mem_usage();
 	CHECK(one - cleared == sizeof(E)); // one element owns one node's bytes
+#if FORK_BACKEND_HASHMAP_SMALL
+	CHECK(cleared == empty); // a one-element map has no index
+#else
 	CHECK(cleared > empty); // the index stays allocated, as upstream keeps it
+#endif
 
 	for (int i = 0; i < 3; i++) {
 		map->insert(i, i);
 	}
-	CHECK(Memory::get_mem_usage() - cleared == 3 * sizeof(E));
+#if FORK_BACKEND_HASHMAP_SMALL == 0 || FORK_BACKEND_HASHMAP_SMALL >= 3
+	CHECK(Memory::get_mem_usage() - cleared == 3 * sizeof(E)); // nodes only: the index is kept, or a small map has none
+#endif
 	map->clear();
 	CHECK(Memory::get_mem_usage() == cleared); // clear() returns every node byte
 

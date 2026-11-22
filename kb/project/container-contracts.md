@@ -19,10 +19,11 @@ the backend switch is the control. Both exist before any backend changes.
 * One macro per container family, `FORK_BACKEND_<FAMILY>`. Value 0 is
   upstream's code: the control build and the merge anchor. Other values
   are fork candidates, placed next to upstream's code, never in its place.
-* A family gets its macro with its first candidate. Today there is one
-  macro, `FORK_BACKEND_SELFTEST`, read by no container: it proves that a
-  define reaches every translation unit and the suffixed binary. A
-  `static_assert` limits it to 0 or 1.
+* A family gets its macro with its first candidate. `FORK_BACKEND_SELFTEST`
+  is read by no container: it proves that a define reaches every
+  translation unit and the suffixed binary. Each macro's range is checked
+  with `#if`/`#error` (the header is also included from C). The Phase 3
+  candidates are in the table below.
 * An accepted candidate becomes the default with upstream's code kept under
   the 0 branch; a rejected candidate is deleted.
 * Same source, two binaries: `devtools/build/build.ps1 -Tests -Variant
@@ -35,6 +36,27 @@ the backend switch is the control. Both exist before any backend changes.
   `bin/godot.windows.editor.dev.x86_64.tests.console.exe`.
 * `--test --test-case="*Fork*Backends*"` prints the value each binary was
   built with.
+
+# Phase 3 candidates
+
+Every macro defaults to 0, upstream's code. All of them on at once (the
+`allhash` tests build: `FORK_BACKEND_ALLOCATOR=1`, `HASHMAP_POOL=1`,
+`HASH_POW2=1`, `TABLE_KEY_HASH=1`, `BYTE_HASH=1`, `HASH_TAGS=1` and
+`HASHMAP_SMALL=8`) pass the full suite, and the Fork cases pass in its dev
+twin (2026-11-22, MSVC).
+
+| Macro | Values | Container | What changes | Pins that cover it | Entry |
+| --- | --- | --- | --- | --- | --- |
+| `FORK_BACKEND_ALLOCATOR` | 0, 1, 3 (Linux only) | `Memory::` under every container | mimalloc under `alloc_static` and friends (1), or for the whole process (3) | `[Fork][Memory]`, `[Fork][Backends] Allocator scope`, the full suite | [mimalloc](/project/mimalloc-allocator.md) |
+| `FORK_BACKEND_HASHMAP_POOL` | 0, 1 | HashMap | Nodes from a per-map pool of pages that never move | HashMap pointer, page-boundary, move and node-memory pins | [node pool](/project/hashmap-node-pool.md) |
+| `FORK_BACKEND_HASH_POW2` | 0, 1, 2 | HashMap, HashSet | Power-of-two capacities and a mask; the table hash mixed once (1 multiply-xorshift, 2 `hash_fmix32`) | One-hash, empty-table and key-type pins | [pow2 mixer](/project/hash-pow2-mixer.md) |
+| `FORK_BACKEND_TABLE_KEY_HASH` | 0, 1 | HashMap, AHashMap, HashSet (default hasher) | StringName keys by data pointer, pointer keys by one multiply, in `hash_table_key()` | `[Fork][Hash]` public outputs, key-type pins | [table-key hash](/project/table-key-hash.md) |
+| `FORK_BACKEND_BYTE_HASH` | 0, 1 | String and CharString table keys | rapidhash V3 in place of wyhash below 256 bytes | `[Fork][Hash]`, `test_hash_buffer.cpp`, key-type pins | [rapidhash](/project/rapidhash-byte-hash.md) |
+| `FORK_BACKEND_HASH_TAGS` | 0, 1 | AHashMap, HashSet | One control byte per slot, matched 16 at a time (SSE2, SWAR) | AHashMap and HashSet one-hash, growth-point and empty-table pins, `[Fork][HashTags]` | [tag probing](/project/hash-simd-tags.md) |
+| `FORK_BACKEND_HASHMAP_SMALL` | 0, 1 to 16 (the threshold) | HashMap | No index at or below the threshold, list walk; index built from the list past it, kept on erase, dropped by `clear()` | The five threshold pins, node-memory pin, every HashMap pin | [small map](/project/hashmap-small-map.md) |
+
+HASH-02 (`FORK_BACKEND_HASHMAP_SLOTS`) was rejected before it was built
+([slot array](/project/hashmap-slot-array.md)).
 
 # What the contracts pin
 
@@ -59,6 +81,13 @@ build.
 * Erase twice returns true then false. Empty map: `begin() == end()`,
   `last() == end()`, `getptr()` is nullptr, `erase()` returns false, also
   after the last element was erased. One element: `begin() == last()`.
+* Across the small-map threshold (`FORK_SMALL_THRESHOLD_FOR_TESTS`, 8, the
+  HASH-07 pins, [small map](/project/hashmap-small-map.md)): pointers and
+  order hold while a map grows past it one insert at a time (int, int64,
+  String keys); erasing back below it and inserting again; `reserve()` past
+  it before the first insert; erase, `remove()` and `replace_key()` below
+  it; `clear()` past it, then inserts. A one-element map with the macro set
+  allocates only its node.
 
 **AHashMap**:
 * Iteration follows insertion order while nothing is erased; `get_index()`

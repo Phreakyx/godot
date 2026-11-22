@@ -154,6 +154,17 @@ assertions) on the production control, and 1591 (601809 assertions) on
 `FORK_BACKEND_BYTE_HASH=1`); `--test-case="*Fork*"` runs 93 cases on the
 control and 94 (7146 assertions) on the dev `tags` build.
 
+The HASH-07 candidate (plan 03-09, [small map](/project/hashmap-small-map.md))
+adds five `[Fork][HashMap]` threshold cases: MSVC `--test` reports 1595
+cases, 1595 passed, 0 failed, 9 skipped (601973 assertions) on the
+production control and on `small8` (`FORK_BACKEND_HASHMAP_SMALL=8`), and
+1597 (601975 assertions) on `allhash` (every Phase 3 macro on:
+`FORK_BACKEND_ALLOCATOR=1`, `HASHMAP_POOL=1`, `HASH_POW2=1`,
+`TABLE_KEY_HASH=1`, `BYTE_HASH=1`, `HASH_TAGS=1`, `HASHMAP_SMALL=8`; the two
+extra cases are `[Fork][HashTags]` and `[Fork][Backends] Allocator scope`);
+`--test-case="*Fork*"` runs 98 cases (7310 assertions) on the control and
+the dev `small8` build, and 100 (7312) on the dev `allhash` build.
+
 The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
 the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
 builds, at `7b81582fab` plus the `-> uint64_t` fix in
