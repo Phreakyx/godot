@@ -19,8 +19,8 @@ sources:
 The floor of a metric is the largest |paired difference| of n alternating
 rounds between the bench control and its A/A twin, two builds of the same
 source with their own objects (D-04, [protocol](/tooling/benchmark-protocol.md)).
-`compare` reads them from `devtools/bench/floors.json` (5843 entries keyed
-`workload|case|metric|build|compiler`: 1959 MSVC, 1942 each GCC and Clang) and refuses a stored floor whose
+`compare` reads them from `devtools/bench/floors.json` (5859 entries keyed
+`workload|case|metric|build|compiler`: 1975 MSVC, 1942 each GCC and Clang) and refuses a stored floor whose
 compiler, BIOS, microcode, OS build or n differ from the run
 (`RE-MEASURE-AA`).
 
@@ -234,21 +234,32 @@ compilers; `fly_reallocs` is identical.
 
 # Micro tier floors (standalone harness, n = 11)
 
+MSVC, refreshed 2026-11-22 with `micro --aa --write-floors` in the idle
+window of the ALLOC-02 series ([alloc-vs-pool](/project/alloc-vs-pool.md)),
+same compiler, firmware and OS as above; bench CPUs 2.9% busy at the
+start, effective clocks 3707-4113 MHz, rounds 0 and 7 of 12
+clock-flagged. Every MSVC micro floor was rewritten and the 16 tiny-maps
+cases were added; no engine floor changed. The first measurement
+(2026-11-21, median 5.4%, 1049 cases) is replaced.
+
 | Family | Cases | Median floor | Largest case floor |
 | --- | --- | --- | --- |
-| `hashmap` | 138 | 5.3% | 46.9% (`hashmap_ptr_miss_16`) |
-| `ahashmap` | 138 | 6.3% | 118.0% (`ahashmap_ptr_iterate_16`) |
-| `hashset` | 138 | 6.6% | 107.5% (`hashset_ptr_churn_1`) |
-| `rbmap` | 132 | 5.9% | 71.4% (`rbmap_str_miss_0`) |
-| `rbset` | 132 | 4.8% | 31.0% (`rbset_str_miss_16`) |
-| `list` | 27 | 3.7% | 29.4% (`list_i64_iterate_32768`) |
-| `vector` | 40 | 3.9% | 139.7% (`vector_i64_iterate_0`) |
-| `localvector` | 40 | 5.2% | 88.8% (`localvector_str_iterate_16`) |
-| `string` | 2 | 5.0% | 5.4% (`string_copy_detach_16`) |
-| `hash` | 6 | 4.9% | 8.3% (`hash_bytes_4096`) |
-| third-party controls | 256 | 4.6-6.1% per library | 78.6% (`ctl_gtl_flat_i64_iterate_256`) |
+| `hashmap` | 138 | 7.3% | 40.1% (`hashmap_i64_miss_0`) |
+| `ahashmap` | 138 | 9.2% | 132.4% (`ahashmap_ptr_churn_16`) |
+| `hashset` | 138 | 8.5% | 99.8% (`hashset_i64_copy_0`) |
+| `rbmap` | 132 | 6.8% | 82.3% (`rbmap_str_miss_1`) |
+| `rbset` | 132 | 6.7% | 102.0% (`rbset_str_miss_1`) |
+| `list` | 27 | 7.8% | 28.7% (`list_i64_copy_0`) |
+| `vector` | 40 | 6.7% | 74.2% (`vector_str_iterate_32768`) |
+| `localvector` | 40 | 7.5% | 110.5% (`localvector_i64_copy_0`) |
+| `string` | 2 | 5.8% | 7.2% (`string_copy_detach_128`) |
+| `hash` | 6 | 6.4% | 14.3% (`hash_bytes_8`) |
+| tiny maps (`hashmap_tiny_*`, `hashset_tiny_*`) | 16 | 9.7% | 16.6% (`hashset_tiny_ptr_hit_2`) |
+| third-party controls | 256 | 7.0% | 97.2% (`ctl_gtl_flat_str_iterate_256`) |
 
-All 1049 cases: median 5.4%. Godot rows p90 21.2%, controls p90 12.8%.
+All 1065 cases: median 7.3%. Godot rows p90 22.1%, controls p90 17.0%.
+Tiny-maps floors: `build` 7.6-10.4% (HashMap), 9.2-11.2% (HashSet);
+`hit` 6.4-12.6% (HashMap), 5.4-16.6% (HashSet).
 
 GCC 16.2.1 and Clang 23.1.5 (`g++` and `clang++ -O2`, the same flags on
 every side):

@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: mimalloc under Memory:: (ALLOC-01 candidate)
-description: mimalloc 3.7.0, vendored and compiled from one guarded C file, called directly by Memory::alloc_static, realloc_static, free_static and the aligned functions when FORK_BACKEND_ALLOCATOR is 1; nothing is overridden, the DEBUG_ENABLED accounting and the allocation counters are unchanged, and the mismatch audit passed before any measurement. Results are filled in by the ALLOC-02 compares (MSVC, then GCC and Clang).
+description: mimalloc 3.7.0, vendored and compiled from one guarded C file, called directly by Memory::alloc_static, realloc_static, free_static and the aligned functions when FORK_BACKEND_ALLOCATOR is 1; nothing is overridden, the DEBUG_ENABLED accounting and the allocation counters are unchanged, and the mismatch audit passed before any measurement. On MSVC (ALLOC-02) it is 23% faster on script:script template_release but fails on hash-lookup and peak-memory regressions; GCC and Clang follow.
 tags: [core, memory, allocator, mimalloc, phase-3]
 status: draft
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-21T00:00:00Z }
@@ -70,8 +70,34 @@ sources:
 
 # Results (MSVC)
 
-Not measured yet (ALLOC-02, four-way compare on `script:script`
-template_release and the suite).
+ALLOC-02 on 2026-11-22, value 1 against the same-source control, every
+suite workload on editor and template_release, then the micro tier
+(conditions and every row in [alloc-vs-pool](/project/alloc-vs-pool.md)).
+
+- **Target** `script:script@template_release`: 2.315 to 1.772 ms, -23.1%,
+  11 of 11 rounds faster, ACCEPT (floor 6.94%). Editor -12.1%.
+  `scene:instance:10000` template_release -38.5% and level `load_ms`
+  -12.8% (regression rule only on those rows).
+- **Verdict: FAIL**, 47 REGRESSION rows. 30 are time rows on hash lookups
+  that allocate nothing in their timed loop (`hashmap_sname_miss`,
+  `dict_*_hit` and `_miss`, `sname_from_string`, +2.8 to +28.8%, mostly
+  editor) and three gdbench cases (`gdbench_dictionary` string iterate and
+  lookup on editor +26.6%/+18.1%, `signal.benchmark_emission_params_10`
+  +16.0%). The other 17 are `peak_ws_mb`: gdbench +71.6%/+55.5%, the level
+  +2.7-2.9%, scene and script workloads +1.2 to +4.9%. Freed memory that
+  mimalloc keeps for its purge delay is the likely share of the gdbench
+  peak (Pitfall 8).
+- **Counts** identical to the control on every deterministic workload
+  (D-03 holds); the level's nondeterministic counts overlap the control's.
+- **Both series** (with the pool): target -23.9%, also FAIL (62 rows).
+- **Micro:** tiny HashMap builds 46-47% faster, tiny-map bytes unchanged;
+  third-party `ctl_*_insert` rows, which allocate through the C runtime
+  and not through mimalloc, read slower (+7.9 to +161%) and 16 of 256
+  control rows moved. Not explained yet.
+- **Step 5 not taken:** the purge-delay value 2 is for a failure through
+  peak memory alone; this one also fails on time rows.
+
+Not in the provisional MSVC baseline (empty).
 
 # Results (GCC, Clang)
 

@@ -1,5 +1,33 @@
 # Update log
 
+## 2026-11-22 (ALLOC-02 on MSVC)
+
+* **Updated**: [ALLOC-02](/project/alloc-vs-pool.md) "Results (MSVC)" and
+  "Decision (MSVC, provisional)": alloc (-23.1% on
+  `script:script@template_release`, ACCEPT) and both (-23.9%) fail on
+  REGRESSION rows (hash lookups that allocate nothing, gdbench peak memory
+  +56-72%), pool (+2.4%, within noise) fails on 82 rows; the provisional
+  MSVC baseline is empty. Pool reallocs explained by its page table; tiny
+  maps cost +9.4% bytes at 2 elements and +48% at 8. Step 5 (purge delay)
+  not taken.
+* **Updated**: MSVC results in [mimalloc allocator](/project/mimalloc-allocator.md)
+  and [HashMap node pool](/project/hashmap-node-pool.md).
+* **Updated**: [noise floors](/project/benchmark-noise-floors.md): MSVC micro
+  floors refreshed (median 7.3%) with the 16 tiny-maps cases.
+* **Updated**: [appraiser mistake](/mistakes/windows-appraiser-busies-bench-cpus.md):
+  stopping `InventorySvc` fixed it.
+
+## 2026-11-22 (Windows Compatibility Appraiser and the bench CPUs)
+
+* **Added**: mistake [Windows Compatibility Appraiser busied the bench
+  CPUs](/mistakes/windows-appraiser-busies-bench-cpus.md): the
+  `CompatTelRunner.exe` appraiser held a bench core at 84-92% for more than ten
+  minutes, in back-to-back instances, so `bench.py check` failed at the 10%
+  limit and the ALLOC-02 window was lost. The scheduled task was
+  disabled: the scans come on demand from `InventorySvc`, started while
+  the micro A/A built and ran new binaries. Stop the service for the
+  session or wait out the scans after building; never raise `--max-load`.
+
 ## 2026-11-22 (ALLOC-02 rules and runner options)
 
 * **Added**: [ALLOC-02 decision entry](/project/alloc-vs-pool.md) (draft)

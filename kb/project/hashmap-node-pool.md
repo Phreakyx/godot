@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Per-map HashMap node pool (HASH-01 candidate)
-description: HashMap nodes from a pool owned by each map, behind FORK_BACKEND_HASHMAP_POOL (default 0) - geometric pages from one node that never move, two page pointers in the map and a page table from the third page, an intrusive free list, the pool moved with the map and released by clear() and the destructor; insertion order, element addresses and every pinned contract kept. The map object grows from 40 to 72 bytes; tiny maps of 1 and 3 elements cost the control's bytes with one allocation fewer at 3, while 2 and 8 elements cost more bytes; allocations drop by orders of magnitude, but power-of-two sizes hold up to 2N-1 nodes and erased nodes stay until clear(). Timing results come from the ALLOC-02 compares.
+description: HashMap nodes from a pool owned by each map, behind FORK_BACKEND_HASHMAP_POOL (default 0) - geometric pages from one node that never move, two page pointers in the map and a page table from the third page, an intrusive free list, the pool moved with the map and released by clear() and the destructor; insertion order, element addresses and every pinned contract kept. The map object grows from 40 to 72 bytes; tiny maps of 1 and 3 elements cost the control's bytes with one allocation fewer at 3, while 2 and 8 elements cost more bytes; allocations drop by orders of magnitude, but power-of-two sizes hold up to 2N-1 nodes and erased nodes stay until clear(). On MSVC (ALLOC-02) it is within noise on script:script template_release and fails on 82 regression rows; GCC and Clang follow.
 tags: [core, containers, hashmap, memory, pool, phase-3]
 status: draft
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
@@ -172,7 +172,33 @@ erases stand next to it (D-05).
 
 # Results (MSVC)
 
-Not measured yet (ALLOC-02, the four-way compare in 03-05).
+ALLOC-02 on 2026-11-22, value 1 against the same-source control (all
+rows and conditions in [alloc-vs-pool](/project/alloc-vs-pool.md)).
+
+- **Target** `script:script@template_release`: 2.311 to 2.357 ms, +2.4%,
+  2 of 11 rounds faster, WITHIN-NOISE (floor 6.94%). Editor -0.6%.
+  `scene:instance:10000` template_release -10.5% (regression rule only).
+- **Verdict: FAIL**, 82 REGRESSION rows: copying an empty map
+  (`hashmap_sname_copy_0`, `hashmap_variant_copy_0`, +43.6 to +50.3%),
+  `dict_*` and `hashmap_*` hit and miss rows (+2.3 to +22.7%), gdbench
+  `array.*` and `string_manipulation.*` cases that do not use HashMap in
+  their timed loops (+2.2 to +36.4%, code layout of a larger inlined
+  HashMap the likely cause), `scene:script:10000` template_release +3.5%,
+  and 13 `peak_ws_mb` rows (`editor_startup` +12.9%, scene and script
+  +1.1 to +3.2%).
+- **Counts:** allocations fall everywhere (`benchmark_duplicate_*_100k`
+  100,003 to 4, level load 1.12M to 1.04M); 26 ALLOC-INCREASE rows, all
+  `reallocs`, from the page table that `_pool_add_page()` grows with
+  `Memory::realloc_static` (explained, not a rejection).
+- **Tiny maps (D-05):** the live numbers match the smoke above exactly:
+  `live_bytes` +9.4% at 2 elements and +48% at 8, equal at 1 and 3;
+  allocations -20% at 3 and -30% at 8. Builds -16% at 3 and 8 elements,
+  within +8% at 1 and 2. The pool raises tiny-map bytes and does not win
+  time on its target, so neither half of D-05's trade is in its favor.
+- **Both series** (with mimalloc): target -23.9% against alloc's -23.1%,
+  FAIL (62 rows); the pool's `copy_0` and `miss` regressions stay in it.
+
+Not in the provisional MSVC baseline (empty).
 
 # Results (GCC, Clang)
 

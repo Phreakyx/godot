@@ -1172,7 +1172,7 @@ def summarize_aa(args, items, builds, values, n_of, meta):
                 print_info(item, d, build, values, ("control", "aa"))
     if args.write_floors:
         Path(args.floors).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.floors).write_text(json.dumps(floors, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        Path(args.floors).write_text(json.dumps(floors, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         print(f"Floors written to {args.floors}")
     return summary
 
