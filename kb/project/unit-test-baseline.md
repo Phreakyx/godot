@@ -144,6 +144,16 @@ cases: MSVC `--test` reports 1584 cases, 1584 passed, 0 failed, 9 skipped
 `--test-case="*Fork*"` runs 87 cases (6725 assertions) on the dev `tkh` and
 `rapid` builds.
 
+The HASH-06 candidate (plan 03-08, [tag probing](/project/hash-simd-tags.md))
+adds three `[Fork][AHashMap]` and three `[Fork][HashSet]` cases (two of them
+only with `DEBUG_ENABLED`), and `[Fork][HashTags]` in tag builds only: MSVC
+`--test` reports 1590 cases, 1590 passed, 0 failed, 9 skipped (601808
+assertions) on the production control, and 1591 (601809 assertions) on
+`tags` (`FORK_BACKEND_HASH_TAGS=1`) and `tagsall` (with
+`FORK_BACKEND_HASH_POW2=1`, `FORK_BACKEND_TABLE_KEY_HASH=1` and
+`FORK_BACKEND_BYTE_HASH=1`); `--test-case="*Fork*"` runs 93 cases on the
+control and 94 (7146 assertions) on the dev `tags` build.
+
 The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
 the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
 builds, at `7b81582fab` plus the `-> uint64_t` fix in

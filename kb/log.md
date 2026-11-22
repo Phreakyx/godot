@@ -1,5 +1,14 @@
 # Update log
 
+## 2026-11-22 (HASH-06 candidate)
+
+* **Added**: [SIMD tag probing for AHashMap and HashSet](/project/hash-simd-tags.md)
+  (HASH-06, draft): `FORK_BACKEND_HASH_TAGS`, one control byte per slot
+  matched 16 at a time (SSE2, SWAR fallback), AHashMap dense and HashSet in
+  its D013 block; built and tested, timings to come from 03-10.
+* **Updated**: [container contracts](/project/container-contracts.md): the
+  one-hash, growth-point and empty-table pins for AHashMap and HashSet.
+
 ## 2026-11-22 (HASH-04 and HASH-05 candidates, public hash outputs pinned)
 
 * **Added**: [StringName and pointer table hashes](/project/table-key-hash.md)

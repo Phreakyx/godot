@@ -58,12 +58,50 @@ public:
 private:
 	TKey *_keys = nullptr;
 	uint32_t *_hash_idx_to_key_idx = nullptr;
+#if FORK_BACKEND_HASH_TAGS
+	// DELETED control bytes. The tag path keeps no key to slot index (erase finds a moved key's
+	// slot by its hash), so this takes that pointer's place.
+	uint32_t _deleted = 0;
+#else
 	uint32_t *_key_idx_to_hash_idx = nullptr;
+#endif
 	uint32_t *_hashes = nullptr;
 
 	uint32_t _capacity_idx = 0;
 	uint32_t _size = 0;
 
+#if FORK_BACKEND_HASH_TAGS
+	// Fork (FORK_BACKEND_HASH_TAGS): one allocation per table and resize (D013) holding the key
+	// hashes, the key index of each slot, the capacity + HashTags::WIDTH control bytes, then the
+	// keys at their alignment. A table holds three quarters of its capacity in keys (its growth
+	// point). _hashes is the block.
+	_FORCE_INLINE_ static constexpr uint32_t _key_capacity(uint32_t p_capacity) {
+		return p_capacity - p_capacity / 4;
+	}
+
+	_FORCE_INLINE_ static size_t _keys_offset(uint32_t p_capacity) {
+		static_assert(alignof(TKey) <= alignof(std::max_align_t), "HashSet keys cannot be over-aligned.");
+		constexpr size_t keys_align = alignof(TKey) > alignof(uint32_t) ? alignof(TKey) : alignof(uint32_t);
+		return (sizeof(uint32_t) * (size_t(_key_capacity(p_capacity)) + p_capacity) + p_capacity + HashTags::WIDTH + keys_align - 1) & ~(keys_align - 1);
+	}
+
+	// Points the arrays into a new block; control bytes EMPTY.
+	void _allocate_block(uint32_t p_capacity) {
+		uint8_t *block = reinterpret_cast<uint8_t *>(Memory::alloc_static(_keys_offset(p_capacity) + sizeof(TKey) * size_t(_key_capacity(p_capacity))));
+		_hashes = reinterpret_cast<uint32_t *>(block);
+		_hash_idx_to_key_idx = _hashes + _key_capacity(p_capacity);
+		_keys = reinterpret_cast<TKey *>(block + _keys_offset(p_capacity));
+		memset(_hash_idx_to_key_idx + p_capacity, HashTags::EMPTY, p_capacity + HashTags::WIDTH);
+		_deleted = 0;
+	}
+
+	void _free_block() {
+		Memory::free_static(_hashes);
+		_keys = nullptr;
+		_hashes = nullptr;
+		_hash_idx_to_key_idx = nullptr;
+	}
+#else
 	// The three index arrays and the keys share one allocation (one block per
 	// table and resize instead of four): hashes, key to hash index, hash to key
 	// index, then the keys at their alignment. _hashes is the block.
@@ -92,14 +130,19 @@ private:
 		_hash_idx_to_key_idx = nullptr;
 		_key_idx_to_hash_idx = nullptr;
 	}
+#endif // FORK_BACKEND_HASH_TAGS
 
 	// Fork: slot arithmetic (FORK_BACKEND_HASH_POW2, see fork_backends.h and
 	// kb/project/hash-pow2-mixer.md). With 0, prime capacities and fastmod (upstream); with 1 or
 	// 2, power-of-two capacities from 8 (index 2) and a mask.
-	static constexpr uint32_t _FIRST_CAPACITY_INDEX = FORK_BACKEND_HASH_POW2 ? MIN_CAPACITY_INDEX : 0;
+	// With FORK_BACKEND_HASH_TAGS, power-of-two capacities from 16 (index 2), whatever
+	// FORK_BACKEND_HASH_POW2 says.
+	static constexpr uint32_t _FIRST_CAPACITY_INDEX = (FORK_BACKEND_HASH_POW2 || FORK_BACKEND_HASH_TAGS) ? MIN_CAPACITY_INDEX : 0;
 
 	_FORCE_INLINE_ static constexpr uint32_t _capacity_of(uint32_t p_idx) {
-#if FORK_BACKEND_HASH_POW2
+#if FORK_BACKEND_HASH_TAGS
+		return 4u << p_idx;
+#elif FORK_BACKEND_HASH_POW2
 		return 2u << p_idx;
 #else
 		return hash_table_size_primes[p_idx];
@@ -125,7 +168,9 @@ private:
 
 	_FORCE_INLINE_ uint32_t _hash(const TKey &p_key) const {
 		uint32_t hash = hash_table_key<Hasher>(p_key);
-#if FORK_BACKEND_HASH_POW2
+#if FORK_BACKEND_HASH_TAGS
+		hash = hash_table_mix<Hasher, TKey, 2>(hash);
+#elif FORK_BACKEND_HASH_POW2
 		hash = hash_table_mix<Hasher, TKey>(hash);
 #endif
 
@@ -159,6 +204,117 @@ private:
 #endif
 	}
 
+#if FORK_BACKEND_HASH_TAGS
+	// Fork (FORK_BACKEND_HASH_TAGS, kb/project/hash-simd-tags.md): slots are found by groups of
+	// control bytes (HashTags in hashfuncs.h). FORK_BACKEND_HASH_POW2 does not apply here: the
+	// capacities are powers of two from 16 either way, and the hash is mixed with hash_fmix32.
+	_FORCE_INLINE_ uint8_t *_ctrl() const {
+		return reinterpret_cast<uint8_t *>(_hash_idx_to_key_idx + _capacity_of(_capacity_idx));
+	}
+
+	bool _lookup_slot(const TKey &p_key, uint32_t p_hash, uint32_t &r_slot) const {
+		const uint32_t *slots = _hash_idx_to_key_idx;
+		return HashTags::find(_ctrl(), _capacity_of(_capacity_idx) - 1, p_hash, [&](uint32_t p_slot) { return Comparator::compare(_keys[slots[p_slot]], p_key); }, r_slot);
+	}
+
+	bool _lookup_key_idx(const TKey &p_key, uint32_t &r_key_idx) const {
+		if (_keys == nullptr || _size == 0) {
+			return false; // Failed lookups, no elements
+		}
+		uint32_t slot = 0;
+		if (!_lookup_slot(p_key, _hash(p_key), slot)) {
+			return false;
+		}
+		r_key_idx = _hash_idx_to_key_idx[slot];
+		return true;
+	}
+
+	// Puts key p_key_idx in the first free slot of its probe sequence.
+	void _insert_slot(uint32_t p_hash, uint32_t p_key_idx) {
+		const uint32_t mask = _capacity_of(_capacity_idx) - 1;
+		uint8_t *ctrl = _ctrl();
+		const uint32_t slot = HashTags::find_free(ctrl, mask, p_hash);
+		if (ctrl[slot] == HashTags::DELETED) {
+			_deleted--;
+		}
+		HashTags::set(ctrl, mask, slot, HashTags::tag(p_hash));
+		_hash_idx_to_key_idx[slot] = p_key_idx;
+	}
+
+	// A new block for p_new_capacity_idx (never below the current one), slots built from the
+	// key hashes; drops every DELETED byte.
+	void _resize_and_rehash(uint32_t p_new_capacity_idx) {
+		_capacity_idx = MAX((uint32_t)MIN_CAPACITY_INDEX, p_new_capacity_idx);
+
+		uint32_t *old_hashes = _hashes;
+		TKey *old_keys = _keys;
+
+		_allocate_block(_capacity_of(_capacity_idx));
+		// Keys move by memory copy, as the class requires (see above).
+		if (_size > 0) {
+			memcpy(static_cast<void *>(_keys), static_cast<const void *>(old_keys), sizeof(TKey) * _size);
+			memcpy(_hashes, old_hashes, sizeof(uint32_t) * _size);
+		}
+		for (uint32_t i = 0; i < _size; i++) {
+			_insert_slot(_hashes[i], i);
+		}
+
+		Memory::free_static(old_hashes);
+	}
+
+	// Returns key index.
+	_FORCE_INLINE_ int32_t _insert(const TKey &p_key) {
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		if (unlikely(_keys == nullptr)) {
+			// Allocate on demand to save memory.
+			_allocate_block(capacity);
+		}
+
+		const uint32_t hash = _hash(p_key);
+		uint32_t slot = 0;
+		if (_lookup_slot(p_key, hash, slot)) {
+			return _hash_idx_to_key_idx[slot];
+		}
+
+		const uint32_t max_size = _key_capacity(capacity);
+		if (_size + _deleted >= max_size) {
+			// Grow when full or when few bytes are DELETED, else drop the DELETED bytes in place.
+			if (_size >= max_size || _deleted * 4 < _size) {
+				ERR_FAIL_COND_V_MSG(_capacity_idx + 1 == HASH_TABLE_SIZE_MAX, -1, "Hash table maximum capacity reached, aborting insertion.");
+				_resize_and_rehash(_capacity_idx + 1);
+			} else {
+				_resize_and_rehash(_capacity_idx);
+			}
+		}
+
+		memnew_placement(&_keys[_size], TKey(p_key));
+		_hashes[_size] = hash;
+		_insert_slot(hash, _size);
+		_size++;
+		return _size - 1;
+	}
+
+	void _init_from(const HashSet &p_other) {
+		_capacity_idx = p_other._capacity_idx;
+		_size = p_other._size;
+		_deleted = 0;
+
+		if (p_other._size == 0) {
+			return;
+		}
+
+		const uint32_t capacity = _capacity_of(_capacity_idx);
+		_allocate_block(capacity);
+
+		for (uint32_t i = 0; i < _size; i++) {
+			memnew_placement(&_keys[i], TKey(p_other._keys[i]));
+		}
+		memcpy(_hashes, p_other._hashes, sizeof(uint32_t) * _size);
+		// The slots, then the control bytes.
+		memcpy(_hash_idx_to_key_idx, p_other._hash_idx_to_key_idx, sizeof(uint32_t) * capacity + capacity + HashTags::WIDTH);
+		_deleted = p_other._deleted;
+	}
+#else
 	bool _lookup_key_idx(const TKey &p_key, uint32_t &r_key_idx) const {
 		if (_keys == nullptr || _size == 0) {
 			return false; // Failed lookups, no elements
@@ -292,6 +448,7 @@ private:
 			_hash_idx_to_key_idx[i] = p_other._hash_idx_to_key_idx[i];
 		}
 	}
+#endif // FORK_BACKEND_HASH_TAGS
 
 public:
 	_FORCE_INLINE_ uint32_t get_capacity() const { return _capacity_of(_capacity_idx); }
@@ -309,7 +466,12 @@ public:
 		}
 
 		uint32_t capacity = _capacity_of(_capacity_idx);
+#if FORK_BACKEND_HASH_TAGS
+		memset(_ctrl(), HashTags::EMPTY, capacity + HashTags::WIDTH);
+		_deleted = 0;
+#else
 		memset(_hashes, EMPTY_HASH, sizeof(EMPTY_HASH) * capacity);
+#endif
 
 		if constexpr (!std::is_trivially_destructible_v<TKey>) {
 			for (uint32_t i = 0; i < _size; i++) {
@@ -326,6 +488,37 @@ public:
 	}
 
 	bool erase(const TKey &p_key) {
+#if FORK_BACKEND_HASH_TAGS
+		if (_keys == nullptr || _size == 0) {
+			return false;
+		}
+		const uint32_t mask = _capacity_of(_capacity_idx) - 1;
+		uint8_t *ctrl = _ctrl();
+		uint32_t slot = 0;
+		if (!_lookup_slot(p_key, _hash(p_key), slot)) {
+			return false;
+		}
+
+		const uint32_t key_idx = _hash_idx_to_key_idx[slot];
+		if (HashTags::erase(ctrl, mask, slot)) {
+			_deleted++;
+		}
+		_keys[key_idx].~TKey();
+		_size--;
+		if (key_idx < _size) {
+			// Not the last key, move the last one here to keep keys contiguous.
+			memnew_placement(&_keys[key_idx], TKey(_keys[_size]));
+			_keys[_size].~TKey();
+			const uint32_t moved_hash = _hashes[_size];
+			uint32_t moved_slot = 0;
+			[[maybe_unused]] const bool found = HashTags::find(ctrl, mask, moved_hash, [&](uint32_t p_slot) { return _hash_idx_to_key_idx[p_slot] == _size; }, moved_slot);
+			DEV_ASSERT(found);
+			_hash_idx_to_key_idx[moved_slot] = key_idx;
+			_hashes[key_idx] = moved_hash;
+		}
+
+		return true;
+#else
 		uint32_t key_idx = 0;
 		bool exists = _lookup_key_idx(p_key, key_idx);
 
@@ -361,6 +554,7 @@ public:
 		}
 
 		return true;
+#endif
 	}
 
 	// Reserves space for a number of elements, useful to avoid many resizes and rehashes.
@@ -489,7 +683,13 @@ public:
 	HashSet(HashSet &&p_other) {
 		_keys = p_other._keys;
 		_hash_idx_to_key_idx = p_other._hash_idx_to_key_idx;
+#if FORK_BACKEND_HASH_TAGS
+		_deleted = p_other._deleted;
+		p_other._deleted = 0;
+#else
 		_key_idx_to_hash_idx = p_other._key_idx_to_hash_idx;
+		p_other._key_idx_to_hash_idx = nullptr;
+#endif
 		_hashes = p_other._hashes;
 
 		_capacity_idx = p_other._capacity_idx;
@@ -498,7 +698,6 @@ public:
 		p_other._keys = nullptr;
 		p_other._hash_idx_to_key_idx = nullptr;
 		p_other._hashes = nullptr;
-		p_other._key_idx_to_hash_idx = nullptr;
 
 		p_other._capacity_idx = _FIRST_CAPACITY_INDEX;
 		p_other._size = 0;
@@ -525,7 +724,11 @@ public:
 
 		SWAP(_keys, p_other._keys);
 		SWAP(_hash_idx_to_key_idx, p_other._hash_idx_to_key_idx);
+#if FORK_BACKEND_HASH_TAGS
+		SWAP(_deleted, p_other._deleted);
+#else
 		SWAP(_key_idx_to_hash_idx, p_other._key_idx_to_hash_idx);
+#endif
 		SWAP(_hashes, p_other._hashes);
 
 		SWAP(_capacity_idx, p_other._capacity_idx);

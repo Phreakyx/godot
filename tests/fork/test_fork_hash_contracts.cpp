@@ -627,6 +627,222 @@ TEST_CASE("[Fork][HashSet] Keys with one hash are found and iterate in insertion
 	CHECK(set.size() == 25);
 }
 
+// The pins below guard the slot search (FORK_BACKEND_HASH_TAGS): keys with one tag, tables
+// filled to each growth point (probe groups wrap past the last slot) and empty tables.
+
+// The order of a dense container after erasing p_key: the last key moves into its place.
+static void erase_moves_last(Vector<int> &r_keys, int p_key) {
+	const int64_t idx = r_keys.find(p_key);
+	REQUIRE(idx >= 0);
+	r_keys.set(idx, r_keys[r_keys.size() - 1]);
+	r_keys.remove_at(r_keys.size() - 1);
+}
+
+TEST_CASE("[Fork][AHashMap] Keys with one hash are found, erased and keep the dense order") {
+	AHashMap<int, int, ConstantHasher> map;
+	Vector<int> expected;
+	for (int i = 0; i < 40; i++) {
+		map.insert(i, i * 10);
+		expected.push_back(i);
+	}
+	for (int i = 0; i < 40; i++) {
+		REQUIRE(map.getptr(i) != nullptr);
+		CHECK(*map.getptr(i) == i * 10);
+	}
+	for (int i = 0; i < 40; i += 2) {
+		CHECK(map.erase(i));
+		erase_moves_last(expected, i);
+	}
+	for (int i = 0; i < 40; i++) {
+		CHECK(map.has(i) == (i % 2 == 1));
+	}
+	REQUIRE(map.size() == uint32_t(expected.size()));
+	for (int i = 0; i < expected.size(); i++) {
+		CHECK(map.get_by_index(i).key == expected[i]);
+		CHECK(map.get_by_index(i).value == expected[i] * 10);
+		CHECK(map.get_index(expected[i]) == i);
+	}
+}
+
+template <typename M>
+static bool ahashmap_finds_first(M &p_map, int p_count) {
+	bool found = !p_map.has(p_count) && !p_map.has(-1 - p_count);
+	for (int i = 0; i < p_count; i++) {
+		found = found && p_map.has(i) && p_map.get_index(i) == i;
+	}
+	return found;
+}
+
+TEST_CASE("[Fork][AHashMap] Every key is found up to each growth point and after it") {
+	AHashMap<int, int> map;
+	AHashMap<int, int, ConstantHasher> one_hash;
+	int n = 0;
+	for (int growth = 0; growth < 4; growth++) {
+		const uint32_t capacity = map.get_capacity();
+		bool found = true;
+		while (map.get_capacity() == capacity) {
+			map.insert(n, n);
+			one_hash.insert(n, n);
+			n++;
+			found = found && ahashmap_finds_first(map, n) && ahashmap_finds_first(one_hash, n);
+		}
+		CHECK(found);
+		CHECK(map.get_capacity() == capacity * 2);
+	}
+}
+
+#ifdef DEBUG_ENABLED
+TEST_CASE("[Fork][AHashMap] An empty, reserved or copied empty map finds nothing and allocates nothing") {
+	const uint64_t before = Memory::get_mem_usage();
+	{
+		AHashMap<int, int> map;
+		CHECK_FALSE(map.has(1));
+		CHECK(map.getptr(1) == nullptr);
+		CHECK(map.find(1) == map.end());
+		CHECK(map.get_index(1) == -1);
+		CHECK_FALSE(map.erase(1));
+		map.reserve(100);
+		CHECK(map.get_capacity() >= 100);
+		CHECK_FALSE(map.has(1));
+		CHECK_FALSE(map.erase(1));
+		AHashMap<int, int> copy(map);
+		CHECK_FALSE(copy.has(1));
+		AHashMap<int, int> moved(std::move(copy));
+		CHECK_FALSE(moved.has(1));
+		CHECK(Memory::get_mem_usage() == before);
+	}
+	CHECK(Memory::get_mem_usage() == before);
+
+	// Emptied by erase: the table stays allocated and finds nothing.
+	AHashMap<int, int> map;
+	for (int i = 0; i < 20; i++) {
+		map.insert(i, i);
+	}
+	for (int i = 0; i < 20; i++) {
+		CHECK(map.erase(i));
+	}
+	bool none = map.is_empty() && map.begin() == map.end();
+	for (int i = 0; i < 20; i++) {
+		none = none && !map.has(i) && map.getptr(i) == nullptr && !map.erase(i);
+	}
+	CHECK(none);
+}
+#endif
+
+TEST_CASE("[Fork][HashSet] Keys with one hash are found, erased and keep the dense order") {
+	HashSet<int, ConstantHasher> set;
+	Vector<int> expected;
+	for (int i = 0; i < 40; i++) {
+		set.insert(i);
+		expected.push_back(i);
+	}
+	for (int i = 0; i < 40; i++) {
+		CHECK(set.has(i));
+	}
+	for (int i = 0; i < 40; i += 2) {
+		CHECK(set.erase(i));
+		erase_moves_last(expected, i);
+	}
+	for (int i = 0; i < 40; i++) {
+		CHECK(set.has(i) == (i % 2 == 1));
+	}
+	Vector<int> keys;
+	for (const int &key : set) {
+		keys.push_back(key);
+	}
+	CHECK(keys == expected);
+}
+
+template <typename S>
+static bool hashset_finds_first(const S &p_set, int p_count) {
+	bool found = !p_set.has(p_count) && !p_set.has(-1 - p_count);
+	for (int i = 0; i < p_count; i++) {
+		found = found && p_set.has(i);
+	}
+	return found;
+}
+
+TEST_CASE("[Fork][HashSet] Every key is found up to each growth point and after it") {
+	HashSet<int> set;
+	HashSet<int, ConstantHasher> one_hash;
+	int n = 0;
+	for (int growth = 0; growth < 4; growth++) {
+		const uint32_t capacity = set.get_capacity();
+		bool found = true;
+		while (set.get_capacity() == capacity) {
+			set.insert(n);
+			one_hash.insert(n);
+			n++;
+			found = found && hashset_finds_first(set, n) && hashset_finds_first(one_hash, n);
+		}
+		CHECK(found);
+		CHECK(set.get_capacity() > capacity);
+	}
+}
+
+#ifdef DEBUG_ENABLED
+TEST_CASE("[Fork][HashSet] A reserved, copied or emptied set finds nothing") {
+	const uint64_t before = Memory::get_mem_usage();
+	{
+		HashSet<int> set;
+		set.reserve(100);
+		CHECK(set.get_capacity() >= 100);
+		CHECK_FALSE(set.has(1));
+		CHECK_FALSE(set.erase(1));
+		HashSet<int> copy(set);
+		CHECK_FALSE(copy.has(1));
+		HashSet<int> moved(std::move(copy));
+		CHECK_FALSE(moved.has(1));
+		CHECK(Memory::get_mem_usage() == before);
+	}
+	CHECK(Memory::get_mem_usage() == before);
+
+	HashSet<int> set;
+	for (int i = 0; i < 20; i++) {
+		set.insert(i);
+	}
+	for (int i = 0; i < 20; i++) {
+		CHECK(set.erase(i));
+	}
+	bool none = set.is_empty() && set.begin() == set.end();
+	for (int i = 0; i < 20; i++) {
+		none = none && !set.has(i) && !set.erase(i);
+	}
+	CHECK(none);
+}
+#endif
+
+#if FORK_BACKEND_HASH_TAGS
+TEST_CASE("[Fork][HashTags] Group matches agree with a byte loop") {
+	uint8_t bytes[64];
+	uint32_t state = 1;
+	bool agree = true;
+	for (int round = 0; round < 2000; round++) {
+		for (uint8_t &b : bytes) {
+			state = state * 1664525u + 1013904223u;
+			const uint32_t r = state >> 8;
+			const uint8_t kinds[4] = { HashTags::EMPTY, HashTags::DELETED, uint8_t(r >> 2), uint8_t((r >> 2) & 0x7F) };
+			b = kinds[r & 3];
+		}
+		const int offset = round % 48;
+		const uint8_t probes[] = { HashTags::EMPTY, HashTags::DELETED, 0, 1, 0x7F, uint8_t(bytes[offset + 5] & 0x7F) };
+		for (uint8_t probe : probes) {
+			uint32_t expected = 0;
+			for (int i = 0; i < 16; i++) {
+				expected |= uint32_t(bytes[offset + i] == probe) << i;
+			}
+			agree = agree && HashTags::match(bytes + offset, probe) == expected && HashTags::match_swar(bytes + offset, probe) == expected;
+		}
+		uint32_t expected = 0;
+		for (int i = 0; i < 16; i++) {
+			expected |= uint32_t(bytes[offset + i] >= 0x80) << i;
+		}
+		agree = agree && HashTags::match_free(bytes + offset) == expected && HashTags::match_free_swar(bytes + offset) == expected;
+	}
+	CHECK(agree);
+}
+#endif
+
 #ifdef DEBUG_ENABLED
 TEST_CASE("[Fork][HashMap] An empty map finds nothing and allocates nothing") {
 	const uint64_t before = Memory::get_mem_usage();

@@ -115,3 +115,17 @@
 #if !(FORK_BACKEND_BYTE_HASH == 0 || FORK_BACKEND_BYTE_HASH == 1)
 #error "FORK_BACKEND_BYTE_HASH must be 0 or 1."
 #endif
+
+// AHashMap and HashSet slot search (HASH-06, kb/project/hash-simd-tags.md).
+// 0: robin-hood probing over one 32-bit hash per slot (upstream; HashSet with the slot
+//    arithmetic of FORK_BACKEND_HASH_POW2).
+// 1: one control byte per slot (EMPTY, DELETED or 7 bits of the mixed hash), matched 16 at a
+//    time (SSE2 on x86-64, 8-byte SWAR elsewhere; HashTags in hashfuncs.h). Power-of-two
+//    capacities from 16. AHashMap keeps its dense elements, HashSet its one-block layout
+//    (D013). HashMap is not affected.
+#ifndef FORK_BACKEND_HASH_TAGS
+#define FORK_BACKEND_HASH_TAGS 0
+#endif
+#if !(FORK_BACKEND_HASH_TAGS == 0 || FORK_BACKEND_HASH_TAGS == 1)
+#error "FORK_BACKEND_HASH_TAGS must be 0 or 1."
+#endif

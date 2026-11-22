@@ -71,6 +71,11 @@ build.
   at or past `size()`. `get_index()` of a missing key is -1.
 * `insert_new()` appends; `replace_key()` keeps the index.
 * Existing key, erase twice, empty and single-element cases as for HashMap.
+* With one hash for every key (a constant hasher) all keys are found and
+  erased, and the dense order follows erase-moves-last; every key is found
+  after each insert up to and past the growth points; an empty, reserved,
+  copied, moved or emptied map finds nothing, and allocates nothing before
+  the first insert (the HASH-06 pins, [tag probing](/project/hash-simd-tags.md)).
 
 **HashSet**:
 * Iteration follows insertion order while nothing is erased.
@@ -78,6 +83,7 @@ build.
   nothing. The set has no public index API.
 * `insert()` of an existing key returns an iterator to it and changes
   neither size nor order. Erase twice, empty and single-element cases.
+* The same one-hash, growth-point and empty-table pins as AHashMap.
 
 **RBMap** (`tests/fork/test_fork_tree_list_contracts.cpp`):
 * Iteration follows the comparator (default and a custom one, in
