@@ -1,9 +1,9 @@
 ---
 type: Finding
 title: Small-map HashMap without an index (HASH-07 candidate)
-description: HashMap behind FORK_BACKEND_HASHMAP_SMALL (default 0, every map with elements has its index; the value is the threshold, 1 to 16, first 8, alternative 4) - a map of at most threshold elements allocates no hash and element arrays and finds keys by walking its element list with the Comparator; the index is built from the list when an insert passes the threshold or reserve() asks for more, kept when erases take the map back below it, dropped by clear(). Nodes never move, so pointers and insertion order hold; sizeof(HashMap) unchanged. Built and pinned, alone and with every other Phase 3 candidate. MSVC (provisional): threshold 8, FAIL (engine), 68 REGRESSION rows; micro no evidence.
+description: HashMap behind FORK_BACKEND_HASHMAP_SMALL (default 0, every map with elements has its index; the value is the threshold, 1 to 16, first 8, alternative 4) - a map of at most threshold elements allocates no hash and element arrays and finds keys by walking its element list with the Comparator; the index is built from the list when an insert passes the threshold or reserve() asks for more, kept when erases take the map back below it, dropped by clear(). Nodes never move, so pointers and insertion order hold; sizeof(HashMap) unchanged. Built and pinned, alone and with every other Phase 3 candidate. MSVC (provisional): threshold 8, FAIL (engine), 68 REGRESSION rows; micro no evidence. Phase 3 final: rejected; code kept, off by default, revised in Phase 3.1.
 tags: [core, containers, hashmap, small-map, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashmap
@@ -203,7 +203,7 @@ first series; the rules are frozen from here on.
   while the ptr and i64 rows win, that is recorded, and a String-key-excluded
   small map is named as a later candidate.
 
-# Results (MSVC, provisional until GCC and Clang)
+# Results (MSVC)
 
 **Micro, `small8` (`FORK_BACKEND_HASHMAP_SMALL=8`):**
 `LAYOUT-SENTINEL: 7 of 256 control rows moved`, repeat
@@ -273,3 +273,14 @@ its micro gate is decided by GCC and Clang (03-11).
 **Outcome: FAIL (engine)** (micro: no evidence on MSVC). Rejected on
 MSVC. The insert at 16 builds the index from the list once the map passes
 8 elements, which is where the engine pays for the small path.
+
+# Results (GCC, Clang)
+
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (engine) at threshold 8: scene:script ACCEPT, 68 REGRESSION rows; micro no evidence (layout sentinel).
+
+Rejected on MSVC (Phase 3); code kept, off by default, revised in Phase 3.1 (ALLOC-03, HASH-08, HASH-09).

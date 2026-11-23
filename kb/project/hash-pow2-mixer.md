@@ -1,26 +1,26 @@
 ---
 type: Finding
 title: Power-of-two capacity with a mixer for HashMap and HashSet (HASH-03 candidate)
-description: HashMap and HashSet behind FORK_BACKEND_HASH_POW2 (default 0, prime capacity with fastmod) - power-of-two capacities from 8, the table hash mixed once in _hash() (1 multiply then xorshift, 2 hash_fmix32; byte-hashed String and CharString keys are not mixed again), slot and probe distance with a mask. Storage unchanged, HashSet keeps its one-block layout (D013); hasher outputs unchanged. MSVC (provisional): FAIL (engine), 70 REGRESSION rows; micro no evidence (layout sentinel).
+description: HashMap and HashSet behind FORK_BACKEND_HASH_POW2 (default 0, prime capacity with fastmod) - power-of-two capacities from 8, the table hash mixed once in _hash() (1 multiply then xorshift, 2 hash_fmix32; byte-hashed String and CharString keys are not mixed again), slot and probe distance with a mask. Storage unchanged, HashSet keeps its one-block layout (D013); hasher outputs unchanged. MSVC (provisional): FAIL (engine), 70 REGRESSION rows; micro no evidence (layout sentinel). Phase 3 final: rejected, code deleted (last at e2c08be5d2).
 tags: [core, containers, hashmap, hashset, hashing, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashmap
     resource: ../../core/templates/hash_map.h
-    title: _capacity_of(), _home(), _increment_mod() and _hash() of HashMap
+    title: _capacity_of(), _home(), _increment_mod() and _hash() of HashMap (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: hashset
     resource: ../../core/templates/hash_set.h
-    title: The same slot arithmetic inside the D013 block
+    title: The same slot arithmetic inside the D013 block (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: hashfuncs
     resource: ../../core/templates/hashfuncs.h
-    title: hash_table_mix(), applied after hash_table_key()
+    title: hash_table_mix(), applied after hash_table_key() (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: switch
     resource: ../../core/templates/fork_backends.h
-    title: FORK_BACKEND_HASH_POW2 (default 0)
+    title: FORK_BACKEND_HASH_POW2 (default 0) (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: pins
     resource: ../../tests/fork/test_fork_hash_contracts.cpp
-    title: The constant-hasher and key-type pins
+    title: The constant-hasher and key-type pins (the candidate part removed in Phase 3 final, last at e2c08be5d2)
 ---
 
 # Design
@@ -163,7 +163,7 @@ first series; the rules are frozen from here on.
   The engine series still runs and its verdict is recorded. Both sentinel
   lines are recorded here.
 
-# Results (MSVC, provisional until GCC and Clang)
+# Results (MSVC)
 
 **Micro, `pow2` (`FORK_BACKEND_HASH_POW2=1`):**
 `LAYOUT-SENTINEL: 4 of 256 control rows moved`, repeat
@@ -234,3 +234,14 @@ its micro gate is decided by GCC and Clang (03-11).
 **Outcome: FAIL (engine)** (micro: no evidence on MSVC). Rejected on
 MSVC; acceptance needs every compiler, so the GCC and Clang micro
 (03-11) can only confirm the rejection or record numbers.
+
+# Results (GCC, Clang)
+
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (engine), 70 REGRESSION rows; micro no evidence (layout sentinel).
+
+Code: last at `e2c08be5d2`, deleted in Phase 3 final.

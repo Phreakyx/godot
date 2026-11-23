@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10); contracts (GCC) and (Clang) on CachyOS 1570/1570 with 9 skipped, [Fork] 67/67 on GCC, Clang and the GCC dev build.
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10); contracts (GCC) and (Clang) on CachyOS 1570/1570 with 9 skipped, [Fork] 67/67 on GCC, Clang and the GCC dev build. Phase 3 final (MSVC): 1595/1595, 9 skipped; on Linux pending.
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -44,6 +44,7 @@ off as old. No full `--test` run of this fork had been recorded before.
 | contracts (GCC) | `7b81582fab` + fix | 1570 | 1570 | 0 | 9 | 595031 passed, 0 failed | `SUCCESS!` |
 | contracts (Clang) | `7b81582fab` + fix | 1570 | 1570 | 0 | 9 | 595022 passed, 0 failed | `SUCCESS!` |
 | fork tests (GCC dev) | `7b81582fab` + fix | 67 | 67 | 0 | 1512 | 329 passed, 0 failed | `SUCCESS!` |
+| Phase 3 final (MSVC) | `dev` after `e2c08be5d2` | 1595 | 1595 | 0 | 9 | 601969 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -165,6 +166,22 @@ extra cases are `[Fork][HashTags]` and `[Fork][Backends] Allocator scope`);
 `--test-case="*Fork*"` runs 98 cases (7310 assertions) on the control and
 the dev `small8` build, and 100 (7312) on the dev `allhash` build.
 
+Phase 3 final (plan 03-13, 2026-11-23): nothing was accepted, so the
+defaults stay 0; the node pool, power-of-two, rapidhash and tag candidates
+are deleted (with their `[Fork][Backends]` lines and `[Fork][HashTags]`),
+mimalloc, the table-key hash and the small map are kept off by default.
+MSVC `--test` on the production tests build: 1595 cases, 1595 passed,
+0 failed, 9 skipped (601969 assertions), the same cases as the last control
+(1595, 9 skipped); the four fewer assertions are the deleted
+`[Fork][Backends]` checks. `--test-case="*Fork*"`: 98 cases (7306
+assertions) on the production and dev tests builds, 92 (7219) on the
+template_release tests build; the `keep3` tests build
+(`FORK_BACKEND_ALLOCATOR=1`, `FORK_BACKEND_TABLE_KEY_HASH=1`,
+`FORK_BACKEND_HASHMAP_SMALL=8`) runs 99 (7307, with
+`[Fork][Backends] Allocator scope`) and its full suite 1596, 1596 passed,
+9 skipped (601970). The public outputs pin (`*Fork*Hash*outputs*`, 3
+cases) passes on the production and `keep3` builds.
+
 The Linux rows ([Linux builds](/project/linux-build.md)) ran on CachyOS on
 the same PC: GCC 16.2.1 and Clang 23.1.5, `production=yes tests=yes`
 builds, at `7b81582fab` plus the `-> uint64_t` fix in
@@ -173,6 +190,13 @@ more cases than MSVC, upstream's `[UDSServer]` cases (built only with
 `UNIX_ENABLED`); the same nine are skipped. `--test-case="*Fork*"` runs the
 67 `[Fork]` cases on GCC, Clang and the GCC `dev_build=yes` build
 (`DEV_ASSERT` compiled in): 67 passed, 329 assertions each.
+
+**Phase 3 final tree on Linux: pending.** The Phase 3 final commit has
+not been built or tested on GCC or Clang yet. The next CachyOS session
+tests exactly this commit (GCC and Clang builds, `--test` with the full
+suite and `*Fork*`, the GCC dev tests build's `*Fork*` cases,
+`devtools/test/smoke_linux.sh`), and 03-11 Task 3 records the result
+here. Until then nothing here says Linux passed on it.
 
 # Smoke on the same tree
 

@@ -186,6 +186,11 @@ startup, the level and micro_engine on editor peaked above the runner,
 so their floors are real. See
 [the mistake](/mistakes/child-peak-rss-inherits-the-runners.md).
 
+**Moved to Phase 3.1 (BENCH-13, 2026-11-23).** Phase 3 ended without a
+Linux series, so the Linux peak-memory floors of the small workloads and
+the Linux tiny-maps micro floors are measured in Phase 3.1; `floors.json`
+is unchanged.
+
 ## Counters (perf stat, one pass per binary after the timed rounds)
 
 Counted on the P-cores (`cpu_core/*/u`), never judged. The time is the

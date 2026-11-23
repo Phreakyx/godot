@@ -1,26 +1,26 @@
 ---
 type: Finding
 title: SIMD tag probing for AHashMap and HashSet (HASH-06 candidate)
-description: AHashMap and HashSet behind FORK_BACKEND_HASH_TAGS (default 0, robin-hood probing) - one control byte per slot (EMPTY, DELETED or a 7-bit tag of the hash_fmix32-mixed hash) matched 16 at a time with SSE2 on x86-64 and an 8-byte SWAR fallback elsewhere, 15 mirrored control bytes after the last slot, power-of-two capacities from 16. AHashMap keeps its dense elements and index rules, HashSet its one-block layout (D013); HashMap is not touched. MSVC (provisional): FAIL (engine), target scene:script REGRESSION; micro no evidence.
+description: AHashMap and HashSet behind FORK_BACKEND_HASH_TAGS (default 0, robin-hood probing) - one control byte per slot (EMPTY, DELETED or a 7-bit tag of the hash_fmix32-mixed hash) matched 16 at a time with SSE2 on x86-64 and an 8-byte SWAR fallback elsewhere, 15 mirrored control bytes after the last slot, power-of-two capacities from 16. AHashMap keeps its dense elements and index rules, HashSet its one-block layout (D013); HashMap is not touched. MSVC (provisional): FAIL (engine), target scene:script REGRESSION; micro no evidence. Phase 3 final: rejected, code deleted (last at e2c08be5d2).
 tags: [core, containers, ahashmap, hashset, hashing, simd, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashtags
     resource: ../../core/templates/hashfuncs.h
-    title: HashTags, the group match, probe, mirror and erase helpers both containers share
+    title: HashTags, the group match, probe, mirror and erase helpers both containers share (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: ahashmap
     resource: ../../core/templates/a_hash_map.h
-    title: The tag path of AHashMap (control block, slots, element hashes)
+    title: The tag path of AHashMap (control block, slots, element hashes) (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: hashset
     resource: ../../core/templates/hash_set.h
-    title: The tag path of HashSet inside the D013 block
+    title: The tag path of HashSet inside the D013 block (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: switch
     resource: ../../core/templates/fork_backends.h
-    title: FORK_BACKEND_HASH_TAGS (default 0)
+    title: FORK_BACKEND_HASH_TAGS (default 0) (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: pins
     resource: ../../tests/fork/test_fork_hash_contracts.cpp
-    title: The one-hash, growth-point, empty-table and group-match pins
+    title: The one-hash, growth-point, empty-table and group-match pins (the candidate part removed in Phase 3 final, last at e2c08be5d2)
 ---
 
 # Design
@@ -182,7 +182,7 @@ first series; the rules are frozen from here on.
   stricter, it applies: a `live_bytes` rise on any i64 or ptr `ahashmap_*`
   or `hashset_*` row is FAIL (gate).
 
-# Results (MSVC, provisional until GCC and Clang)
+# Results (MSVC)
 
 **Micro, `tags` (`FORK_BACKEND_HASH_TAGS=1`):**
 `LAYOUT-SENTINEL: 16 of 256 control rows moved`, repeat
@@ -240,3 +240,19 @@ its micro gate is decided by GCC and Clang (03-11).
 **Outcome: FAIL (engine)** (micro: no evidence on MSVC). Rejected on
 MSVC. The small-N losses are the cost of a group probe on tables that
 robin-hood answers in one or two compares.
+
+# Results (GCC, Clang)
+
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (engine): target scene:script REGRESSION, 48 REGRESSION rows; micro no evidence (layout sentinel), but see below.
+
+The +16 bytes per AHashMap table on every i64 and ptr `ahashmap_*` row
+is deterministic (the same in both micro runs, independent of layout),
+so amendment C's memory rule applies whatever the sentinel says: FAIL
+(gate) on memory as well.
+
+Code: last at `e2c08be5d2`, deleted in Phase 3 final.

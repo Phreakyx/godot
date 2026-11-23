@@ -37,6 +37,9 @@
 // which passes SCons cppdefines and extra_suffix. A family gets its macro together with
 // its first candidate; a losing candidate is deleted, an accepted one becomes the default
 // with upstream's code kept under the 0 branch.
+// Phase 3 (allocation and hash tables) accepted no candidate, so every default is 0. The three
+// below are kept, off by default, because Phase 3.1 revises them; the node pool, power-of-two
+// capacity, rapidhash and SIMD tag candidates were deleted (kb/project/container-contracts.md).
 // The header is also included from C (core/os/fork_mimalloc.c): preprocessor checks only.
 
 // Seam self-test: proves a define reaches every translation unit and the suffixed binary.
@@ -48,7 +51,8 @@
 #error "FORK_BACKEND_SELFTEST must be 0 or 1."
 #endif
 
-// General allocator under Memory::alloc_static and friends (ALLOC-01).
+// General allocator under Memory::alloc_static and friends (ALLOC-01,
+// kb/project/mimalloc-allocator.md). Default 0: rejected on MSVC in Phase 3.
 // 0: the C runtime malloc, calloc, realloc and free (upstream).
 // 1: mimalloc (thirdparty/mimalloc), called directly from core/os/memory.cpp. It is
 //    compiled by core/os/fork_mimalloc.c, which is empty with 0. Nothing is overridden.
@@ -68,31 +72,8 @@
 #error "FORK_BACKEND_ALLOCATOR=3 replaces malloc for the whole process and is Linux-only (GCC or Clang)."
 #endif
 
-// HashMap node storage (HASH-01).
-// 0: one Allocator::new_allocation per element (upstream).
-// 1: a per-map node pool inside HashMap (core/templates/hash_map.h): geometric pages that
-//    never move, an intrusive free list, released by clear() and the destructor. Only maps
-//    with the default Allocator use it; a map with its own Allocator keeps that path.
-#ifndef FORK_BACKEND_HASHMAP_POOL
-#define FORK_BACKEND_HASHMAP_POOL 0
-#endif
-#if !(FORK_BACKEND_HASHMAP_POOL == 0 || FORK_BACKEND_HASHMAP_POOL == 1)
-#error "FORK_BACKEND_HASHMAP_POOL must be 0 or 1."
-#endif
-
-// HashMap and HashSet capacity and slot arithmetic (HASH-03, kb/project/hash-pow2-mixer.md).
-// 0: prime capacities (hash_table_size_primes) and fastmod on every probed slot (upstream).
-// 1, 2: power-of-two capacities from 8 and a mask; _hash() mixes the table hash once with
-//    hash_table_mix() (1: multiply then xorshift, 2: hash_fmix32). Byte-hashed String and
-//    CharString keys are not mixed again. Hasher outputs do not change.
-#ifndef FORK_BACKEND_HASH_POW2
-#define FORK_BACKEND_HASH_POW2 0
-#endif
-#if !(FORK_BACKEND_HASH_POW2 == 0 || FORK_BACKEND_HASH_POW2 == 1 || FORK_BACKEND_HASH_POW2 == 2)
-#error "FORK_BACKEND_HASH_POW2 must be 0, 1 or 2."
-#endif
-
 // Table-internal hash of StringName and pointer keys (HASH-05, kb/project/table-key-hash.md).
+// Default 0: rejected on MSVC in Phase 3.
 // 0: HashMapHasherDefault's output (upstream): StringName's cached hash, Thomas Wang's
 //    64-to-32 mix for pointers.
 // 1: hash_table_key() with the default hasher hashes a StringName by its data pointer (its
@@ -105,32 +86,8 @@
 #error "FORK_BACKEND_TABLE_KEY_HASH must be 0 or 1."
 #endif
 
-// Short-key byte hash in hash_buffer64() below HASH_XXH3_THRESHOLD (HASH-04,
-// kb/project/rapidhash-byte-hash.md). Only table-internal hashes use hash_buffer*.
-// 0: wyhash final v4.3 (the fork's current byte hash; upstream has no byte hash).
-// 1: rapidhash V3 (thirdparty/rapidhash, rapidhash_withSeed). XXH3 above the threshold either way.
-#ifndef FORK_BACKEND_BYTE_HASH
-#define FORK_BACKEND_BYTE_HASH 0
-#endif
-#if !(FORK_BACKEND_BYTE_HASH == 0 || FORK_BACKEND_BYTE_HASH == 1)
-#error "FORK_BACKEND_BYTE_HASH must be 0 or 1."
-#endif
-
-// AHashMap and HashSet slot search (HASH-06, kb/project/hash-simd-tags.md).
-// 0: robin-hood probing over one 32-bit hash per slot (upstream; HashSet with the slot
-//    arithmetic of FORK_BACKEND_HASH_POW2).
-// 1: one control byte per slot (EMPTY, DELETED or 7 bits of the mixed hash), matched 16 at a
-//    time (SSE2 on x86-64, 8-byte SWAR elsewhere; HashTags in hashfuncs.h). Power-of-two
-//    capacities from 16. AHashMap keeps its dense elements, HashSet its one-block layout
-//    (D013). HashMap is not affected.
-#ifndef FORK_BACKEND_HASH_TAGS
-#define FORK_BACKEND_HASH_TAGS 0
-#endif
-#if !(FORK_BACKEND_HASH_TAGS == 0 || FORK_BACKEND_HASH_TAGS == 1)
-#error "FORK_BACKEND_HASH_TAGS must be 0 or 1."
-#endif
-
 // HashMap lookups of small maps (HASH-07, kb/project/hashmap-small-map.md).
+// Default 0: rejected on MSVC in Phase 3.
 // 0: every map with elements has its index (upstream).
 // 1 to 16: the threshold. A map holds no index while it has at most that many elements and
 //    finds keys by walking its element list with the Comparator. The index is built from the

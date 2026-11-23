@@ -33,7 +33,6 @@
 #include "core/math/math_funcs_binary.h"
 #include "core/os/memory.h"
 #include "core/string/print_string.h"
-#include "core/templates/fork_backends.h"
 #include "core/templates/hashfuncs.h"
 #include "core/templates/pair.h"
 
@@ -65,155 +64,6 @@ public:
 	static_assert(EMPTY_HASH == 0, "EMPTY_HASH must always be 0 for the memcpy() optimization.");
 
 private:
-#if FORK_BACKEND_HASH_TAGS
-	// Fork (FORK_BACKEND_HASH_TAGS, kb/project/hash-simd-tags.md): slots are found by groups of
-	// control bytes (HashTags in hashfuncs.h) instead of robin-hood probing. _ctrl is one block:
-	// capacity + HashTags::WIDTH control bytes, the element index of each slot, then the hash of
-	// each element (resizing and erase hash no key). The elements stay dense, as with 0.
-	typedef KeyValue<TKey, TValue> MapKeyValue;
-	MapKeyValue *_elements = nullptr;
-	uint8_t *_ctrl = nullptr;
-
-	// Due to optimization, this is `capacity - 1`. Use + 1 to get normal capacity.
-	uint32_t _capacity_mask = 0;
-	uint32_t _size = 0;
-	uint32_t _deleted = 0; // DELETED control bytes.
-
-	static constexpr uint32_t _MIN_CAPACITY = HashTags::WIDTH;
-
-	uint32_t _hash(const TKey &p_key) const {
-		return hash_table_mix<Hasher, TKey, 2>(hash_table_key<Hasher>(p_key));
-	}
-
-	static _FORCE_INLINE_ uint32_t _get_resize_count(uint32_t p_capacity_mask) {
-		return p_capacity_mask ^ (p_capacity_mask + 1) >> 2; // = get_capacity() * 0.75 - 1; Works only if p_capacity_mask = 2^n - 1.
-	}
-
-	_FORCE_INLINE_ uint32_t *_slots() const {
-		return reinterpret_cast<uint32_t *>(_ctrl + _capacity_mask + 1 + HashTags::WIDTH);
-	}
-
-	_FORCE_INLINE_ uint32_t *_element_hashes() const {
-		return _slots() + _capacity_mask + 1;
-	}
-
-	void _allocate_ctrl() {
-		const size_t capacity = size_t(_capacity_mask) + 1;
-		_ctrl = reinterpret_cast<uint8_t *>(Memory::alloc_static(capacity + HashTags::WIDTH + sizeof(uint32_t) * (capacity + _get_resize_count(_capacity_mask) + 1)));
-		memset(_ctrl, HashTags::EMPTY, capacity + HashTags::WIDTH);
-		_deleted = 0;
-	}
-
-	bool _lookup_idx(const TKey &p_key, uint32_t &r_element_idx, uint32_t &r_meta_idx) const {
-		if (unlikely(_size == 0)) {
-			return false; // Failed lookups, size is 0.
-		}
-		return _lookup_idx_with_hash(p_key, r_element_idx, r_meta_idx, _hash(p_key));
-	}
-
-	bool _lookup_idx_with_hash(const TKey &p_key, uint32_t &r_element_idx, uint32_t &r_meta_idx, uint32_t p_hash) const {
-		if (unlikely(_size == 0)) {
-			return false; // Failed lookups, size is 0; the control bytes may not exist.
-		}
-		const uint32_t *slots = _slots();
-		if (!HashTags::find(_ctrl, _capacity_mask, p_hash, [&](uint32_t p_slot) { return Comparator::compare(_elements[slots[p_slot]].key, p_key); }, r_meta_idx)) {
-			return false;
-		}
-		r_element_idx = slots[r_meta_idx];
-		return true;
-	}
-
-	// The slot of element p_element_idx, whose hash is p_hash.
-	uint32_t _slot_of(uint32_t p_hash, uint32_t p_element_idx) const {
-		const uint32_t *slots = _slots();
-		uint32_t slot = 0;
-		[[maybe_unused]] const bool found = HashTags::find(_ctrl, _capacity_mask, p_hash, [&](uint32_t p_slot) { return slots[p_slot] == p_element_idx; }, slot);
-		DEV_ASSERT(found);
-		return slot;
-	}
-
-	// Puts element p_element_idx in the first free slot of its probe sequence.
-	void _insert_slot(uint32_t p_hash, uint32_t p_element_idx) {
-		const uint32_t slot = HashTags::find_free(_ctrl, _capacity_mask, p_hash);
-		if (_ctrl[slot] == HashTags::DELETED) {
-			_deleted--;
-		}
-		HashTags::set(_ctrl, _capacity_mask, slot, HashTags::tag(p_hash));
-		_slots()[slot] = p_element_idx;
-	}
-
-	// New control bytes and slots for p_new_capacity (never below the current capacity), built
-	// from the element hashes; drops every DELETED byte.
-	void _resize_and_rehash(uint32_t p_new_capacity) {
-		uint8_t *old_ctrl = _ctrl;
-		const uint32_t *old_hashes = _element_hashes();
-		_capacity_mask = Math::next_power_of_2(MAX(_MIN_CAPACITY, p_new_capacity)) - 1;
-
-		_allocate_ctrl();
-		_elements = reinterpret_cast<MapKeyValue *>(Memory::realloc_static(_elements, sizeof(MapKeyValue) * (_get_resize_count(_capacity_mask) + 1)));
-
-		uint32_t *hashes = _element_hashes();
-		if (_size != 0) {
-			memcpy(hashes, old_hashes, sizeof(uint32_t) * _size);
-		}
-		for (uint32_t i = 0; i < _size; i++) {
-			_insert_slot(hashes[i], i);
-		}
-
-		Memory::free_static(old_ctrl);
-	}
-
-	int32_t _insert_element(const TKey &p_key, const TValue &p_value, uint32_t p_hash) {
-		if (unlikely(_elements == nullptr)) {
-			// Allocate on demand to save memory. A moved-from map has a capacity of 1.
-			_capacity_mask = MAX(_capacity_mask, _MIN_CAPACITY - 1);
-			_allocate_ctrl();
-			_elements = reinterpret_cast<MapKeyValue *>(Memory::alloc_static(sizeof(MapKeyValue) * (_get_resize_count(_capacity_mask) + 1)));
-		}
-
-		const uint32_t max_size = _get_resize_count(_capacity_mask) + 1;
-		if (unlikely(_size + _deleted >= max_size)) {
-			// Grow when full or when few bytes are DELETED, else drop the DELETED bytes in place.
-			const uint32_t capacity = _capacity_mask + 1;
-			_resize_and_rehash(_size >= max_size || _deleted * 4 < _size ? capacity * 2 : capacity);
-		}
-
-		memnew_placement(&_elements[_size], MapKeyValue(p_key, p_value));
-		_element_hashes()[_size] = p_hash;
-		_insert_slot(p_hash, _size);
-		_size++;
-		return _size - 1;
-	}
-
-	void _init_from(const AHashMap &p_other) {
-		_capacity_mask = p_other._capacity_mask;
-		_size = p_other._size;
-		_deleted = 0;
-
-		if (p_other._size == 0) {
-			return;
-		}
-
-		const size_t capacity = size_t(_capacity_mask) + 1;
-		_allocate_ctrl();
-		memcpy(_ctrl, p_other._ctrl, capacity + HashTags::WIDTH + sizeof(uint32_t) * capacity);
-		memcpy(_element_hashes(), p_other._element_hashes(), sizeof(uint32_t) * _size);
-		_deleted = p_other._deleted;
-		_elements = reinterpret_cast<MapKeyValue *>(Memory::alloc_static(sizeof(MapKeyValue) * (_get_resize_count(_capacity_mask) + 1)));
-
-		if constexpr (std::is_trivially_copyable_v<TKey> && std::is_trivially_copyable_v<TValue>) {
-			void *destination = _elements;
-			const void *source = p_other._elements;
-			memcpy(destination, source, sizeof(MapKeyValue) * _size);
-		} else {
-			for (uint32_t i = 0; i < _size; i++) {
-				memnew_placement(&_elements[i], MapKeyValue(p_other._elements[i]));
-			}
-		}
-	}
-#else
-	static constexpr uint32_t _MIN_CAPACITY = 4;
-
 	struct Metadata {
 		uint32_t hash;
 		uint32_t element_idx;
@@ -401,7 +251,6 @@ private:
 
 		memcpy(_metadata, p_other._metadata, sizeof(Metadata) * real_capacity);
 	}
-#endif // FORK_BACKEND_HASH_TAGS
 
 public:
 	/* Standard Godot Container API */
@@ -418,12 +267,7 @@ public:
 			return;
 		}
 
-#if FORK_BACKEND_HASH_TAGS
-		memset(_ctrl, HashTags::EMPTY, _capacity_mask + 1 + HashTags::WIDTH);
-		_deleted = 0;
-#else
 		memset(_metadata, EMPTY_HASH, (_capacity_mask + 1) * sizeof(Metadata));
-#endif
 		if constexpr (!(std::is_trivially_destructible_v<TKey> && std::is_trivially_destructible_v<TValue>)) {
 			for (uint32_t i = 0; i < _size; i++) {
 				_elements[i].key.~TKey();
@@ -487,24 +331,6 @@ public:
 			return false;
 		}
 
-#if FORK_BACKEND_HASH_TAGS
-		if (HashTags::erase(_ctrl, _capacity_mask, meta_idx)) {
-			_deleted++;
-		}
-		_elements[element_idx].key.~TKey();
-		_elements[element_idx].value.~TValue();
-		_size--;
-
-		if (element_idx < _size) {
-			// Relocate element down (see GH-100509).
-			memcpy((void *)&_elements[element_idx], (const void *)&_elements[_size], sizeof(MapKeyValue));
-			uint32_t *hashes = _element_hashes();
-			_slots()[_slot_of(hashes[_size], _size)] = element_idx;
-			hashes[element_idx] = hashes[_size];
-		}
-
-		return true;
-#else
 		uint32_t next_meta_idx = (meta_idx + 1) & _capacity_mask;
 		while (_metadata[next_meta_idx].hash != EMPTY_HASH && _get_probe_length(next_meta_idx, _metadata[next_meta_idx].hash, _capacity_mask) != 0) {
 			SWAP(_metadata[next_meta_idx], _metadata[meta_idx]);
@@ -528,7 +354,6 @@ public:
 		}
 
 		return true;
-#endif
 	}
 
 	// Replace the key of an entry in-place, without invalidating iterators or changing the entries position during iteration.
@@ -544,18 +369,6 @@ public:
 		MapKeyValue &element = _elements[element_idx];
 		const_cast<TKey &>(element.key) = p_new_key;
 
-#if FORK_BACKEND_HASH_TAGS
-		if (HashTags::erase(_ctrl, _capacity_mask, meta_idx)) {
-			_deleted++;
-		}
-		const uint32_t hash = _hash(p_new_key);
-		_element_hashes()[element_idx] = hash;
-		if (_size + _deleted > _get_resize_count(_capacity_mask) + 1) {
-			_resize_and_rehash(_capacity_mask + 1); // Places every element, this one included.
-		} else {
-			_insert_slot(hash, element_idx);
-		}
-#else
 		uint32_t next_meta_idx = (meta_idx + 1) & _capacity_mask;
 		while (_metadata[next_meta_idx].hash != EMPTY_HASH && _get_probe_length(next_meta_idx, _metadata[next_meta_idx].hash, _capacity_mask) != 0) {
 			SWAP(_metadata[next_meta_idx], _metadata[meta_idx]);
@@ -568,7 +381,6 @@ public:
 
 		uint32_t hash = _hash(p_new_key);
 		_insert_metadata(hash, element_idx);
-#endif
 
 		return true;
 	}
@@ -577,7 +389,7 @@ public:
 	// If adding a known (possibly large) number of elements at once, must be larger than old capacity.
 	void reserve(uint32_t p_new_capacity) {
 		if (_elements == nullptr) {
-			_capacity_mask = MAX(_MIN_CAPACITY, p_new_capacity);
+			_capacity_mask = MAX(4u, p_new_capacity);
 			_capacity_mask = Math::next_power_of_2(_capacity_mask) - 1;
 			return; // Unallocated yet.
 		}
@@ -829,19 +641,12 @@ public:
 
 	AHashMap(AHashMap &&p_other) {
 		_elements = p_other._elements;
-#if FORK_BACKEND_HASH_TAGS
-		_ctrl = p_other._ctrl;
-		_deleted = p_other._deleted;
-		p_other._ctrl = nullptr;
-		p_other._deleted = 0;
-#else
 		_metadata = p_other._metadata;
-		p_other._metadata = nullptr;
-#endif
 		_capacity_mask = p_other._capacity_mask;
 		_size = p_other._size;
 
 		p_other._elements = nullptr;
+		p_other._metadata = nullptr;
 		p_other._capacity_mask = 0;
 		p_other._size = 0;
 	}
@@ -862,7 +667,7 @@ public:
 
 	explicit AHashMap(uint32_t p_initial_capacity) {
 		// Capacity can't be 0 and must be 2^n - 1.
-		_capacity_mask = MAX(_MIN_CAPACITY, p_initial_capacity);
+		_capacity_mask = MAX(4u, p_initial_capacity);
 		_capacity_mask = Math::next_power_of_2(_capacity_mask) - 1;
 	}
 	AHashMap() :
@@ -885,13 +690,7 @@ public:
 				}
 			}
 			Memory::free_static(_elements);
-#if FORK_BACKEND_HASH_TAGS
-			Memory::free_static(_ctrl);
-			_ctrl = nullptr;
-			_deleted = 0;
-#else
 			Memory::free_static(_metadata);
-#endif
 			_elements = nullptr;
 		}
 		_capacity_mask = INITIAL_CAPACITY - 1;

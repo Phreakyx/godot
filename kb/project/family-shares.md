@@ -206,6 +206,14 @@ row taken off the share (30.9%) still from 1.05x on. On MSVC the same
 holds from 1.37x (`script:script` template_release, 6.94% floor).
 Decision: **build**.
 
+**Phase 3 outcome (2026-11-23): nothing accepted.** ALLOC-02 picked
+neither ([decision](/project/alloc-vs-pool.md)): mimalloc was 23% faster on
+`script:script` template_release but failed on hash-lookup and peak-memory
+regressions ([mimalloc](/project/mimalloc-allocator.md); kept, off by
+default, revised in Phase 3.1), and the per-map node pool was within noise
+on its target and failed on 82 rows ([node pool](/project/hashmap-node-pool.md);
+deleted). Both were rejected on MSVC, which is final; no Linux series ran.
+
 ## Hash tables
 
 Largest share: GCC `scene:reparent:10000` editor 15.7% (Clang 15.4%,
@@ -225,6 +233,17 @@ on MSVC), which alone would not pass the floor. Max gain 11.4% against
 the 2.38% floor: **build**. On template_release the candidate can be
 judged too: GCC `scene:script:10000` (7.7% share, 3.44% floor, 5.6% max
 gain) or Clang `script:instance` (10.0%, 7.22%, 8.4% at Clang's ratio).
+
+**Phase 3 outcome (2026-11-23): nothing accepted.** On the empty ALLOC-02
+baseline, every hash candidate was rejected on MSVC, which is final:
+[slot array](/project/hashmap-slot-array.md) (before building),
+[power-of-two capacity](/project/hash-pow2-mixer.md) (engine),
+[rapidhash](/project/rapidhash-byte-hash.md) (gate) and
+[SIMD tags](/project/hash-simd-tags.md) (engine) were deleted;
+[StringName and pointer table hashes](/project/table-key-hash.md) (engine,
+both targets faster) and the [small map](/project/hashmap-small-map.md)
+(engine, `scene:script` faster) are kept, off by default, for Phase 3.1.
+The share is still there to win: Phase 3.1 revises the kept two.
 
 ## Variant containers
 

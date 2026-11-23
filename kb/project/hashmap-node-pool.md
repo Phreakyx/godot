@@ -1,20 +1,20 @@
 ---
 type: Finding
 title: Per-map HashMap node pool (HASH-01 candidate)
-description: HashMap nodes from a pool owned by each map, behind FORK_BACKEND_HASHMAP_POOL (default 0) - geometric pages from one node that never move, two page pointers in the map and a page table from the third page, an intrusive free list, the pool moved with the map and released by clear() and the destructor; insertion order, element addresses and every pinned contract kept. The map object grows from 40 to 72 bytes; tiny maps of 1 and 3 elements cost the control's bytes with one allocation fewer at 3, while 2 and 8 elements cost more bytes; allocations drop by orders of magnitude, but power-of-two sizes hold up to 2N-1 nodes and erased nodes stay until clear(). On MSVC (ALLOC-02) it is within noise on script:script template_release and fails on 82 regression rows; GCC and Clang follow.
+description: HashMap nodes from a pool owned by each map, behind FORK_BACKEND_HASHMAP_POOL (default 0) - geometric pages from one node that never move, two page pointers in the map and a page table from the third page, an intrusive free list, the pool moved with the map and released by clear() and the destructor; insertion order, element addresses and every pinned contract kept. The map object grows from 40 to 72 bytes; tiny maps of 1 and 3 elements cost the control's bytes with one allocation fewer at 3, while 2 and 8 elements cost more bytes; allocations drop by orders of magnitude, but power-of-two sizes hold up to 2N-1 nodes and erased nodes stay until clear(). On MSVC (ALLOC-02) it is within noise on script:script template_release and fails on 82 regression rows; GCC and Clang follow. Phase 3 final: rejected, code deleted (last at e2c08be5d2).
 tags: [core, containers, hashmap, memory, pool, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashmap
     resource: ../../core/templates/hash_map.h
-    title: The pool block (_pool_*) and the hooks at the node sites
+    title: The pool block (_pool_*) and the hooks at the node sites (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: switch
     resource: ../../core/templates/fork_backends.h
-    title: FORK_BACKEND_HASHMAP_POOL (default 0)
+    title: FORK_BACKEND_HASHMAP_POOL (default 0) (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: pins
     resource: ../../tests/fork/test_fork_hash_contracts.cpp
-    title: The [Fork][HashMap] contract pins, including the pool pins
+    title: The [Fork][HashMap] contract pins, including the pool pins (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: micro
     resource: ../../devtools/bench/micro/containers_bench.cpp
     title: The tiny-maps case (hashmap_tiny_*, hashset_tiny_*)
@@ -202,4 +202,11 @@ Not in the provisional MSVC baseline (empty).
 
 # Results (GCC, Clang)
 
-Not measured yet (the combined CachyOS session, 03-11).
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (engine) in ALLOC-02: WITHIN-NOISE on its target, 82 REGRESSION rows.
+
+Code: last at `e2c08be5d2`, deleted in Phase 3 final.

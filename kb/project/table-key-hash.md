@@ -1,9 +1,9 @@
 ---
 type: Finding
 title: StringName and pointer table hashes (HASH-05 candidate)
-description: hash_table_key() behind FORK_BACKEND_TABLE_KEY_HASH (default 0, HashMapHasherDefault's output) - with 1 and the default hasher a StringName key is hashed by its data pointer and a pointer key by one 64-bit multiply (high half). Table-internal only; HashMapHasherDefault and every public hash keep their outputs. MSVC (provisional): FAIL (engine), both targets faster but 38 REGRESSION rows; micro no evidence.
+description: hash_table_key() behind FORK_BACKEND_TABLE_KEY_HASH (default 0, HashMapHasherDefault's output) - with 1 and the default hasher a StringName key is hashed by its data pointer and a pointer key by one 64-bit multiply (high half). Table-internal only; HashMapHasherDefault and every public hash keep their outputs. MSVC (provisional): FAIL (engine), both targets faster but 38 REGRESSION rows; micro no evidence. Phase 3 final: rejected; code kept, off by default, revised in Phase 3.1.
 tags: [core, containers, hashmap, hashset, hashing, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashfuncs
@@ -132,7 +132,7 @@ first series; the rules are frozen from here on.
   is stricter, it applies: `live_bytes` must not change on any row, in
   addition to no REGRESSION on the `*_ptr_*` rows.
 
-# Results (MSVC, provisional until GCC and Clang)
+# Results (MSVC)
 
 **Micro, `tkh` (`FORK_BACKEND_TABLE_KEY_HASH=1`):**
 `LAYOUT-SENTINEL: 9 of 256 control rows moved`, repeat
@@ -193,3 +193,14 @@ its micro gate is decided by GCC and Clang (03-11).
 MSVC, with the two targets faster: a later candidate that keeps the
 StringName pointer hash and mixes pointer keys (or limits the multiply to
 HashMap) is the variant worth measuring, named here, not built.
+
+# Results (GCC, Clang)
+
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (engine): both targets faster, 38 REGRESSION rows; micro no evidence (layout sentinel).
+
+Rejected on MSVC (Phase 3); code kept, off by default, revised in Phase 3.1 (ALLOC-03, HASH-08, HASH-09).

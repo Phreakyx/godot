@@ -1,9 +1,9 @@
 ---
 type: Finding
 title: mimalloc under Memory:: (ALLOC-01 candidate)
-description: mimalloc 3.7.0, vendored and compiled from one guarded C file, called directly by Memory::alloc_static, realloc_static, free_static and the aligned functions when FORK_BACKEND_ALLOCATOR is 1; nothing is overridden, the DEBUG_ENABLED accounting and the allocation counters are unchanged, and the mismatch audit passed before any measurement. On MSVC (ALLOC-02) it is 23% faster on script:script template_release but fails on hash-lookup and peak-memory regressions; GCC and Clang follow.
+description: mimalloc 3.7.0, vendored and compiled from one guarded C file, called directly by Memory::alloc_static, realloc_static, free_static and the aligned functions when FORK_BACKEND_ALLOCATOR is 1; nothing is overridden, the DEBUG_ENABLED accounting and the allocation counters are unchanged, and the mismatch audit passed before any measurement. On MSVC (ALLOC-02) it is 23% faster on script:script template_release but fails on hash-lookup and peak-memory regressions; GCC and Clang follow. Phase 3 final: rejected; code kept, off by default, revised in Phase 3.1.
 tags: [core, memory, allocator, mimalloc, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-21T00:00:00Z }
 sources:
   - id: readme
@@ -101,4 +101,11 @@ Not in the provisional MSVC baseline (empty).
 
 # Results (GCC, Clang)
 
-Not measured yet (the combined CachyOS session).
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (engine) in ALLOC-02: ACCEPT on its target, 47 REGRESSION rows (hash lookups, gdbench, peak memory).
+
+Rejected on MSVC (Phase 3); code kept, off by default, revised in Phase 3.1 (ALLOC-03, HASH-08, HASH-09).

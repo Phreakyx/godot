@@ -1,9 +1,9 @@
 ---
 type: Finding
 title: One {hash, node index} slot array for HashMap (HASH-02 candidate)
-description: Rejected by the D-10 gate before building. The design replaces HashMap's two index arrays (4-byte hash plus 8-byte node pointer, 12 bytes per slot) with one 8-byte Slot { hash, node } array, the node being the stable index of the per-map node pool. It needs that pool; the provisional MSVC baseline of ALLOC-02 is empty, and without a stable node index every layout raises the index bytes or adds a second index, which is what sank the 2026-11-15 attempt.
+description: Rejected by the D-10 gate before building. The design replaces HashMap's two index arrays (4-byte hash plus 8-byte node pointer, 12 bytes per slot) with one 8-byte Slot { hash, node } array, the node being the stable index of the per-map node pool. It needs that pool; the provisional MSVC baseline of ALLOC-02 is empty, and without a stable node index every layout raises the index bytes or adds a second index, which is what sank the 2026-11-15 attempt. Phase 3 final: rejected, never built.
 tags: [core, containers, hashmap, memory, layout, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashmap
@@ -97,8 +97,20 @@ its rules.
   explained here. A series that refuses, or that has more than a fifth of
   its rounds clock-flagged, is repeated.
 
-# Results (MSVC, provisional until GCC and Clang)
+# Results (MSVC)
 
 **Not measured.** HASH-02 has no binary (rejected before building,
 above), so 03-10 ran no micro or engine series for it. Its rules above
 stand for a later baseline that takes the node pool in.
+
+# Results (GCC, Clang)
+
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: rejected by the D-10 gate before building (needs the node pool, which ALLOC-02 left out).
+
+Code: none was ever written (rejected before building); nothing to delete in
+Phase 3 final.

@@ -39,24 +39,29 @@ the backend switch is the control. Both exist before any backend changes.
 
 # Phase 3 candidates
 
-Every macro defaults to 0, upstream's code. All of them on at once (the
-`allhash` tests build: `FORK_BACKEND_ALLOCATOR=1`, `HASHMAP_POOL=1`,
-`HASH_POW2=1`, `TABLE_KEY_HASH=1`, `BYTE_HASH=1`, `HASH_TAGS=1` and
-`HASHMAP_SMALL=8`) pass the full suite, and the Fork cases pass in its dev
-twin (2026-11-22, MSVC).
+Final state after Phase 3 (2026-11-23). Every candidate was rejected on
+MSVC and an MSVC rejection is final, so no default changed: every
+remaining macro defaults to 0, upstream's code. Five candidates were
+deleted; their code is last at `e2c08be5d2`. Three are kept, off by
+default, because Phase 3.1 revises them (ALLOC-03, HASH-08, HASH-09).
+Before the deletion, all of them on at once (the `allhash` tests build)
+passed the full suite and the Fork cases in its dev twin (2026-11-22,
+MSVC); after it, the kept three on together (the `keep3` tests build) pass
+the Fork cases.
 
-| Macro | Values | Container | What changes | Pins that cover it | Entry |
-| --- | --- | --- | --- | --- | --- |
-| `FORK_BACKEND_ALLOCATOR` | 0, 1, 3 (Linux only) | `Memory::` under every container | mimalloc under `alloc_static` and friends (1), or for the whole process (3) | `[Fork][Memory]`, `[Fork][Backends] Allocator scope`, the full suite | [mimalloc](/project/mimalloc-allocator.md) |
-| `FORK_BACKEND_HASHMAP_POOL` | 0, 1 | HashMap | Nodes from a per-map pool of pages that never move | HashMap pointer, page-boundary, move and node-memory pins | [node pool](/project/hashmap-node-pool.md) |
-| `FORK_BACKEND_HASH_POW2` | 0, 1, 2 | HashMap, HashSet | Power-of-two capacities and a mask; the table hash mixed once (1 multiply-xorshift, 2 `hash_fmix32`) | One-hash, empty-table and key-type pins | [pow2 mixer](/project/hash-pow2-mixer.md) |
-| `FORK_BACKEND_TABLE_KEY_HASH` | 0, 1 | HashMap, AHashMap, HashSet (default hasher) | StringName keys by data pointer, pointer keys by one multiply, in `hash_table_key()` | `[Fork][Hash]` public outputs, key-type pins | [table-key hash](/project/table-key-hash.md) |
-| `FORK_BACKEND_BYTE_HASH` | 0, 1 | String and CharString table keys | rapidhash V3 in place of wyhash below 256 bytes | `[Fork][Hash]`, `test_hash_buffer.cpp`, key-type pins | [rapidhash](/project/rapidhash-byte-hash.md) |
-| `FORK_BACKEND_HASH_TAGS` | 0, 1 | AHashMap, HashSet | One control byte per slot, matched 16 at a time (SSE2, SWAR) | AHashMap and HashSet one-hash, growth-point and empty-table pins, `[Fork][HashTags]` | [tag probing](/project/hash-simd-tags.md) |
-| `FORK_BACKEND_HASHMAP_SMALL` | 0, 1 to 16 (the threshold) | HashMap | No index at or below the threshold, list walk; index built from the list past it, kept on erase, dropped by `clear()` | The five threshold pins, node-memory pin, every HashMap pin | [small map](/project/hashmap-small-map.md) |
+| Macro | State | Values | Container | What changes | Pins that cover it | Entry |
+| --- | --- | --- | --- | --- | --- | --- |
+| `FORK_BACKEND_ALLOCATOR` | Kept, default 0, Phase 3.1 | 0, 1, 3 (Linux only) | `Memory::` under every container | mimalloc under `alloc_static` and friends (1), or for the whole process (3) | `[Fork][Memory]`, `[Fork][Backends] Allocator scope`, the full suite | [mimalloc](/project/mimalloc-allocator.md) |
+| `FORK_BACKEND_TABLE_KEY_HASH` | Kept, default 0, Phase 3.1 | 0, 1 | HashMap, AHashMap, HashSet (default hasher) | StringName keys by data pointer, pointer keys by one multiply, in `hash_table_key()` | `[Fork][Hash]` public outputs, key-type pins | [table-key hash](/project/table-key-hash.md) |
+| `FORK_BACKEND_HASHMAP_SMALL` | Kept, default 0, Phase 3.1 | 0, 1 to 16 (the threshold) | HashMap | No index at or below the threshold, list walk; index built from the list past it, kept on erase, dropped by `clear()` | The five threshold pins, node-memory pin, every HashMap pin | [small map](/project/hashmap-small-map.md) |
+| `FORK_BACKEND_HASHMAP_POOL` | Deleted, last at `e2c08be5d2` | | HashMap | Nodes from a per-map pool of pages that never move | HashMap pointer, page-boundary, move and node-memory pins (kept) | [node pool](/project/hashmap-node-pool.md) |
+| `FORK_BACKEND_HASH_POW2` | Deleted, last at `e2c08be5d2` | | HashMap, HashSet | Power-of-two capacities and a mask; the table hash mixed once | One-hash, empty-table and key-type pins (kept) | [pow2 mixer](/project/hash-pow2-mixer.md) |
+| `FORK_BACKEND_BYTE_HASH` | Deleted with `thirdparty/rapidhash/`, last at `e2c08be5d2` | | String and CharString table keys | rapidhash V3 in place of wyhash below 256 bytes | `[Fork][Hash]`, `test_hash_buffer.cpp` (wyhash only now) | [rapidhash](/project/rapidhash-byte-hash.md) |
+| `FORK_BACKEND_HASH_TAGS` | Deleted, last at `e2c08be5d2` | | AHashMap, HashSet | One control byte per slot, matched 16 at a time (SSE2, SWAR) | AHashMap and HashSet one-hash, growth-point and empty-table pins (kept); `[Fork][HashTags]` deleted with the code it tested | [tag probing](/project/hash-simd-tags.md) |
 
 HASH-02 (`FORK_BACKEND_HASHMAP_SLOTS`) was rejected before it was built
-([slot array](/project/hashmap-slot-array.md)).
+([slot array](/project/hashmap-slot-array.md)); it never had code. The
+contract pins stay for every candidate: they pin behavior, not a backend.
 
 # What the contracts pin
 

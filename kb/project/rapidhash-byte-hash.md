@@ -1,26 +1,26 @@
 ---
 type: Finding
 title: rapidhash V3 against wyhash for short byte keys (HASH-04 candidate), xxHash 0.8.4
-description: hash_buffer64() behind FORK_BACKEND_BYTE_HASH (default 0, wyhash final v4.3) - with 1 rapidhash V3 (rapidhash_withSeed) hashes buffers below HASH_XXH3_THRESHOLD (256 bytes); XXH3 above it either way. Table-internal only. xxHash taken from 0.8.3 to 0.8.4 as a plain update with the same outputs. MSVC (provisional): FAIL (gate), slower at 32 and 128 bytes; xxHash 0.8.4 no slowdown.
+description: hash_buffer64() behind FORK_BACKEND_BYTE_HASH (default 0, wyhash final v4.3) - with 1 rapidhash V3 (rapidhash_withSeed) hashes buffers below HASH_XXH3_THRESHOLD (256 bytes); XXH3 above it either way. Table-internal only. xxHash taken from 0.8.3 to 0.8.4 as a plain update with the same outputs. MSVC (provisional): FAIL (gate), slower at 32 and 128 bytes; xxHash 0.8.4 no slowdown. Phase 3 final: rejected, code deleted (last at e2c08be5d2).
 tags: [core, containers, hashing, thirdparty, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T00:00:00Z }
 sources:
   - id: hashfuncs
     resource: ../../core/templates/hashfuncs.cpp
-    title: hash_buffer64(), hash_buffer() and hash_table_string()
+    title: hash_buffer64(), hash_buffer() and hash_table_string() (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: rapidhash
-    resource: ../../thirdparty/rapidhash/rapidhash.h
-    title: rapidhash V3 (tag rapidhash_v3, bc4b4baa48a15ff52ff4725e1ccdcda62815221c)
+    resource: https://github.com/Nicoshev/rapidhash/tree/rapidhash_v3
+    title: rapidhash V3 (tag rapidhash_v3, bc4b4baa48a15ff52ff4725e1ccdcda62815221c; the vendored copy was removed in Phase 3 final, last at e2c08be5d2)
   - id: xxhash
     resource: ../../thirdparty/xxhash/xxhash.h
     title: xxHash 0.8.4 (c87183a77d67f7d37e3d2d1b7eaac5e7c695e4f0)
   - id: test
     resource: ../../tests/core/templates/test_hash_buffer.cpp
-    title: Byte hash dispatch against the selected reference
+    title: Byte hash dispatch against the selected reference (the candidate part removed in Phase 3 final, last at e2c08be5d2)
   - id: switch
     resource: ../../core/templates/fork_backends.h
-    title: FORK_BACKEND_BYTE_HASH (default 0)
+    title: FORK_BACKEND_BYTE_HASH (default 0) (the candidate part removed in Phase 3 final, last at e2c08be5d2)
 ---
 
 # Design
@@ -138,7 +138,7 @@ first series; the rules are frozen from here on.
   of `bench.py`, so `micro --prev` compiles the previous side's xxHash and
   the check above compares 0.8.3 with 0.8.4.
 
-# Results (MSVC, provisional until GCC and Clang)
+# Results (MSVC)
 
 **Micro, `rapid` (`FORK_BACKEND_BYTE_HASH=1`, targets `hash_bytes_8`,
 `_32`, `_128`):** `LAYOUT-SENTINEL: 0 of 256 control rows moved`, so the
@@ -182,3 +182,14 @@ its micro gate is decided by GCC and Clang (03-11).
 **Outcome: FAIL (gate)**. Rejected on MSVC: rapidhash V3 wins only on
 8-byte buffers here and loses at 32 and 128 bytes, the lengths most
 String keys have.
+
+# Results (GCC, Clang)
+
+Not measured (user decision 2026-11-23): acceptance needs every compiler,
+so an MSVC rejection is final.
+
+# Decision (final)
+
+**Rejected**, tier: FAIL (gate): slower at 32 and 128 bytes.
+
+Code: last at `e2c08be5d2`, deleted in Phase 3 final.

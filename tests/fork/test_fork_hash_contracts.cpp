@@ -230,7 +230,7 @@ TEST_CASE("[Fork][HashMap] Single element") {
 	CHECK(map.begin() == map.end());
 }
 
-// The pins below guard a backend that owns node storage per map (FORK_BACKEND_HASHMAP_POOL).
+// The pins below guard a backend that owns node storage per map.
 
 TEST_CASE("[Fork][HashMap] Element pointers survive a move after the source is destroyed") {
 	using IntMap = HashMap<int, int>;
@@ -757,7 +757,7 @@ TEST_CASE("[Fork][HashSet] Empty and single-element sets") {
 	CHECK(set.begin() == set.end());
 }
 
-// The pins below guard the slot arithmetic (FORK_BACKEND_HASH_POW2): every key in one probe
+// The pins below guard the slot arithmetic: every key in one probe
 // run, empty tables and the key types with their own hashes.
 
 struct ConstantHasher {
@@ -810,7 +810,7 @@ TEST_CASE("[Fork][HashSet] Keys with one hash are found and iterate in insertion
 	CHECK(set.size() == 25);
 }
 
-// The pins below guard the slot search (FORK_BACKEND_HASH_TAGS): keys with one tag, tables
+// The pins below guard the slot search: keys with one tag, tables
 // filled to each growth point (probe groups wrap past the last slot) and empty tables.
 
 // The order of a dense container after erasing p_key: the last key moves into its place.
@@ -992,37 +992,6 @@ TEST_CASE("[Fork][HashSet] A reserved, copied or emptied set finds nothing") {
 		none = none && !set.has(i) && !set.erase(i);
 	}
 	CHECK(none);
-}
-#endif
-
-#if FORK_BACKEND_HASH_TAGS
-TEST_CASE("[Fork][HashTags] Group matches agree with a byte loop") {
-	uint8_t bytes[64];
-	uint32_t state = 1;
-	bool agree = true;
-	for (int round = 0; round < 2000; round++) {
-		for (uint8_t &b : bytes) {
-			state = state * 1664525u + 1013904223u;
-			const uint32_t r = state >> 8;
-			const uint8_t kinds[4] = { HashTags::EMPTY, HashTags::DELETED, uint8_t(r >> 2), uint8_t((r >> 2) & 0x7F) };
-			b = kinds[r & 3];
-		}
-		const int offset = round % 48;
-		const uint8_t probes[] = { HashTags::EMPTY, HashTags::DELETED, 0, 1, 0x7F, uint8_t(bytes[offset + 5] & 0x7F) };
-		for (uint8_t probe : probes) {
-			uint32_t expected = 0;
-			for (int i = 0; i < 16; i++) {
-				expected |= uint32_t(bytes[offset + i] == probe) << i;
-			}
-			agree = agree && HashTags::match(bytes + offset, probe) == expected && HashTags::match_swar(bytes + offset, probe) == expected;
-		}
-		uint32_t expected = 0;
-		for (int i = 0; i < 16; i++) {
-			expected |= uint32_t(bytes[offset + i] >= 0x80) << i;
-		}
-		agree = agree && HashTags::match_free(bytes + offset) == expected && HashTags::match_free_swar(bytes + offset) == expected;
-	}
-	CHECK(agree);
 }
 #endif
 

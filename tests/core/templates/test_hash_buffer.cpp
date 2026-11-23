@@ -38,15 +38,11 @@ TEST_FORCE_LINK(test_hash_buffer)
 #include "core/templates/hash_map.h"
 #include "core/templates/hash_set.h"
 
-#if FORK_BACKEND_BYTE_HASH == 1
-#include "thirdparty/rapidhash/rapidhash.h"
-#else
 // Upstream also defines two non-inline prime helpers. Isolate the reference
 // copy so it cannot collide with the production copy linked from hashfuncs.cpp.
 namespace ReferenceWyhash {
 #include "thirdparty/wyhash/wyhash.h"
 }
-#endif
 
 #define XXH_INLINE_ALL
 #include "thirdparty/xxhash/xxhash.h"
@@ -58,13 +54,9 @@ struct ConstantHasher {
 	static uint32_t hash(int) { return 0; }
 };
 
-// The short-key byte hash selected by FORK_BACKEND_BYTE_HASH: rapidhash V3 or wyhash.
+// The short-key byte hash: wyhash.
 static uint64_t reference_short_hash(const void *p_data, size_t p_size, uint64_t p_seed) {
-#if FORK_BACKEND_BYTE_HASH == 1
-	return rapidhash_withSeed(p_data, p_size, p_seed);
-#else
 	return ReferenceWyhash::wyhash(p_data, p_size, p_seed, ReferenceWyhash::_wyp);
-#endif
 }
 
 TEST_CASE("[Hashing] Byte hash dispatch matches the short-key hash and XXH3") {

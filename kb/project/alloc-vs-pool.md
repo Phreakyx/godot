@@ -1,9 +1,9 @@
 ---
 type: Decision
 title: ALLOC-02 - mimalloc against the HashMap node pool (four-way compare)
-description: The rules of the ALLOC-02 head-to-head, stated before any measurement - control, mimalloc only, pool only and both, same source, editor and template_release, every suite workload plus the micro tier and the tiny-maps case; target rows per compiler (MSVC script:script, GCC and Clang scene:instance:10000, template_release), the mechanical pass rule (bench.py verdict), the count rules, the tiny-maps report and the baseline rule for every later hash candidate. Also the exploratory Linux-only override variant (FORK_BACKEND_ALLOCATOR=3), reported next to the series and never part of the baseline. MSVC (2026-11-22): alloc and both read ACCEPT on the target (-23.1%, -23.9%), pool within noise, and all three fail on REGRESSION rows (hash lookups, peak memory), so the provisional MSVC baseline is empty; the Linux session gives the final one.
+description: The rules of the ALLOC-02 head-to-head, stated before any measurement - control, mimalloc only, pool only and both, same source, editor and template_release, every suite workload plus the micro tier and the tiny-maps case; target rows per compiler (MSVC script:script, GCC and Clang scene:instance:10000, template_release), the mechanical pass rule (bench.py verdict), the count rules, the tiny-maps report and the baseline rule for every later hash candidate. Also the exploratory Linux-only override variant (FORK_BACKEND_ALLOCATOR=3), reported next to the series and never part of the baseline. MSVC (2026-11-22): alloc and both read ACCEPT on the target (-23.1%, -23.9%), pool within noise, and all three fail on REGRESSION rows (hash lookups, peak memory), so the baseline is empty: final, since an MSVC rejection is final (2026-11-23); ALLOC-02 picks neither.
 tags: [core, allocation, mimalloc, hashmap, pool, benchmark, decision, phase-3]
-status: draft
+status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T09:00:00Z }
 sources:
   - id: shares
@@ -299,8 +299,17 @@ peak is still the case for it once the lookup regressions are understood.
 
 # Results (GCC, Clang)
 
-Not measured yet (the Linux session, 03-11).
+Not measured (user decision 2026-11-23). Under the baseline rule the MSVC
+FAIL decides: a candidate is accepted only when it passes on every
+compiler, so no Linux series can bring mimalloc or the pool back into the
+baseline.
 
 # Decision (final)
 
-Not made yet (03-11).
+**FINAL_BASE: empty** (`FORK_BACKEND_ALLOCATOR=0`, no node pool). ALLOC-02
+picks **neither**: mimalloc fails on 47 REGRESSION rows, the pool reads
+within noise on its target and fails on 82. The provisional MSVC baseline
+above is the final one, not reversed. The node pool was deleted in Phase 3
+final (last at `e2c08be5d2`); mimalloc stays in the tree, off by default,
+for Phase 3.1 (ALLOC-03), which revises it with the peak-memory and lookup
+regressions in view.

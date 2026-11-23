@@ -1,5 +1,42 @@
 # Update log
 
+## 2026-11-23 (Phase 3 final: nothing accepted, five candidates deleted)
+
+* **Updated**: every Phase 3 candidate entry has its final decision: all
+  rejected on MSVC, which is final (acceptance needs every compiler), so no
+  default changed and the GCC and Clang series were not run (user decision).
+  Deleted, code last at `e2c08be5d2`: [node pool](/project/hashmap-node-pool.md),
+  [power-of-two capacity](/project/hash-pow2-mixer.md),
+  [rapidhash](/project/rapidhash-byte-hash.md) with `thirdparty/rapidhash/`,
+  [SIMD tags](/project/hash-simd-tags.md) (its +16 bytes per table also fail
+  amendment C); the [slot array](/project/hashmap-slot-array.md) never had
+  code. Kept, off by default, revised in Phase 3.1:
+  [mimalloc](/project/mimalloc-allocator.md),
+  [StringName and pointer table hashes](/project/table-key-hash.md),
+  [small map](/project/hashmap-small-map.md).
+* **Updated**: [ALLOC-02](/project/alloc-vs-pool.md) final decision: neither,
+  FINAL_BASE empty; [container contracts](/project/container-contracts.md)
+  candidate table in its final state; [family shares](/project/family-shares.md)
+  Phase 3 outcome for allocation and hash tables;
+  [noise floors](/project/benchmark-noise-floors.md): the Linux peak and
+  tiny-maps floors moved to Phase 3.1 (BENCH-13);
+  [unit-test baseline](/project/unit-test-baseline.md): the MSVC summary of
+  the final tree and its Linux status (pending).
+
+## 2026-11-23 (core design review)
+
+* **Added**: [Godot core designs against current C++ practice](/project/core-design-review.md)
+  (draft, research only, nothing built or measured): thirteen core designs
+  checked in the tree and against WG21 papers, library docs and Agner Fog's
+  manuals, each with whether the fork can change it, its merge cost and
+  whether it is worth a candidate. HashMap is already the node variant of
+  current open-addressing tables; atomics are acquire/release, not
+  `seq_cst`; upstream already replaced `dynamic_cast` in `cast_to`. Ranked
+  shortlist: mimalloc with a peak-memory fix, StringName/pointer hash
+  follow-up, small map without the threshold cliff, fewer refcount
+  operations at call sites (CALL-07), StringName without the global mutex
+  (VAR-03).
+
 ## 2026-11-23 (hash candidates on MSVC, 03-10)
 
 * **Updated**: the six hash candidate entries have their rules (written and
