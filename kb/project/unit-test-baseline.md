@@ -1,7 +1,7 @@
 ---
 type: Finding
 title: Unit-test baseline per stage of the groundwork phase
-description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10); contracts (GCC) and (Clang) on CachyOS 1570/1570 with 9 skipped, [Fork] 67/67 on GCC, Clang and the GCC dev build. Phase 3 final (MSVC): 1595/1595, 9 skipped; on Linux pending.
+description: Full --test results of the tests build at each stage (pre-sync first), so a later failure is compared with the stage before it; pre-sync 143b8865d6 passes 1482/1482, post-sync, post-NVIDIA and C++20 (MSVC) 1497/1497, contracts (MSVC) 1564/1564, 3 skipped each; the bench cases (MSVC) add 10 skipped [Bench] cases, 1564/1564 with 13 skipped (6 cases, 9 skipped, since 02-10); contracts (GCC) and (Clang) on CachyOS 1570/1570 with 9 skipped, [Fork] 67/67 on GCC, Clang and the GCC dev build. Phase 3 final (MSVC): 1595/1595, 9 skipped; on GCC and Clang 1601/1601, 9 skipped, [Fork] 98/98, and 99/99 in the dev builds with the three kept macros on.
 tags: [testing, baseline, phase-1]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-19T23:21:34Z }
@@ -45,6 +45,8 @@ off as old. No full `--test` run of this fork had been recorded before.
 | contracts (Clang) | `7b81582fab` + fix | 1570 | 1570 | 0 | 9 | 595022 passed, 0 failed | `SUCCESS!` |
 | fork tests (GCC dev) | `7b81582fab` + fix | 67 | 67 | 0 | 1512 | 329 passed, 0 failed | `SUCCESS!` |
 | Phase 3 final (MSVC) | `dev` after `e2c08be5d2` | 1595 | 1595 | 0 | 9 | 601969 passed, 0 failed | `SUCCESS!` |
+| Phase 3 final (GCC) | `19e5e4ad26` | 1601 | 1601 | 0 | 9 | 602053 passed, 0 failed | `SUCCESS!` |
+| Phase 3 final (Clang) | `19e5e4ad26` | 1601 | 1601 | 0 | 9 | 602044 passed, 0 failed | `SUCCESS!` |
 
 Doctest summary of the pre-sync run, verbatim:
 
@@ -67,6 +69,9 @@ Doctest summary of the pre-sync run, verbatim:
 | contracts (GCC) | none | | | |
 | contracts (Clang) | none | | | |
 | fork tests (GCC dev) | none | | | |
+| Phase 3 final (MSVC) | none | | | |
+| Phase 3 final (GCC) | none | | | |
+| Phase 3 final (Clang) | none | | | |
 
 The three skipped cases are skipped on purpose in the source, not by this
 build: `Validate tests / Pending tests are skipped`
@@ -191,12 +196,23 @@ more cases than MSVC, upstream's `[UDSServer]` cases (built only with
 67 `[Fork]` cases on GCC, Clang and the GCC `dev_build=yes` build
 (`DEV_ASSERT` compiled in): 67 passed, 329 assertions each.
 
-**Phase 3 final tree on Linux: pending.** The Phase 3 final commit has
-not been built or tested on GCC or Clang yet. The next CachyOS session
-tests exactly this commit (GCC and Clang builds, `--test` with the full
-suite and `*Fork*`, the GCC dev tests build's `*Fork*` cases,
-`devtools/test/smoke_linux.sh`), and 03-11 Task 3 records the result
-here. Until then nothing here says Linux passed on it.
+**Phase 3 final tree on Linux** (`19e5e4ad26`, CachyOS, 2026-11-23, GCC
+16.2.1, Clang 23.1.5, kernel 7.3.5): the GCC and Clang `production=yes
+tests=yes` builds pass `--test` with 1601 cases, 1601 passed, 0 failed,
+9 skipped (602053 assertions on GCC, 602044 on Clang); the six cases more
+than MSVC are the `[UDSServer]` cases above. `--test-case="*Fork*"`: 98
+cases (7306 assertions) on both, as on MSVC. The GCC and Clang
+`dev_build=yes tests=yes` builds with the three kept macros on
+(`FORK_BACKEND_ALLOCATOR=1`, `FORK_BACKEND_TABLE_KEY_HASH=1`,
+`FORK_BACKEND_HASHMAP_SMALL=8`, printed by `[Fork][Backends]`) run 99
+`*Fork*` cases (7307 assertions, with `[Fork][Backends] Allocator scope`),
+as MSVC's `keep3`. `devtools/test/smoke_linux.sh` passes on both tests
+builds (editor and game on Vulkan, PhysX CPU). The Clang override build
+(`FORK_BACKEND_ALLOCATOR=3`, mimalloc as the process-wide malloc) passes
+1602 cases (602048 assertions), 99 `*Fork*` cases (7310) and the smoke
+([ALLOC-02](/project/alloc-vs-pool.md)). Every log holds the usual engine
+error prints of the suite (`Drawing is only allowed ...`, `Connection to
+remote host failed!`), not failed checks.
 
 # Smoke on the same tree
 

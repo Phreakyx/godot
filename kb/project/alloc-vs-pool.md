@@ -1,7 +1,7 @@
 ---
 type: Decision
 title: ALLOC-02 - mimalloc against the HashMap node pool (four-way compare)
-description: The rules of the ALLOC-02 head-to-head, stated before any measurement - control, mimalloc only, pool only and both, same source, editor and template_release, every suite workload plus the micro tier and the tiny-maps case; target rows per compiler (MSVC script:script, GCC and Clang scene:instance:10000, template_release), the mechanical pass rule (bench.py verdict), the count rules, the tiny-maps report and the baseline rule for every later hash candidate. Also the exploratory Linux-only override variant (FORK_BACKEND_ALLOCATOR=3), reported next to the series and never part of the baseline. MSVC (2026-11-22): alloc and both read ACCEPT on the target (-23.1%, -23.9%), pool within noise, and all three fail on REGRESSION rows (hash lookups, peak memory), so the baseline is empty: final, since an MSVC rejection is final (2026-11-23); ALLOC-02 picks neither.
+description: The rules of the ALLOC-02 head-to-head, stated before any measurement - control, mimalloc only, pool only and both, same source, editor and template_release, every suite workload plus the micro tier and the tiny-maps case; target rows per compiler (MSVC script:script, GCC and Clang scene:instance:10000, template_release), the mechanical pass rule (bench.py verdict), the count rules, the tiny-maps report and the baseline rule for every later hash candidate. Also the exploratory Linux-only override variant (FORK_BACKEND_ALLOCATOR=3), reported next to the series and never part of the baseline. MSVC (2026-11-22): alloc and both read ACCEPT on the target (-23.1%, -23.9%), pool within noise, and all three fail on REGRESSION rows (hash lookups, peak memory), so the baseline is empty: final, since an MSVC rejection is final (2026-11-23); ALLOC-02 picks neither. The override builds and passes the suite, the Fork cases and the smoke on Clang (functional only, not measured).
 tags: [core, allocation, mimalloc, hashmap, pool, benchmark, decision, phase-3]
 status: stable
 generated: { by: claude_code/claude-opus-5-5, at: 2026-11-22T09:00:00Z }
@@ -276,7 +276,7 @@ like alloc (builds -47 to -54%). The pool raises tiny-map `live_bytes` at
 The third-party controls allocate through the C runtime, which mimalloc
 does not serve with value 1, yet their insert rows slow down whenever
 mimalloc is linked (alloc and both, not pool). Not explained yet; a
-question for the Linux session, not a verdict.
+question for Phase 3.1 (ALLOC-03), not a verdict.
 
 # Decision (MSVC, provisional)
 
@@ -313,3 +313,20 @@ above is the final one, not reversed. The node pool was deleted in Phase 3
 final (last at `e2c08be5d2`); mimalloc stays in the tree, off by default,
 for Phase 3.1 (ALLOC-03), which revises it with the peak-memory and lookup
 regressions in view.
+
+# Results (override, GCC, Clang)
+
+Exploratory (D-17): no decision, no effect on the baseline above or on any
+candidate. Functional only; the measured series is ALLOC-04 in Phase 3.1.
+
+**Clang** (CachyOS, 2026-11-23, Clang 23.1.5, source `19e5e4ad26`,
+`production=yes tests=yes cppdefines="FORK_BACKEND_ALLOCATOR=3"
+extra_suffix=override`): full `--test` 1602 cases, 1602 passed, 0 failed,
+9 skipped (602048 assertions); `--test-case="*Fork*"` 99 passed (7310
+assertions); `[Fork][Backends] Allocator scope` 4 of 4: a raw `malloc`
+block, an `operator new` block and a glibc-internal `realpath` block are
+in mimalloc's heap; `devtools/test/smoke_linux.sh` passes (editor and game
+on Vulkan, PhysX CPU). So the process-wide override starts, runs the suite
+and opens the editor without a mismatched free.
+
+**GCC**: not built (short session, user decision 2026-11-23).

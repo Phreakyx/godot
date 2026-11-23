@@ -1,5 +1,16 @@
 # Update log
 
+## 2026-11-23 (Phase 3 final tree on GCC and Clang)
+
+* **Updated**: [unit-test baseline](/project/unit-test-baseline.md): the
+  Phase 3 final tree `19e5e4ad26` on CachyOS, GCC and Clang `--test`
+  1601/1601 (9 skipped), `*Fork*` 98/98, the dev builds with the three kept
+  macros on 99/99, smoke passed.
+* **Updated**: [ALLOC-02](/project/alloc-vs-pool.md) results of the
+  exploratory override (`FORK_BACKEND_ALLOCATOR=3`) on Clang: suite, Fork
+  cases with the allocator scope and smoke pass; GCC not built; not
+  measured (Phase 3.1, ALLOC-04).
+
 ## 2026-11-23 (Phase 3 final: nothing accepted, five candidates deleted)
 
 * **Updated**: every Phase 3 candidate entry has its final decision: all

@@ -153,6 +153,10 @@ a flood of Clang override warnings, and running the smoke's editor check
 before its game check
 ([kb/project/linux-build.md](kb/project/linux-build.md)).
 
+Linux check 2026-11-23 (`19e5e4ad26`, Phase 3 end): same compilers; build,
+tests and smoke passed with no fix
+([kb/project/unit-test-baseline.md](kb/project/unit-test-baseline.md)).
+
 ### History layout
 
 The history was rebuilt on 2026-10-09 so that each source stays visible
